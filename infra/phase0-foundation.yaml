@@ -1,0 +1,363 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase 0 foundation for the S3-native observability platform:
+  data bucket with lifecycle rules, per-component IAM roles under a
+  permissions boundary, and an account-wide cost budget.
+  See docs/observability-plan.md.
+
+Parameters:
+  BudgetEmail:
+    Type: String
+    Description: Email address that receives budget alerts.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  BudgetLimitUsd:
+    Type: Number
+    Default: 50
+    Description: Monthly account-wide budget in USD.
+  EnableLifecycleTest:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Adds a rule moving _lifecycle-test/ objects to Glacier Instant Retrieval
+      after 1 day, so the lifecycle mechanism can be verified quickly.
+      (Standard-IA transitions cannot be shorter than 30 days.)
+  AllowTestAssume:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Lets IAM principals in this account assume the component roles,
+      so the Phase 0 deny tests can run. Set to false once tests pass.
+
+Conditions:
+  LifecycleTest: !Equals [!Ref EnableLifecycleTest, "true"]
+  TestAssume: !Equals [!Ref AllowTestAssume, "true"]
+
+Resources:
+  # ---------- Storage ----------
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          # Compacted data only. _incoming/ gets no transitions or expiry:
+          # a stuck compaction must never silently lose data.
+          - Id: logs-tiering
+            Status: Enabled
+            Prefix: logs/
+            Transitions:
+              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
+              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
+          - Id: traces-tiering
+            Status: Enabled
+            Prefix: traces/
+            Transitions:
+              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
+              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
+          - Id: metrics-tiering
+            Status: Enabled
+            Prefix: metrics/
+            Transitions:
+              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
+              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - !If
+            - LifecycleTest
+            - Id: lifecycle-test
+              Status: Enabled
+              Prefix: _lifecycle-test/
+              Transitions:
+                - { StorageClass: GLACIER_IR, TransitionInDays: 1 }
+            - !Ref AWS::NoValue
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "0" }
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub "${DataBucket.Arn}/*"
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+  # ---------- IAM ----------
+
+  # Upper bound on what any platform role can ever do, whatever
+  # policies are later attached to it.
+  PermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: obs-boundary
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DataBucket
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub "${DataBucket.Arn}/*"
+          - Sid: PlatformTables
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:BatchWriteItem
+            Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-*"
+          - Sid: PlatformCompute
+            Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+              - states:StartExecution
+              - states:DescribeExecution
+            Resource:
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-*"
+              - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:obs-*"
+              - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:obs-*"
+          - Sid: Telemetry
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - cloudwatch:PutMetricData
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+            Resource: "*"
+
+  CollectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-collector
+      PermissionsBoundary: !Ref PermissionsBoundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+          - !If
+            - TestAssume
+            - Effect: Allow
+              Principal:
+                AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+              Action: sts:AssumeRole
+            - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: write-incoming
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                Resource: !Sub "${DataBucket.Arn}/_incoming/*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "0" }
+
+  CompactionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-compaction
+      PermissionsBoundary: !Ref PermissionsBoundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+          - !If
+            - TestAssume
+            - Effect: Allow
+              Principal:
+                AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+              Action: sts:AssumeRole
+            - !Ref AWS::NoValue
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: compact
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: List
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Sid: ConsumeIncoming
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub "${DataBucket.Arn}/_incoming/*"
+              - Sid: WriteCompacted
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                Resource:
+                  - !Sub "${DataBucket.Arn}/logs/*"
+                  - !Sub "${DataBucket.Arn}/traces/*"
+                  - !Sub "${DataBucket.Arn}/metrics/*"
+              - Sid: WriteIndex
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:Query
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
+              - Sid: Metrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "0" }
+
+  QueryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-query
+      PermissionsBoundary: !Ref PermissionsBoundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+          - !If
+            - TestAssume
+            - Effect: Allow
+              Principal:
+                AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+              Action: sts:AssumeRole
+            - !Ref AWS::NoValue
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: query
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: List
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Sid: ReadCompacted
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "${DataBucket.Arn}/logs/*"
+                  - !Sub "${DataBucket.Arn}/traces/*"
+                  - !Sub "${DataBucket.Arn}/metrics/*"
+              - Sid: LargeResults
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${DataBucket.Arn}/_results/*"
+              - Sid: ReadIndex
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
+              - Sid: ResultCache
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-cache"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "0" }
+
+  # ---------- Cost guardrail ----------
+
+  AccountBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: obs-account-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref BudgetLimitUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - { SubscriptionType: EMAIL, Address: !Ref BudgetEmail }
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - { SubscriptionType: EMAIL, Address: !Ref BudgetEmail }
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - { SubscriptionType: EMAIL, Address: !Ref BudgetEmail }
+
+Outputs:
+  BucketName:
+    Value: !Ref DataBucket
+  CollectorRoleArn:
+    Value: !GetAtt CollectorRole.Arn
+  CompactionRoleArn:
+    Value: !GetAtt CompactionRole.Arn
+  QueryRoleArn:
+    Value: !GetAtt QueryRole.Arn
+  PermissionsBoundaryArn:
+    Value: !Ref PermissionsBoundary
