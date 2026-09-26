@@ -45,3 +45,26 @@ infra/phase1-test.sh obs-phase1
 
 The collector costs about $0.60/day while running. Stop it between tests with
 `--parameter-overrides CollectorDesiredCount=0`.
+
+## Phase 2: compaction
+
+`phase2-compaction.yaml` creates the `obs-index` table, the `obs-compaction-dispatcher`
+(every 15 min) and `obs-compaction-worker` Lambdas, an `obs-compaction-stuck` alarm
+emailing AWSkhalif@gmail.com, and the `obs.logs` Athena table over the Parquet.
+Code and tests are in `services/compaction/`
+(`pip install -r requirements-dev.txt && pytest`).
+
+Phase 0 must be redeployed first: it adds the artifacts bucket and lets the compaction
+role delete index items and invoke the worker. The deployer also needs
+`infra/iam/deployer-phase2.json`.
+
+```bash
+aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=DISABLED
+infra/phase2-test.sh load 3          # then wait until one full hour has closed (+10 min)
+infra/phase2-test.sh compare
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
+```
+
+Confirm the SNS subscription email so the stuck-compaction alarm can reach you.

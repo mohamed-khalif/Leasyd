@@ -88,10 +88,12 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
   - Invokes one worker per (signal, arrival hour).
   - Publishes a CloudWatch metric for the age of the oldest `_incoming/` object, with an alarm if it goes over 3 hours.
 - **Worker Lambda**, per partition:
+  0. Take a lease on the partition (a conditional DynamoDB write), so the dispatcher and a worker's own follow-up call never compact the same hour at once. First, finish deleting the inputs of any batch a crashed run had already committed.
   1. List the input files and compute `batch_id = hash(sorted input keys)`.
   2. Read the inputs, split rows by service and by event hour, convert to Parquet, sort by timestamp, and write files of 128–512 MB named `part-<batch_id>-NNN.parquet` under each `{signal}/dt=/hour=/service=/`. The same inputs always produce the same names, so a re-run overwrites instead of duplicating.
   3. Write the index entries (Phase 3). Because the keys are also derived from `batch_id`, re-writing them is harmless.
-  4. Delete the input files.
+  4. Commit: write a manifest listing the batch's input keys. A crash before this re-runs on the same inputs and overwrites; a crash after it is finished by step 0 of the next run. Without it, a crash part-way through step 5 would leave a subset of inputs that the next run compacts a second time.
+  5. Delete the input files, then the manifest.
 - Data that arrives after its hour was compacted gets picked up on the next run. Its input set is different, so it gets a new `batch_id` and an additional file.
 - Files never cross an hour boundary, so every file covers at most one hour. Phase 3's range lookup depends on this.
 - If one partition is too big for a single run (15-minute timeout, 10 GB memory), the worker splits the input list into chunks. The chunk number becomes part of `batch_id`.

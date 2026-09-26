@@ -1,0 +1,4 @@
+services/compaction/build/
+__pycache__/
+.pytest_cache/
+infra/*.packaged.yaml

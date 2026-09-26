@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase 2 compaction for the S3-native observability platform: a scheduled
+  dispatcher and a per-hour worker Lambda that turn _incoming/ raw OTLP JSON
+  into sorted Parquet under logs/, the obs-index DynamoDB table they write,
+  an alarm on stuck compaction, and the obs.logs Athena table.
+  Requires obs-phase0 and obs-phase1. Deploy through infra/deploy-phase2.sh,
+  which builds and uploads the Lambda code.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Default: AWSkhalif@gmail.com
+  ScheduleExpression:
+    Type: String
+    Default: rate(15 minutes)
+  ScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: >
+      DISABLED while collecting data for the Phase 2 before/after comparison,
+      so the schedule doesn't compact the test hour first.
+  GraceMinutes:
+    Type: Number
+    Default: 10
+    Description: Wait this long after an hour closes before compacting it (late data).
+  AllowCrashInjection:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Lets the Phase 2 test make the worker crash between steps. Set false once tested.
+
+Resources:
+  # ---------- Index ----------
+
+  IndexTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-index
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  # ---------- Lambdas ----------
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-compaction-worker
+      RetentionInDays: 14
+
+  DispatcherLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-compaction-dispatcher
+      RetentionInDays: 14
+
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: WorkerLogGroup
+    Properties:
+      FunctionName: obs-compaction-worker
+      Description: Compacts one arrival hour of _incoming/ into Parquet
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.worker
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
+      MemorySize: 3008
+      Timeout: 900
+      EphemeralStorage: { Size: 10240 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: !Ref IndexTable
+          WORKER_FUNCTION: obs-compaction-worker
+          ALLOW_CRASH_INJECTION: !Ref AllowCrashInjection
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  # A failed hour is retried by the next dispatcher run, not by Lambda.
+  WorkerInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref WorkerFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+  DispatcherFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: DispatcherLogGroup
+    Properties:
+      FunctionName: obs-compaction-dispatcher
+      Description: Invokes a compaction worker for each closed _incoming/ hour
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.dispatcher
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
+      MemorySize: 256
+      Timeout: 120
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: !Ref IndexTable
+          WORKER_FUNCTION: !Ref WorkerFunction
+          COMPACT_SIGNALS: logs
+          GRACE_MINUTES: !Ref GraceMinutes
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-compaction-schedule
+      ScheduleExpression: !Ref ScheduleExpression
+      State: !Ref ScheduleState
+      Targets:
+        - Id: dispatcher
+          Arn: !GetAtt DispatcherFunction.Arn
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DispatcherFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+
+  # ---------- Stuck-compaction alarm ----------
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: obs-alerts
+      Subscription:
+        - { Protocol: email, Endpoint: !Ref AlertEmail }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  # Fires if raw data sits uncompacted for 3+ hours, or if the dispatcher
+  # stops reporting at all (missing data counts as breaching).
+  StuckCompactionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-stuck
+      AlarmDescription: Raw _incoming/logs data older than 3 hours, or the dispatcher is not running.
+      Namespace: obs
+      MetricName: OldestIncomingAgeMinutes
+      Dimensions:
+        - { Name: signal, Value: logs }
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 2
+      Threshold: 180
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  # ---------- Athena table over compacted logs ----------
+
+  LogsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: obs
+      TableInput:
+        Name: logs
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy-MM-dd
+          projection.dt.range: "2026-09-01,NOW"
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          projection.hour.type: integer
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          # service=... subfolders are read recursively; service is also a column.
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/logs/dt=${!dt}/hour=${!hour}/"
+        PartitionKeys:
+          - { Name: dt, Type: string }
+          - { Name: hour, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/logs/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: ts, Type: timestamp }
+            - { Name: ts_unix_nano, Type: bigint }
+            - { Name: observed_ts, Type: timestamp }
+            - { Name: service, Type: string }
+            - { Name: severity_number, Type: int }
+            - { Name: severity_text, Type: string }
+            - { Name: body, Type: string }
+            - { Name: trace_id, Type: string }
+            - { Name: span_id, Type: string }
+            - { Name: scope_name, Type: string }
+            - { Name: attributes, Type: "map<string,string>" }
+            - { Name: resource_attributes, Type: "map<string,string>" }
+
+Outputs:
+  WorkerFunction:
+    Value: !Ref WorkerFunction
+  DispatcherFunction:
+    Value: !Ref DispatcherFunction
+  IndexTable:
+    Value: !Ref IndexTable
