@@ -13,7 +13,6 @@ aws cloudformation deploy \
   --stack-name obs-phase0 \
   --template-file infra/phase0-foundation.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides BudgetEmail=you@example.com \
   --tags project=obs phase=0
 ```
 
