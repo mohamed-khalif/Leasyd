@@ -281,7 +281,9 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:BatchWriteItem
                   - dynamodb:Query
-                  - dynamodb:DeleteItem  # manifests and partition leases
+                  - dynamodb:GetItem     # chunk plans
+                  - dynamodb:UpdateItem  # mark a plan committed
+                  - dynamodb:DeleteItem  # plans and leases
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
               - Sid: InvokeWorker
                 Effect: Allow

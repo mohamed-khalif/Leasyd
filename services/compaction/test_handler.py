@@ -69,59 +69,97 @@ def state(tmp_path):
     return incoming, parquet, rows, index, internal
 
 
-EVENT = {"signal": "logs", "dt": "2026-09-26", "hour": "20"}
-CTX = types.SimpleNamespace(aws_request_id="req-1")
+HOUR = {"signal": "logs", "dt": "2026-09-26", "hour": "20"}
+
+
+def ctx(n=1):
+    return types.SimpleNamespace(aws_request_id=f"req-{n}")
+
+
+def plan(handler):
+    return handler.dispatcher({"plan_only": HOUR}, ctx(0))["planned"]
 
 
 def test_clean_run(aws, tmp_path):
     handler, _ = aws
     put_raw(4, 250)
-    out = handler.worker(EVENT, CTX)
-    assert out["inputs"] == 4
+    [b] = plan(handler)
+    out = handler.worker({**HOUR, "batch_id": b}, ctx())
+    assert out["inputs"] == 4 and not out["resumed"]
     incoming, parquet, rows, index, internal = state(tmp_path)
     assert incoming == [] and rows == 1000 and len(parquet) == 1 and len(index) == 1 and internal == []
     assert index[0]["row_count"]["N"] == "1000"
+    assert parquet[0].endswith(f"part-{b}-000.parquet")
 
 
 @pytest.mark.parametrize("step", ["write", "index", "commit", "partial_delete"])
 def test_crash_then_rerun_loses_and_duplicates_nothing(aws, tmp_path, step):
     handler, _ = aws
     put_raw(4, 250)
+    [b] = plan(handler)
     with pytest.raises(RuntimeError, match="injected crash"):
-        handler.worker({**EVENT, "crash_after": step}, CTX)
-    handler.worker(EVENT, types.SimpleNamespace(aws_request_id="req-2"))
+        handler.worker({**HOUR, "batch_id": b, "crash_after": step}, ctx(1))
+    # The next dispatcher run re-plans nothing new and returns the same plan.
+    assert plan(handler) == [b]
+    out = handler.worker({**HOUR, "batch_id": b}, ctx(2))
+    assert out["resumed"] == (step in ("commit", "partial_delete"))
     incoming, parquet, rows, index, internal = state(tmp_path)
     assert incoming == []
     assert rows == 1000, "rows lost or duplicated"
     assert len(parquet) == 1 and len(index) == 1
-    assert internal == [], "manifest or lease left behind"
+    assert internal == [], "plan or lease left behind"
 
 
 def test_lease_blocks_concurrent_worker(aws, tmp_path):
     handler, _ = aws
     put_raw(1, 10)
-    lease = handler._acquire_lease("_lease#logs#2026-09-26#20", CTX)
+    [b] = plan(handler)
+    lease = handler._acquire_lease(f"_lease#logs#2026-09-26#20#{b}", ctx(1), 60)
     assert lease is not None
-    out = handler.worker(EVENT, types.SimpleNamespace(aws_request_id="req-2"))
-    assert "skipped" in out
+    assert "skipped" in handler.worker({**HOUR, "batch_id": b}, ctx(2))
     handler._release_lease(*lease)
-    assert handler.worker(EVENT, types.SimpleNamespace(aws_request_id="req-3"))["inputs"] == 1
+    assert handler.worker({**HOUR, "batch_id": b}, ctx(3))["inputs"] == 1
 
 
-def test_large_partition_is_chunked(aws, tmp_path, monkeypatch):
-    handler, invoked = aws
-    monkeypatch.setattr(handler, "MAX_INPUT_FILES", 3)
+def test_busy_hour_split_into_parallel_chunks(aws, tmp_path, monkeypatch):
+    handler, _ = aws
+    monkeypatch.setattr(handler, "MAX_INPUT_FILES", 2)
     put_raw(5, 10)
-    first = handler.worker(EVENT, CTX)
-    assert first["inputs"] == 3 and first["remaining"] == 2
-    assert invoked == [EVENT]
-    second = handler.worker(EVENT, types.SimpleNamespace(aws_request_id="req-2"))
-    assert second["inputs"] == 2 and second["remaining"] == 0
-    incoming, parquet, rows, index, _ = state(tmp_path)
-    assert incoming == [] and rows == 50 and len(parquet) == 2 and len(index) == 2
+    batches = plan(handler)
+    assert len(batches) == 3  # 2 + 2 + 1 files
+    # Each chunk has its own lease, so all three can hold one at once.
+    leases = [handler._acquire_lease(f"_lease#logs#2026-09-26#20#{b}", ctx(i), 60) for i, b in enumerate(batches)]
+    assert all(leases)
+    for l in leases:
+        handler._release_lease(*l)
+    for i, b in enumerate(batches):
+        handler.worker({**HOUR, "batch_id": b}, ctx(10 + i))
+    incoming, parquet, rows, index, internal = state(tmp_path)
+    assert incoming == [] and rows == 50 and len(parquet) == 3 and len(index) == 3 and internal == []
 
 
-def test_dispatcher_only_closed_hours(aws, monkeypatch):
+def test_late_file_gets_its_own_plan(aws, tmp_path):
+    handler, _ = aws
+    put_raw(2, 10)
+    [b1] = plan(handler)
+    boto3.client("s3").put_object(Bucket="obs-data-test", Key="_incoming/logs/dt=2026-09-26/hour=20/logs_zzzz.json.gz",
+                                  Body=gzip.compress(json.dumps({"resourceLogs": []}).encode()))
+    b = plan(handler)
+    assert b[0] == b1 and len(b) == 2, "existing plan kept, late file planned separately"
+
+
+def test_large_output_split_into_parts(aws, tmp_path, monkeypatch):
+    handler, _ = aws
+    monkeypatch.setattr(handler, "MAX_ROWS_PER_FILE", 300)
+    put_raw(4, 250)
+    [b] = plan(handler)
+    handler.worker({**HOUR, "batch_id": b}, ctx())
+    incoming, parquet, rows, index, internal = state(tmp_path)
+    assert rows == 1000 and len(parquet) == 4 and len(index) == 4
+    assert sorted(i["row_count"]["N"] for i in index) == ["100", "300", "300", "300"]
+
+
+def test_dispatcher_plans_and_invokes_only_closed_hours(aws, monkeypatch):
     handler, invoked = aws
     from datetime import datetime, timezone
     s3 = boto3.client("s3")
@@ -134,5 +172,18 @@ def test_dispatcher_only_closed_hours(aws, monkeypatch):
             return datetime(2026, 9, 26, 21, 15, tzinfo=timezone.utc)  # 20:00 hour closed + 15 min
 
     monkeypatch.setattr(handler, "datetime", Clock)
-    handler.dispatcher({}, None)
-    assert invoked == [{"signal": "logs", "dt": "2026-09-26", "hour": "20"}]
+    out = handler.dispatcher({}, ctx())
+    assert [(e["dt"], e["hour"]) for e in invoked] == [("2026-09-26", "20")]
+    assert [e["batch_id"] for e in invoked] == out["planned"]
+    # A second run re-invokes the same plan (retry) instead of planning again.
+    handler.dispatcher({}, ctx(2))
+    assert [e["batch_id"] for e in invoked] == out["planned"] * 2
+
+
+def test_dispatcher_lease_blocks_overlapping_runs(aws):
+    handler, invoked = aws
+    put_raw(1, 10)
+    lease = handler._acquire_lease("_lease#dispatcher#logs", ctx(1), 60)
+    out = handler.dispatcher({"plan_only": HOUR}, ctx(2))
+    assert out["skipped"] == ["logs"] and out["planned"] == []
+    handler._release_lease(*lease)

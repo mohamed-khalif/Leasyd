@@ -50,7 +50,7 @@ def test_splits_by_service_and_event_hour(tmp_path):
     assert got == [("api", "2026-09-26", "20", 1), ("api", "2026-09-26", "21", 1), ("web", "2026-09-26", "20", 1)]
     for w in written:
         assert w["min_ts"][:13] == w["max_ts"][:13]  # never spans an hour
-        assert w["relpath"] == f"dt={w['dt']}/hour={w['hour']}/service={w['service']}/part-b1.parquet"
+        assert w["relpath"] == f"dt={w['dt']}/hour={w['hour']}/service={w['service']}/part-b1-000.parquet"
 
 
 def test_rows_sorted_and_counts_match(tmp_path):
@@ -100,3 +100,13 @@ def test_same_inputs_same_outputs(tmp_path):
     w2 = compact.compact_logs([f], str(tmp_path / "o2"), "b1", "2026-09-26", "20")
     strip = lambda ws: [{k: v for k, v in w.items() if k != "path"} for w in ws]
     assert strip(w1) == strip(w2)
+
+
+def test_large_group_split_into_time_ordered_parts(tmp_path):
+    f = batch(tmp_path / "a.json.gz", "api", [rec(H20 + n * 10**6) for n in range(25)])
+    written = compact.compact_logs([f], str(tmp_path / "o"), "b1", "2026-09-26", "20", max_rows_per_file=10)
+    assert [(w["part"], w["rows"]) for w in written] == [(0, 10), (1, 10), (2, 5)]
+    assert [w["relpath"].rsplit("/", 1)[1] for w in written] == [
+        "part-b1-000.parquet", "part-b1-001.parquet", "part-b1-002.parquet"]
+    for a, b in zip(written, written[1:]):
+        assert a["max_ts"] <= b["min_ts"]  # consecutive, non-overlapping time slices

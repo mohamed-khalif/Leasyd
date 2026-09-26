@@ -1,20 +1,26 @@
 """Compaction Lambdas.
 
-dispatcher: on a schedule, finds closed hours under _incoming/ and invokes
-            one worker per (signal, arrival hour).
-worker:     compacts one hour's raw files into Parquet, indexes them, then
-            deletes the raw files.
+dispatcher: on a schedule, splits each closed _incoming/ hour into chunks,
+            records a plan per chunk, and invokes one worker per plan, so a
+            busy hour is compacted by many workers in parallel.
+worker:     compacts one planned chunk into Parquet, indexes it, then deletes
+            the chunk's raw files.
+
+A plan fixes a chunk's input keys up front, and its batch_id is a hash of
+them, so every retry of a chunk works on exactly the same inputs and writes
+the same output keys.
 
 Worker steps, in this order, so any crash can be re-run safely:
-  0. take a lease on the partition, so only one worker runs per hour
-  1. finish any batch a previous run committed but didn't finish deleting
-  2. write Parquet   part-<batch_id>.parquet   (same inputs -> same keys)
-  3. write index     sk = <min_ts>#<batch_id>  (same inputs -> same keys)
-  4. commit          manifest item listing the input keys
-  5. delete inputs
-  6. delete manifest
-A crash before 4 re-runs on the same inputs and overwrites. A crash after 4
-is finished by step 1 on the next run, so no input is ever compacted twice.
+  0. take a lease on the plan, so only one worker runs per chunk
+  1. write Parquet   part-<batch_id>-NNN.parquet  (same inputs -> same keys)
+  2. write index     sk = <min_ts>#<batch_id>-NNN (same inputs -> same keys)
+  3. commit          mark the plan committed
+  4. delete inputs
+  5. delete the plan
+A crash before 3 redoes 1-2, overwriting the same keys. A crash after 3 skips
+straight to 4. The dispatcher re-invokes any plan still present, so a
+crashed chunk is retried on the next run. (A crash between 4 and 5 leaves
+a plan whose inputs are all gone; it holds no data and is harmless.)
 """
 
 import hashlib
@@ -34,10 +40,14 @@ TABLE = os.environ["INDEX_TABLE"]
 WORKER = os.environ.get("WORKER_FUNCTION", "")
 SIGNALS = [s for s in os.environ.get("COMPACT_SIGNALS", "logs").split(",") if s]
 GRACE = timedelta(minutes=int(os.environ.get("GRACE_MINUTES", "10")))
+# A plan item lists its input keys and must stay under DynamoDB's 400 KB
+# item limit: 2000 keys of ~90 bytes is ~180 KB.
 MAX_INPUT_FILES = int(os.environ.get("MAX_INPUT_FILES", "2000"))
 MAX_INPUT_BYTES = int(os.environ.get("MAX_INPUT_BYTES", str(200 * 1024 * 1024)))
+MAX_ROWS_PER_FILE = int(os.environ.get("MAX_ROWS_PER_FILE", str(compact.DEFAULT_MAX_ROWS_PER_FILE)))
 ALLOW_CRASH_INJECTION = os.environ.get("ALLOW_CRASH_INJECTION") == "true"
-LEASE_SECONDS = 16 * 60  # longer than the worker's 15-minute maximum timeout
+WORKER_LEASE_SECONDS = 16 * 60      # longer than the worker's 15-minute maximum timeout
+DISPATCHER_LEASE_SECONDS = 3 * 60   # longer than the dispatcher's 2-minute timeout
 
 s3 = boto3.client("s3")
 ddb = boto3.client("dynamodb")
@@ -45,29 +55,99 @@ lam = boto3.client("lambda")
 cw = boto3.client("cloudwatch")
 
 
+def _plan_pk(signal, dt, hour):
+    return f"_plan#{signal}#{dt}#{hour}"
+
+
 # ---------------------------------------------------------------- dispatcher
 
 def dispatcher(event, context):
+    """Scheduled run: plan and invoke every closed hour.
+
+    Test hook: {"plan_only": {"signal", "dt", "hour"}} plans that one hour,
+    ignoring the grace period, and returns its batch ids without invoking
+    workers.
+    """
+    only = (event or {}).get("plan_only")
     now = datetime.now(timezone.utc)
-    invoked = []
-    for signal in SIGNALS:
-        partitions = list(_incoming_partitions(signal))
-        oldest = min((start for _, _, start in partitions), default=None)
-        age = (now - oldest).total_seconds() / 60 if oldest else 0
-        cw.put_metric_data(
-            Namespace="obs",
-            MetricData=[{
-                "MetricName": "OldestIncomingAgeMinutes",
-                "Dimensions": [{"Name": "signal", "Value": signal}],
-                "Value": age, "Unit": "None",
-            }],
-        )
-        for dt, hour, start in partitions:
-            if now >= start + timedelta(hours=1) + GRACE:
-                _invoke_worker({"signal": signal, "dt": dt, "hour": hour})
-                invoked.append(f"{signal}/{dt}/{hour}")
-    print(json.dumps({"invoked": invoked}))
-    return {"invoked": invoked}
+    result = {"planned": [], "invoked": []}
+    for signal in [only["signal"]] if only else SIGNALS:
+        # Two overlapping dispatchers could chunk the same keys differently
+        # and compact some twice, so only one plans a signal at a time.
+        lease = _acquire_lease(f"_lease#dispatcher#{signal}", context, DISPATCHER_LEASE_SECONDS)
+        if lease is None:
+            result.setdefault("skipped", []).append(signal)
+            continue
+        try:
+            if only:
+                hours = [(only["dt"], only["hour"])]
+            else:
+                partitions = list(_incoming_partitions(signal))
+                _put_oldest_age_metric(signal, now, partitions)
+                hours = [(dt, hr) for dt, hr, start in partitions
+                         if now >= start + timedelta(hours=1) + GRACE]
+            for dt, hour in hours:
+                batch_ids = _plan_hour(signal, dt, hour, now)
+                result["planned"].extend(batch_ids)
+                if not only:
+                    for b in batch_ids:
+                        _invoke_worker({"signal": signal, "dt": dt, "hour": hour, "batch_id": b})
+                        result["invoked"].append(b)
+        finally:
+            _release_lease(*lease)
+    print(json.dumps(result))
+    return result
+
+
+def _plan_hour(signal, dt, hour, now):
+    """Plan chunks for any unplanned raw files in the hour. Returns every
+    plan for the hour, new and existing (existing ones are retried)."""
+    pk = _plan_pk(signal, dt, hour)
+    existing = _query(pk)
+    planned_keys = {v["S"] for item in existing for v in item["inputs"]["L"]}
+    batch_ids = [item["sk"]["S"] for item in existing]
+
+    fresh = [o for o in _list(f"_incoming/{signal}/dt={dt}/hour={hour}/") if o["Key"] not in planned_keys]
+    for chunk in _chunks(fresh):
+        keys = [o["Key"] for o in chunk]
+        batch_id = hashlib.sha256("\n".join(keys).encode()).hexdigest()[:16]
+        try:
+            ddb.put_item(
+                TableName=TABLE,
+                Item={"pk": {"S": pk}, "sk": {"S": batch_id}, "status": {"S": "planned"},
+                      "inputs": {"L": [{"S": k} for k in keys]},
+                      "input_bytes": {"N": str(sum(o["Size"] for o in chunk))},
+                      "planned_at": {"S": now.isoformat()}},
+                ConditionExpression="attribute_not_exists(pk)",
+            )
+        except ddb.exceptions.ConditionalCheckFailedException:
+            pass  # identical chunk already planned
+        batch_ids.append(batch_id)
+    return batch_ids
+
+
+def _chunks(objects):
+    chunk, size = [], 0
+    for o in objects:
+        if chunk and (len(chunk) >= MAX_INPUT_FILES or size + o["Size"] > MAX_INPUT_BYTES):
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(o)
+        size += o["Size"]
+    if chunk:
+        yield chunk
+
+
+def _put_oldest_age_metric(signal, now, partitions):
+    oldest = min((start for _, _, start in partitions), default=None)
+    cw.put_metric_data(
+        Namespace="obs",
+        MetricData=[{
+            "MetricName": "OldestIncomingAgeMinutes",
+            "Dimensions": [{"Name": "signal", "Value": signal}],
+            "Value": (now - oldest).total_seconds() / 60 if oldest else 0, "Unit": "None",
+        }],
+    )
 
 
 def _incoming_partitions(signal):
@@ -92,104 +172,99 @@ def _invoke_worker(payload):
 # -------------------------------------------------------------------- worker
 
 def worker(event, context):
-    signal, dt, hour = event["signal"], event["dt"], event["hour"]
+    signal, dt, hour, batch_id = event["signal"], event["dt"], event["hour"], event["batch_id"]
     if signal != "logs":
         raise ValueError(f"no compactor for signal {signal!r} yet")
     crash_after = event.get("crash_after") if ALLOW_CRASH_INJECTION else None
-    lease = _acquire_lease(f"_lease#{signal}#{dt}#{hour}", context)
+    lease = _acquire_lease(f"_lease#{signal}#{dt}#{hour}#{batch_id}", context, WORKER_LEASE_SECONDS)
     if lease is None:
-        return _done(signal, dt, hour, skipped="another worker holds this partition")
+        return _done(batch_id, skipped="another worker holds this chunk")
     try:
-        return _compact_partition(signal, dt, hour, crash_after)
+        return _compact_chunk(signal, dt, hour, batch_id, crash_after)
     finally:
         _release_lease(*lease)
 
 
-def _compact_partition(signal, dt, hour, crash_after):
-    manifest_pk = f"_manifest#{signal}#{dt}#{hour}"
-    prefix = f"_incoming/{signal}/dt={dt}/hour={hour}/"
+def _compact_chunk(signal, dt, hour, batch_id, crash_after):
+    key = {"pk": {"S": _plan_pk(signal, dt, hour)}, "sk": {"S": batch_id}}
+    plan = ddb.get_item(TableName=TABLE, Key=key, ConsistentRead=True).get("Item")
+    if plan is None:
+        return _done(batch_id, skipped="no such plan (already finished)")
+    keys = [v["S"] for v in plan["inputs"]["L"]]
+    resumed = plan["status"]["S"] == "committed"
 
-    finished = _finish_committed(manifest_pk)
+    written = []
+    if not resumed:
+        work = tempfile.mkdtemp(dir="/tmp")
+        try:
+            # 1. Parquet
+            local = []
+            for i, k in enumerate(keys):
+                p = os.path.join(work, "in", f"{i:05d}.json.gz")
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                s3.download_file(BUCKET, k, p)
+                local.append(p)
+            mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "3008"))
+            written = compact.compact_logs(
+                local, os.path.join(work, "out"), batch_id, dt, hour,
+                memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
+            )
+            for w in written:
+                w["key"] = f"{signal}/{w['relpath']}"
+                s3.upload_file(w["path"], BUCKET, w["key"])
+            _maybe_crash(crash_after, "write")
 
-    objects = _list(prefix)
-    if not objects:
-        return _done(signal, dt, hour, finished_batches=finished, inputs=0)
-    chunk = _take_chunk(objects)
-    keys = [o["Key"] for o in chunk]
-    batch_id = hashlib.sha256("\n".join(keys).encode()).hexdigest()[:16]
+            # 2. index
+            now = datetime.now(timezone.utc).isoformat()
+            _batch_write([{
+                "pk": {"S": f"{signal}#{w['service']}"},
+                "sk": {"S": f"{w['min_ts']}#{batch_id}-{w['part']:03d}"},
+                "min_ts": {"S": w["min_ts"]},
+                "max_ts": {"S": w["max_ts"]},
+                "file_path": {"S": f"s3://{BUCKET}/{w['key']}"},
+                "row_count": {"N": str(w["rows"])},
+                "size_bytes": {"N": str(w["size_bytes"])},
+                "storage_class": {"S": "STANDARD"},
+                "batch_id": {"S": batch_id},
+                "compacted_at": {"S": now},
+            } for w in written])
+            _maybe_crash(crash_after, "index")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
-    work = tempfile.mkdtemp(dir="/tmp")
-    try:
-        # 2. Parquet
-        local = []
-        for i, k in enumerate(keys):
-            p = os.path.join(work, "in", f"{i:05d}.json.gz")
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            s3.download_file(BUCKET, k, p)
-            local.append(p)
-        mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "3008"))
-        written = compact.compact_logs(
-            local, os.path.join(work, "out"), batch_id, dt, hour,
-            memory_limit=f"{int(mem_mb * 0.6)}MB",
+        # 3. commit
+        ddb.update_item(
+            TableName=TABLE, Key=key, UpdateExpression="SET #s = :c",
+            ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":c": {"S": "committed"}},
         )
-        for w in written:
-            w["key"] = f"{signal}/{w['relpath']}"
-            s3.upload_file(w["path"], BUCKET, w["key"])
-        _maybe_crash(crash_after, "write")
-
-        # 3. index
-        now = datetime.now(timezone.utc).isoformat()
-        _batch_write([{
-            "pk": {"S": f"{signal}#{w['service']}"},
-            "sk": {"S": f"{w['min_ts']}#{batch_id}"},
-            "min_ts": {"S": w["min_ts"]},
-            "max_ts": {"S": w["max_ts"]},
-            "file_path": {"S": f"s3://{BUCKET}/{w['key']}"},
-            "row_count": {"N": str(w["rows"])},
-            "size_bytes": {"N": str(w["size_bytes"])},
-            "storage_class": {"S": "STANDARD"},
-            "batch_id": {"S": batch_id},
-            "compacted_at": {"S": now},
-        } for w in written])
-        _maybe_crash(crash_after, "index")
-
-        # 4. commit
-        ddb.put_item(TableName=TABLE, Item={
-            "pk": {"S": manifest_pk}, "sk": {"S": batch_id},
-            "inputs": {"L": [{"S": k} for k in keys]}, "committed_at": {"S": now},
-        })
         _maybe_crash(crash_after, "commit")
 
-        # 5-6. clean up
-        if crash_after == "partial_delete":
-            _delete_keys(keys[: len(keys) // 2])
-            _maybe_crash(crash_after, "partial_delete")
-        _delete_keys(keys)
-        ddb.delete_item(TableName=TABLE, Key={"pk": {"S": manifest_pk}, "sk": {"S": batch_id}})
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+    # 4-5. clean up
+    if crash_after == "partial_delete":
+        _delete_keys(keys[: len(keys) // 2])
+        _maybe_crash(crash_after, "partial_delete")
+    _delete_keys(keys)
+    ddb.delete_item(TableName=TABLE, Key=key)
 
-    remaining = len(objects) - len(chunk)
-    if remaining:
-        _invoke_worker({"signal": signal, "dt": dt, "hour": hour})
     return _done(
-        signal, dt, hour, batch_id=batch_id, inputs=len(keys),
-        input_bytes=sum(o["Size"] for o in chunk), remaining=remaining, finished_batches=finished,
+        batch_id, signal=signal, dt=dt, hour=hour, inputs=len(keys), resumed=resumed,
         outputs=[{k: w[k] for k in ("key", "rows", "size_bytes", "min_ts", "max_ts")} for w in written],
     )
 
 
-def _acquire_lease(pk, context):
-    """One worker per partition at a time. The lease outlives the function
-    timeout, so a crashed holder's lease expires before anyone could still
-    be running under it."""
+# ------------------------------------------------------------------- helpers
+
+def _acquire_lease(pk, context, seconds):
+    """Conditional put: succeeds only if nobody holds the lease or it has
+    expired. Leases outlive the holder's timeout, so a crashed holder's lease
+    expires before anyone could still be running under it."""
     owner = getattr(context, "aws_request_id", "local")
     now = int(time.time())
     try:
         ddb.put_item(
             TableName=TABLE,
             Item={"pk": {"S": pk}, "sk": {"S": "lease"}, "owner": {"S": owner},
-                  "expires_at": {"N": str(now + LEASE_SECONDS)}},
+                  "expires_at": {"N": str(now + seconds)}},
             ConditionExpression="attribute_not_exists(pk) OR expires_at < :now",
             ExpressionAttributeValues={":now": {"N": str(now)}},
         )
@@ -209,18 +284,14 @@ def _release_lease(pk, owner):
         pass
 
 
-def _finish_committed(manifest_pk):
-    """Step 1: delete inputs of batches that were committed but not cleaned up."""
-    finished = []
+def _query(pk):
+    items = []
     for page in ddb.get_paginator("query").paginate(
         TableName=TABLE, KeyConditionExpression="pk = :pk",
-        ExpressionAttributeValues={":pk": {"S": manifest_pk}},
+        ExpressionAttributeValues={":pk": {"S": pk}}, ConsistentRead=True,
     ):
-        for item in page["Items"]:
-            _delete_keys([v["S"] for v in item["inputs"]["L"]])
-            ddb.delete_item(TableName=TABLE, Key={"pk": item["pk"], "sk": item["sk"]})
-            finished.append(item["sk"]["S"])
-    return finished
+        items.extend(page["Items"])
+    return items
 
 
 def _list(prefix):
@@ -228,16 +299,6 @@ def _list(prefix):
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix):
         out.extend(page.get("Contents", []))
     return sorted(out, key=lambda o: o["Key"])
-
-
-def _take_chunk(objects):
-    chunk, size = [], 0
-    for o in objects:
-        if chunk and (len(chunk) >= MAX_INPUT_FILES or size + o["Size"] > MAX_INPUT_BYTES):
-            break
-        chunk.append(o)
-        size += o["Size"]
-    return chunk
 
 
 def _delete_keys(keys):
@@ -267,7 +328,7 @@ def _maybe_crash(crash_after, step):
         raise RuntimeError(f"injected crash after step '{step}'")
 
 
-def _done(signal, dt, hour, **kw):
-    result = {"signal": signal, "dt": dt, "hour": hour, **kw}
+def _done(batch_id, **kw):
+    result = {"batch_id": batch_id, **kw}
     print(json.dumps(result))
     return result

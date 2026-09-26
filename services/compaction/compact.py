@@ -49,14 +49,23 @@ def safe_service(name):
     return _SAFE.sub("_", name or "unknown")[:128] or "unknown"
 
 
-def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB"):
+# Cap on rows per output file (~150-250 MB of log Parquet), so no single
+# file is too big for one query worker to read quickly.
+DEFAULT_MAX_ROWS_PER_FILE = 4_000_000
+
+
+def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB",
+                 max_rows_per_file=DEFAULT_MAX_ROWS_PER_FILE):
     """Compact gzipped OTLP-JSON log batches into Parquet.
 
     Rows are split by service and by the hour of their own timestamp, so no
     output file spans more than one hour. Records with no timestamp fall back
-    to the arrival hour of the raw partition.
+    to the arrival hour of the raw partition. A group with more than
+    max_rows_per_file rows is split into consecutive time slices,
+    part-<batch_id>-000.parquet, -001, ... The split depends only on the row
+    count, so the same inputs always produce the same file names.
 
-    Returns one dict per written file: service, dt, hour, path, rows,
+    Returns one dict per written file: service, dt, hour, part, path, rows,
     min_ts / max_ts (ISO-8601, UTC, microseconds) and size_bytes.
     """
     con = duckdb.connect()
@@ -119,27 +128,38 @@ def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memor
 
         written = []
         for service, dt, hour in groups:
-            rel = f"dt={dt}/hour={hour}/service={safe_service(service)}/part-{batch_id}.parquet"
-            path = os.path.join(out_dir, rel)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
             con.execute(
-                f"""
-                COPY (
-                    SELECT * FROM rows
-                    WHERE service = ? AND strftime(ts, '%Y-%m-%d') = ? AND strftime(ts, '%H') = ?
-                    ORDER BY ts_unix_nano
-                ) TO '{path}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 122880)
+                """
+                CREATE OR REPLACE TEMP TABLE grp AS
+                SELECT *, row_number() OVER (ORDER BY ts_unix_nano) - 1 AS rn FROM rows
+                WHERE service = ? AND strftime(ts, '%Y-%m-%d') = ? AND strftime(ts, '%H') = ?
                 """,
                 [service, dt, hour],
             )
-            n, lo, hi = con.execute(
-                f"SELECT count(*), strftime(min(ts), '%Y-%m-%dT%H:%M:%S.%fZ'), "
-                f"strftime(max(ts), '%Y-%m-%dT%H:%M:%S.%fZ') FROM read_parquet('{path}')"
-            ).fetchone()
-            written.append({
-                "service": service, "dt": dt, "hour": hour, "relpath": rel, "path": path,
-                "rows": n, "min_ts": lo, "max_ts": hi, "size_bytes": os.path.getsize(path),
-            })
+            n_rows = con.execute("SELECT count(*) FROM grp").fetchone()[0]
+            for part in range(-(-n_rows // max_rows_per_file)):
+                rel = (f"dt={dt}/hour={hour}/service={safe_service(service)}/"
+                       f"part-{batch_id}-{part:03d}.parquet")
+                path = os.path.join(out_dir, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                lo_rn = part * max_rows_per_file
+                con.execute(
+                    f"""
+                    COPY (
+                        SELECT * EXCLUDE (rn) FROM grp WHERE rn >= {lo_rn} AND rn < {lo_rn + max_rows_per_file}
+                        ORDER BY rn
+                    ) TO '{path}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 122880)
+                    """
+                )
+                n, lo, hi = con.execute(
+                    f"SELECT count(*), strftime(min(ts), '%Y-%m-%dT%H:%M:%S.%fZ'), "
+                    f"strftime(max(ts), '%Y-%m-%dT%H:%M:%S.%fZ') FROM read_parquet('{path}')"
+                ).fetchone()
+                written.append({
+                    "service": service, "dt": dt, "hour": hour, "part": part, "relpath": rel,
+                    "path": path, "rows": n, "min_ts": lo, "max_ts": hi,
+                    "size_bytes": os.path.getsize(path),
+                })
         return written
     finally:
         con.close()

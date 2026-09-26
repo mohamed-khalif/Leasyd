@@ -6,7 +6,8 @@
 #                                      once at least one full hour of load has closed
 #                                      (defaults to the most recent closed hour):
 #                                        - Athena baseline on that hour's raw files
-#                                        - worker crashes mid-delete, then re-runs
+#                                        - hour planned into chunks; one worker crashes
+#                                          mid-delete, then every chunk runs
 #                                        - no rows lost or duplicated, index matches files
 #                                        - Athena on the compacted Parquet, bytes/time vs baseline
 #
@@ -117,35 +118,44 @@ RAW_COUNTS="$(athena_rows)"; read -r RAW_SCANNED RAW_MS < <(athena_stats)
 RAW_TOTAL=$(awk '{s+=$2} END {print s+0}' <<<"$RAW_COUNTS")
 echo "INFO  raw rows: ${RAW_TOTAL}; query scanned ${RAW_SCANNED} bytes in ${RAW_MS} ms"
 
-# 2. Crash mid-delete, then re-run.
-EVENT="{\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\""
-if invoke_worker "${EVENT},\"crash_after\":\"partial_delete\"}"; then
+# 2. Plan the hour, crash the first chunk's worker mid-delete, then run every chunk.
+DISPATCHER=obs-compaction-dispatcher
+out="$(mktemp)"
+aws lambda invoke --function-name "$DISPATCHER" --cli-binary-format raw-in-base64-out \
+  --payload "{\"plan_only\":{\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\"}}" "$out" >/dev/null
+BATCHES="$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["planned"]))' "$out")"; rm -f "$out"
+read -ra BATCH_LIST <<<"$BATCHES"
+(( ${#BATCH_LIST[@]} > 0 )) && pass "hour planned as ${#BATCH_LIST[@]} chunk(s): ${BATCHES}" || { fail "no chunks planned"; exit 1; }
+
+EVENT="\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\""
+if invoke_worker "{${EVENT},\"batch_id\":\"${BATCH_LIST[0]}\",\"crash_after\":\"partial_delete\"}"; then
   fail "crash injection did not crash (is AllowCrashInjection=true?)"
 else
   left=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" --query 'length(Contents)' --output text)
   pass "worker crashed after deleting part of its inputs (${left/None/0} of ${RAW_FILES} raw files left)"
 fi
-if invoke_worker "${EVENT}}"; then
-  pass "re-run succeeded"
-else
-  fail "re-run failed: $RESULT"; exit 1
-fi
-echo "      $RESULT"
+for b in "${BATCH_LIST[@]}"; do
+  if invoke_worker "{${EVENT},\"batch_id\":\"${b}\"}"; then
+    pass "chunk ${b} compacted"; echo "      ${RESULT:0:300}"
+  else
+    fail "chunk ${b} failed: $RESULT"; exit 1
+  fi
+done
 
 left=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" --query 'length(Contents)' --output text)
 [[ "$left" == None || "$left" == 0 ]] && pass "raw hour fully consumed" || fail "${left} raw files still in ${PREFIX}"
 
-# The batch the crashed run committed is the one whose files hold this hour's rows.
-BATCH="$(python3 -c 'import json,sys; r=json.loads(sys.argv[1]); fb=r.get("finished_batches") or []; print(fb[0] if fb else r.get("batch_id",""))' "$RESULT")"
-[[ -n "$BATCH" ]] || { fail "could not tell which batch holds the test hour"; exit 1; }
-
-# 3. Parquet files and index entries for the batch.
-PQ_KEYS="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix logs/ \
-  --query "Contents[?contains(Key, 'part-${BATCH}.parquet')].[Key,Size]" --output text)"
+# 3. Parquet files and index entries for the hour's chunks.
+PQ_KEYS=""; IDX=""
+for b in "${BATCH_LIST[@]}"; do
+  PQ_KEYS+="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix logs/ \
+    --query "Contents[?contains(Key, 'part-${b}-')].[Key,Size]" --output text)"$'\n'
+  IDX+="$(aws dynamodb scan --table-name "$TABLE" --filter-expression 'batch_id = :b' \
+    --expression-attribute-values "{\":b\":{\"S\":\"${b}\"}}" \
+    --query 'Items[].[row_count.N, min_ts.S, max_ts.S]' --output text)"$'\n'
+done
+PQ_KEYS="$(sed '/^$/d' <<<"$PQ_KEYS")"; IDX="$(sed '/^$/d' <<<"$IDX")"
 PQ_FILES=$(grep -c . <<<"$PQ_KEYS"); PQ_BYTES=$(awk '{s+=$2} END {print s+0}' <<<"$PQ_KEYS")
-IDX="$(aws dynamodb scan --table-name "$TABLE" --filter-expression 'batch_id = :b' \
-  --expression-attribute-values "{\":b\":{\"S\":\"${BATCH}\"}}" \
-  --query 'Items[].[row_count.N, min_ts.S, max_ts.S]' --output text)"
 IDX_N=$(grep -c . <<<"$IDX"); IDX_ROWS=$(awk '{s+=$1} END {print s+0}' <<<"$IDX")
 (( IDX_N == PQ_FILES )) && pass "${PQ_FILES} Parquet file(s), ${IDX_N} index entr(ies)" \
   || fail "${PQ_FILES} Parquet files but ${IDX_N} index entries"
@@ -154,14 +164,15 @@ IDX_N=$(grep -c . <<<"$IDX"); IDX_ROWS=$(awk '{s+=$1} END {print s+0}' <<<"$IDX"
 bad_span=$(awk '{ if (substr($2,1,13) != substr($3,1,13)) n++ } END {print n+0}' <<<"$IDX")
 (( bad_span == 0 )) && pass "every file spans at most one hour" || fail "${bad_span} file(s) span more than one hour"
 leftover=$(aws dynamodb query --table-name "$TABLE" --key-condition-expression 'pk = :p' \
-  --expression-attribute-values "{\":p\":{\"S\":\"_manifest#logs#${DT}#${HR}\"}}" --query Count --output text)
-(( leftover == 0 )) && pass "no manifest left behind" || fail "${leftover} manifest(s) left for the hour"
+  --expression-attribute-values "{\":p\":{\"S\":\"_plan#logs#${DT}#${HR}\"}}" --query Count --output text)
+(( leftover == 0 )) && pass "no chunk plan left behind" || fail "${leftover} plan(s) left for the hour"
 
 # 4. Same question against the compacted Parquet.
 DTS="$(awk '{print "'"'"'" substr($2,1,10) "'"'"'"}' <<<"$IDX" | sort -u | paste -sd,)"
 HRS="$(awk '{print "'"'"'" substr($2,12,2) "'"'"'"}' <<<"$IDX" | sort -u | paste -sd,)"
+BATCH_RE="$(IFS='|'; echo "${BATCH_LIST[*]}")"
 PQ_SQL="SELECT service, count(*) FROM obs.logs
-WHERE dt IN (${DTS}) AND hour IN (${HRS}) AND \"\$path\" LIKE '%part-${BATCH}.parquet'
+WHERE dt IN (${DTS}) AND hour IN (${HRS}) AND regexp_like(\"\$path\", 'part-(${BATCH_RE})-[0-9]{3}\.parquet\$')
 GROUP BY 1 ORDER BY 1"
 athena "$PQ_SQL" || { fail "compacted query"; exit 1; }
 PQ_COUNTS="$(athena_rows)"; read -r PQ_SCANNED PQ_MS < <(athena_stats)

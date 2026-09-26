@@ -85,22 +85,22 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 **Build**
 - **Dispatcher Lambda** (EventBridge, every 15 min):
   - Lists `_incoming/` hour partitions that closed at least 10 minutes ago. The 10-minute grace period catches late-arriving data.
-  - Invokes one worker per (signal, arrival hour).
-  - Publishes a CloudWatch metric for the age of the oldest `_incoming/` object, with an alarm if it goes over 3 hours.
-- **Worker Lambda**, per partition:
-  0. Take a lease on the partition (a conditional DynamoDB write), so the dispatcher and a worker's own follow-up call never compact the same hour at once. First, finish deleting the inputs of any batch a crashed run had already committed.
-  1. List the input files and compute `batch_id = hash(sorted input keys)`.
-  2. Read the inputs, split rows by service and by event hour, convert to Parquet, sort by timestamp, and write files of 128–512 MB named `part-<batch_id>-NNN.parquet` under each `{signal}/dt=/hour=/service=/`. The same inputs always produce the same names, so a re-run overwrites instead of duplicating.
-  3. Write the index entries (Phase 3). Because the keys are also derived from `batch_id`, re-writing them is harmless.
-  4. Commit: write a manifest listing the batch's input keys. A crash before this re-runs on the same inputs and overwrites; a crash after it is finished by step 0 of the next run. Without it, a crash part-way through step 5 would leave a subset of inputs that the next run compacts a second time.
-  5. Delete the input files, then the manifest.
-- Data that arrives after its hour was compacted gets picked up on the next run. Its input set is different, so it gets a new `batch_id` and an additional file.
+  - Splits each closed hour's raw files into **chunks** (at most 2,000 files or 200 MB each) and records a **plan** per chunk in DynamoDB: its input keys and `batch_id = hash(input keys)`. Files already in a plan are never planned again.
+  - Invokes one worker per plan, so a busy hour is compacted by many workers in parallel. Plans still present from an earlier run are invoked again, which is how a crashed chunk gets retried.
+  - Holds a lease while planning, so two overlapping runs can't split the same files two different ways.
+  - Publishes a CloudWatch metric for the age of the oldest `_incoming/` hour, with an alarm if it goes over 3 hours.
+- **Worker Lambda**, per chunk:
+  0. Take a lease on the chunk (a conditional DynamoDB write), so a retry never runs alongside the original.
+  1. Read the chunk's inputs, split rows by service and by event hour, sort by timestamp, and write Parquet under each `{signal}/dt=/hour=/service=/`. A group bigger than 4 million rows (~150–250 MB) is cut into consecutive time slices, `part-<batch_id>-000.parquet`, `-001`, …, so no single file is too big for one query worker. The cut depends only on row count, so a re-run produces the same file names and overwrites instead of duplicating.
+  2. Write the index entries (Phase 3), keyed by `min_ts#<batch_id>-NNN`. Re-writing them is harmless for the same reason.
+  3. Commit: mark the plan committed. A crash before this redoes steps 1–2; a crash after it skips to step 4.
+  4. Delete the input files, then the plan.
+- Data that arrives after its hour was planned gets its own plan on the next run, and becomes additional files.
 - Files never cross an hour boundary, so every file covers at most one hour. Phase 3's range lookup depends on this.
-- If one partition is too big for a single run (15-minute timeout, 10 GB memory), the worker splits the input list into chunks. The chunk number becomes part of `batch_id`.
 
 **Test on AWS**
 - Run the Phase 1 Athena query against the compacted Parquet. Compare bytes scanned and duration with the raw-JSON baseline. This is the billed-in-dollars case for compaction.
-- Kill a worker at each step boundary (after step 2, after step 3). Re-run it. Confirm row counts match and there are no duplicate files or index entries.
+- Kill a worker at each step boundary (after writing, indexing, committing, and part-way through deleting). Re-run it. Confirm row counts match and there are no duplicate files or index entries.
 - Use S3 Storage Lens to confirm average object size goes up and object count goes down.
 
 ## Phase 3: Metadata index
