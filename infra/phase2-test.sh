@@ -2,7 +2,9 @@
 # Phase 2 tests.
 #
 #   infra/phase2-test.sh load [hours]   start steady load (2 services x 20 logs/s) for N hours (default 3)
-#   infra/phase2-test.sh compare        once at least one full hour of load has closed:
+#   infra/phase2-test.sh compare [YYYY-MM-DD HH]
+#                                      once at least one full hour of load has closed
+#                                      (defaults to the most recent closed hour):
 #                                        - Athena baseline on that hour's raw files
 #                                        - worker crashes mid-delete, then re-runs
 #                                        - no rows lost or duplicated, index matches files
@@ -76,18 +78,24 @@ fi
 [[ "$MODE" == compare ]] || { sed -n '2,13p' "$0"; exit 2; }
 
 # ---------------------------------------------------------------- compare
-# Pick the oldest raw logs hour that closed at least 10 minutes ago.
+# Use the hour given (compare YYYY-MM-DD HH), else the most recent raw logs
+# hour that closed at least 10 minutes ago: the one most likely to be a full
+# hour of load, rather than leftovers from earlier tests.
 NOW=$(date -u +%s)
 TARGET=""
-for dtp in $(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix _incoming/logs/ --delimiter / \
-               --query 'CommonPrefixes[].Prefix' --output text); do
-  for hp in $(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$dtp" --delimiter / \
-                --query 'CommonPrefixes[].Prefix' --output text); do
-    dt="${dtp#*dt=}"; dt="${dt%/}"; hr="${hp#*hour=}"; hr="${hr%/}"
-    end=$(( $(date -u -d "$dt $hr:00" +%s) + 3600 + 600 ))
-    if (( end <= NOW )); then TARGET="$dt $hr"; break 2; fi
+if [[ $# -ge 3 ]]; then
+  TARGET="$2 $3"
+else
+  for dtp in $(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix _incoming/logs/ --delimiter / \
+                 --query 'CommonPrefixes[].Prefix' --output text); do
+    for hp in $(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$dtp" --delimiter / \
+                  --query 'CommonPrefixes[].Prefix' --output text); do
+      dt="${dtp#*dt=}"; dt="${dt%/}"; hr="${hp#*hour=}"; hr="${hr%/}"
+      end=$(( $(date -u -d "$dt $hr:00" +%s) + 3600 + 600 ))
+      (( end <= NOW )) && TARGET="$dt $hr"   # prefixes are listed oldest first
+    done
   done
-done
+fi
 [[ -z "$TARGET" ]] && { echo "No closed raw hour yet: wait until an hour has fully passed + 10 min."; exit 1; }
 read -r DT HR <<<"$TARGET"
 PREFIX="_incoming/logs/dt=${DT}/hour=${HR}/"
