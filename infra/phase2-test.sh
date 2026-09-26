@@ -48,14 +48,20 @@ athena_rows() { aws athena get-query-results --query-execution-id "$QID" \
 athena_stats() { aws athena get-query-execution --query-execution-id "$QID" \
   --query 'QueryExecution.Statistics.[DataScannedInBytes,EngineExecutionTimeInMillis]' --output text; }
 
-invoke_worker() {  # invoke_worker <payload-json> -> sets RESULT, returns 1 on FunctionError
-  local out; out="$(mktemp)"
-  local err
-  err="$(aws lambda invoke --function-name "$WORKER" --cli-binary-format raw-in-base64-out \
-    --cli-read-timeout 900 --payload "$1" --query FunctionError --output text "$out")"
-  RESULT="$(cat "$out")"; rm -f "$out"
+# AWS CLI v2 needs --cli-binary-format to send a JSON payload as-is; v1
+# rejects the flag (and sends raw JSON by default).
+PAYLOAD_FMT=()
+[[ "$(aws --version 2>&1)" == aws-cli/1.* ]] || PAYLOAD_FMT=(--cli-binary-format raw-in-base64-out)
+
+invoke_lambda() {  # invoke_lambda <function> <payload-json> -> sets RESULT; fails on CLI error or FunctionError
+  local out err rc; out="$(mktemp)"
+  err="$(aws lambda invoke --function-name "$1" "${PAYLOAD_FMT[@]}" \
+    --cli-read-timeout 900 --payload "$2" --query FunctionError --output text "$out")"; rc=$?
+  RESULT="$(cat "$out" 2>/dev/null)"; rm -f "$out"
+  (( rc == 0 )) || { RESULT="aws cli exited $rc${RESULT:+: $RESULT}"; return 1; }
   [[ "$err" == None || -z "$err" ]]
 }
+invoke_worker() { invoke_lambda "$WORKER" "$1"; }
 
 # ------------------------------------------------------------------- load
 if [[ "$MODE" == load ]]; then
@@ -120,10 +126,9 @@ echo "INFO  raw rows: ${RAW_TOTAL}; query scanned ${RAW_SCANNED} bytes in ${RAW_
 
 # 2. Plan the hour, crash the first chunk's worker mid-delete, then run every chunk.
 DISPATCHER=obs-compaction-dispatcher
-out="$(mktemp)"
-aws lambda invoke --function-name "$DISPATCHER" --cli-binary-format raw-in-base64-out \
-  --payload "{\"plan_only\":{\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\"}}" "$out" >/dev/null
-BATCHES="$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["planned"]))' "$out")"; rm -f "$out"
+invoke_lambda "$DISPATCHER" "{\"plan_only\":{\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\"}}" \
+  || { fail "planning failed: $RESULT"; exit 1; }
+BATCHES="$(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1])["planned"]))' "$RESULT")"
 read -ra BATCH_LIST <<<"$BATCHES"
 (( ${#BATCH_LIST[@]} > 0 )) && pass "hour planned as ${#BATCH_LIST[@]} chunk(s): ${BATCHES}" || { fail "no chunks planned"; exit 1; }
 
@@ -131,7 +136,7 @@ EVENT="\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\""
 if invoke_worker "{${EVENT},\"batch_id\":\"${BATCH_LIST[0]}\",\"crash_after\":\"partial_delete\"}"; then
   fail "crash injection did not crash (is AllowCrashInjection=true?)"
 else
-  left=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" --query 'length(Contents)' --output text)
+  left=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" --query 'length(not_null(Contents, `[]`))' --output text)
   pass "worker crashed after deleting part of its inputs (${left/None/0} of ${RAW_FILES} raw files left)"
 fi
 for b in "${BATCH_LIST[@]}"; do
@@ -142,7 +147,7 @@ for b in "${BATCH_LIST[@]}"; do
   fi
 done
 
-left=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" --query 'length(Contents)' --output text)
+left=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" --query 'length(not_null(Contents, `[]`))' --output text)
 [[ "$left" == None || "$left" == 0 ]] && pass "raw hour fully consumed" || fail "${left} raw files still in ${PREFIX}"
 
 # 3. Parquet files and index entries for the hour's chunks.
