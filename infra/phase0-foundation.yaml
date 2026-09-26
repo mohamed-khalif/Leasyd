@@ -56,6 +56,11 @@ Resources:
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
+      # S3 request metrics in CloudWatch (incl. 5xx/503 SlowDown) for the
+      # write path. Billed as custom CloudWatch metrics, a few $/month.
+      MetricsConfigurations:
+        - Id: incoming
+          Prefix: _incoming/
       LifecycleConfiguration:
         Rules:
           # Compacted data only. _incoming/ gets no transitions or expiry:

@@ -1,0 +1,443 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase 1 write path for the S3-native observability platform:
+  an OpenTelemetry Collector on ECS Fargate writing gzipped OTLP JSON to
+  s3://obs-data-.../_incoming/, a load generator task, and a Glue table +
+  Athena workgroup for checking the raw data. Requires the obs-phase0 stack.
+  See docs/observability-plan.md.
+
+Parameters:
+  CollectorImage:
+    Type: String
+    Default: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.161.0
+  LoadgenImage:
+    Type: String
+    Default: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.161.0
+  CollectorDesiredCount:
+    Type: Number
+    Default: 1
+    AllowedValues: [0, 1]
+    Description: Set to 0 to stop paying for the collector between test runs.
+  BatchTimeout:
+    Type: String
+    Default: 60s
+    Description: How long the collector buffers before writing a file to S3.
+
+Mappings:
+  Network:
+    Vpc: { Cidr: 10.60.0.0/16 }
+    SubnetA: { Cidr: 10.60.0.0/24 }
+    SubnetB: { Cidr: 10.60.1.0/24 }
+
+Resources:
+  # ---------- Network ----------
+  # Public subnets with public IPs so tasks can pull images without a NAT
+  # gateway (~$33/month). Nothing listens on a public port: the collector's
+  # security group only admits traffic from inside the VPC.
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [Network, Vpc, Cidr]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name, Value: obs }
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name, Value: obs }
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [Network, SubnetA, Cidr]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - { Key: Name, Value: obs-a }
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [Network, SubnetB, Cidr]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - { Key: Name, Value: obs-b }
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: obs }
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTable
+
+  SubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTable
+
+  # Free gateway endpoint: S3 writes stay on the AWS network.
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref RouteTable]
+
+  CollectorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: obs-collector
+      GroupDescription: OTLP from inside the VPC only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 4317, ToPort: 4318, CidrIp: !FindInMap [Network, Vpc, Cidr], Description: OTLP gRPC and HTTP }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  LoadgenSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: obs-loadgen
+      GroupDescription: Load generator, outbound only
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  # ---------- Collector ----------
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: obs
+      ClusterSettings:
+        - { Name: containerInsights, Value: disabled }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  CollectorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /obs/collector
+      RetentionInDays: 7
+
+  LoadgenLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /obs/loadgen
+      RetentionInDays: 7
+
+  # Pulls images and ships container stdout to CloudWatch Logs.
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-task-execution
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  CollectorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: obs-collector
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "1024"
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      # Created in phase 0: s3:PutObject on _incoming/* only.
+      TaskRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-collector"
+      ContainerDefinitions:
+        - Name: collector
+          Image: !Ref CollectorImage
+          Essential: true
+          Command: ["--config=env:OTEL_CONFIG"]
+          PortMappings:
+            - { ContainerPort: 4317, Protocol: tcp }
+            - { ContainerPort: 4318, Protocol: tcp }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CollectorLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: collector
+          Environment:
+            - Name: OTEL_CONFIG
+              # Raw files are partitioned by arrival time only. The S3 exporter
+              # takes its key from the first resource in a batch, so a
+              # service= partition here could file one service's data under
+              # another's name. Compaction splits by service and event time.
+              Value: !Sub
+                - |
+                  receivers:
+                    otlp:
+                      protocols:
+                        grpc:
+                          endpoint: 0.0.0.0:4317
+                        http:
+                          endpoint: 0.0.0.0:4318
+                  processors:
+                    memory_limiter:
+                      check_interval: 1s
+                      limit_percentage: 80
+                      spike_limit_percentage: 20
+                    batch:
+                      timeout: ${BatchTimeout}
+                      send_batch_size: 20000
+                      send_batch_max_size: 40000
+                  exporters:
+                    awss3/logs:
+                      marshaler: otlp_json
+                      s3uploader:
+                        region: ${AWS::Region}
+                        s3_bucket: ${Bucket}
+                        s3_prefix: _incoming/logs
+                        s3_partition_format: "dt=%Y-%m-%d/hour=%H"
+                        compression: gzip
+                        unique_key_func_name: uuidv7
+                    awss3/traces:
+                      marshaler: otlp_json
+                      s3uploader:
+                        region: ${AWS::Region}
+                        s3_bucket: ${Bucket}
+                        s3_prefix: _incoming/traces
+                        s3_partition_format: "dt=%Y-%m-%d/hour=%H"
+                        compression: gzip
+                        unique_key_func_name: uuidv7
+                    awss3/metrics:
+                      marshaler: otlp_json
+                      s3uploader:
+                        region: ${AWS::Region}
+                        s3_bucket: ${Bucket}
+                        s3_prefix: _incoming/metrics
+                        s3_partition_format: "dt=%Y-%m-%d/hour=%H"
+                        compression: gzip
+                        unique_key_func_name: uuidv7
+                  service:
+                    pipelines:
+                      logs:
+                        receivers: [otlp]
+                        processors: [memory_limiter, batch]
+                        exporters: [awss3/logs]
+                      traces:
+                        receivers: [otlp]
+                        processors: [memory_limiter, batch]
+                        exporters: [awss3/traces]
+                      metrics:
+                        receivers: [otlp]
+                        processors: [memory_limiter, batch]
+                        exporters: [awss3/metrics]
+                - Bucket: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  CollectorService:
+    Type: AWS::ECS::Service
+    DependsOn: DefaultRoute
+    Properties:
+      ServiceName: obs-collector
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref CollectorTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref CollectorDesiredCount
+      # Stop the old task before starting a new one, so a redeploy never has
+      # two collectors writing at once. Fine for a single-task test service.
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref SubnetA, !Ref SubnetB]
+          SecurityGroups: [!Ref CollectorSecurityGroup]
+      PropagateTags: SERVICE
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  # ---------- Load generator ----------
+  # Run on demand with `aws ecs run-task` (see infra/phase1-test.sh);
+  # the command is supplied per run.
+
+  LoadgenTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: obs-loadgen
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: loadgen
+          Image: !Ref LoadgenImage
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LoadgenLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: loadgen
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  # ---------- Athena check of the raw data ----------
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "obs-athena-results-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-results
+            Status: Enabled
+            ExpirationInDays: 7
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: obs
+      Description: Checks and cost baselines for the observability platform
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        # Guardrail: no single query can scan more than 1 GB (~$0.005).
+        BytesScannedCutoffPerQuery: 1073741824
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaResultsBucket}/"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "1" }
+
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: obs
+        Description: Observability platform tables
+
+  # One row per collector batch file. Partition projection means no crawler
+  # and no partition registration; queries must filter on dt.
+  RawLogsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: raw_logs
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: json
+          compressionType: gzip
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy-MM-dd
+          projection.dt.range: "2026-09-01,NOW"
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          projection.hour.type: integer
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/logs/dt=${!dt}/hour=${!hour}/"
+        PartitionKeys:
+          - { Name: dt, Type: string }
+          - { Name: hour, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/logs/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - Name: resourcelogs
+              Type: >-
+                array<struct<resource:struct<attributes:array<struct<key:string,value:struct<stringvalue:string,intvalue:string,doublevalue:double,boolvalue:boolean>>>>,scopelogs:array<struct<scope:struct<name:string,version:string>,logrecords:array<struct<timeunixnano:string,observedtimeunixnano:string,severitynumber:int,severitytext:string,body:struct<stringvalue:string>,attributes:array<struct<key:string,value:struct<stringvalue:string,intvalue:string,doublevalue:double,boolvalue:boolean>>>,traceid:string,spanid:string>>>>>>
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  CollectorServiceName:
+    Value: !GetAtt CollectorService.Name
+  LoadgenTaskDefinition:
+    Value: !Ref LoadgenTaskDefinition
+  SubnetIds:
+    Value: !Join [",", [!Ref SubnetA, !Ref SubnetB]]
+  LoadgenSecurityGroup:
+    Value: !Ref LoadgenSecurityGroup
+  AthenaWorkGroup:
+    Value: !Ref AthenaWorkGroup

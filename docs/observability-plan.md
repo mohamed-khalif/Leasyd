@@ -38,12 +38,14 @@ The platform separates two concerns that traditional observability tools bundle 
 
 ```
 s3://bucket/
-  _incoming/{signal}/dt=YYYY-MM-DD/hour=HH/service=X/<collector-batch>.json   # raw, short-lived
+  _incoming/{signal}/dt=YYYY-MM-DD/hour=HH/{signal}_<uuid>.json.gz             # raw, short-lived, arrival time
   {signal}/dt=YYYY-MM-DD/hour=HH/service=X/part-<hash>-NNN.parquet           # compacted
   _results/<query-hash>.parquet                                              # large cached results
 ```
 
 `{signal}` is `logs`, `traces` or `metrics`. No part of the path uses a field with unbounded cardinality (like user IDs).
+
+Raw files are partitioned by **arrival time only**. The collector's S3 exporter names each file after the first resource in a batch, so a `service=` partition there could file one service's records under another's name. Compaction splits by service and by event time.
 
 **Kinesis:** add it back only if a second real-time consumer of the raw stream appears, such as streaming anomaly detection. Until then it's cost with no benefit.
 
@@ -70,7 +72,7 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 
 **Build**
 - Run the OTel Collector as an ECS Fargate task, receiving OTLP from a test service.
-- Configure the `awss3exporter` with the `otlp_json` format, batching into `_incoming/{signal}/dt=/hour=/service=/`.
+- Configure the `awss3exporter` with the `otlp_json` format and gzip, batching into `_incoming/{signal}/dt=/hour=/`.
 
 **Test on AWS**
 - Point a load generator at the collector. Confirm files land under the right prefixes with the right partition values.
@@ -83,11 +85,11 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 **Build**
 - **Dispatcher Lambda** (EventBridge, every 15 min):
   - Lists `_incoming/` hour partitions that closed at least 10 minutes ago. The 10-minute grace period catches late-arriving data.
-  - Invokes one worker per (signal, hour, service).
+  - Invokes one worker per (signal, arrival hour).
   - Publishes a CloudWatch metric for the age of the oldest `_incoming/` object, with an alarm if it goes over 3 hours.
 - **Worker Lambda**, per partition:
   1. List the input files and compute `batch_id = hash(sorted input keys)`.
-  2. Read the inputs, convert to Parquet, sort by timestamp, and write files of 128–512 MB named `part-<batch_id>-NNN.parquet`. The same inputs always produce the same names, so a re-run overwrites instead of duplicating.
+  2. Read the inputs, split rows by service and by event hour, convert to Parquet, sort by timestamp, and write files of 128–512 MB named `part-<batch_id>-NNN.parquet` under each `{signal}/dt=/hour=/service=/`. The same inputs always produce the same names, so a re-run overwrites instead of duplicating.
   3. Write the index entries (Phase 3). Because the keys are also derived from `batch_id`, re-writing them is harmless.
   4. Delete the input files.
 - Data that arrives after its hour was compacted gets picked up on the next run. Its input set is different, so it gets a new `batch_id` and an additional file.
