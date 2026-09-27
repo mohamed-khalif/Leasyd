@@ -22,6 +22,13 @@ Parameters:
     Type: String
     Default: 60s
     Description: How long the collector buffers before writing a file to S3.
+  DefaultTenant:
+    Type: String
+    Default: default
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$"
+    Description: >
+      Tenant every record is filed under until authenticated ingest (Phase T2)
+      assigns a tenant per API key.
 
 Mappings:
   Network:
@@ -242,7 +249,7 @@ Resources:
                       s3uploader:
                         region: ${AWS::Region}
                         s3_bucket: ${Bucket}
-                        s3_prefix: _incoming/logs
+                        s3_prefix: _incoming/tenant=${Tenant}/logs
                         s3_partition_format: "dt=%Y-%m-%d/hour=%H"
                         compression: gzip
                         unique_key_func_name: uuidv7
@@ -251,7 +258,7 @@ Resources:
                       s3uploader:
                         region: ${AWS::Region}
                         s3_bucket: ${Bucket}
-                        s3_prefix: _incoming/traces
+                        s3_prefix: _incoming/tenant=${Tenant}/traces
                         s3_partition_format: "dt=%Y-%m-%d/hour=%H"
                         compression: gzip
                         unique_key_func_name: uuidv7
@@ -260,7 +267,7 @@ Resources:
                       s3uploader:
                         region: ${AWS::Region}
                         s3_bucket: ${Bucket}
-                        s3_prefix: _incoming/metrics
+                        s3_prefix: _incoming/tenant=${Tenant}/metrics
                         s3_partition_format: "dt=%Y-%m-%d/hour=%H"
                         compression: gzip
                         unique_key_func_name: uuidv7
@@ -279,6 +286,7 @@ Resources:
                         processors: [memory_limiter, batch]
                         exporters: [awss3/metrics]
                 - Bucket: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+                  Tenant: !Ref DefaultTenant
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "1" }
@@ -411,12 +419,15 @@ Resources:
           projection.hour.type: integer
           projection.hour.range: "0,23"
           projection.hour.digits: "2"
-          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/logs/dt=${!dt}/hour=${!hour}/"
+          # Queries must name a tenant: WHERE tenant = '...'.
+          projection.tenant.type: injected
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/tenant=${!tenant}/logs/dt=${!dt}/hour=${!hour}/"
         PartitionKeys:
+          - { Name: tenant, Type: string }
           - { Name: dt, Type: string }
           - { Name: hour, Type: string }
         StorageDescriptor:
-          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/logs/"
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/"
           InputFormat: org.apache.hadoop.mapred.TextInputFormat
           OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
           SerdeInfo:

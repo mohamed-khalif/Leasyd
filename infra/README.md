@@ -84,3 +84,30 @@ infra/phase3-test.sh
 ```
 
 Files compacted before this change have no bloom filter; lookups never skip them.
+
+## Phase T1: tenant-aware storage, compaction and lookups
+
+Every path and index key now starts with a tenant (see `services/compaction/layout.py`):
+raw data under `_incoming/tenant=<T>/`, Parquet under `data/tenant=<T>/`, index keys
+`<T>#...`. The query role no longer reads data itself; lookups assume `obs-tenant-reader`
+with the tenant as a session tag, and IAM limits that session to the tenant's prefix and
+index keys. Until authenticated ingest (T2), the collector files everything under tenant
+`default`. Athena tables now need `WHERE tenant = '...'`.
+
+Deploy in this order. **Phase 0 must be deployed with admin credentials**: it changes the
+`obs-boundary` permissions boundary, which `obs-deployer` is deliberately not allowed to
+modify. Also attach `infra/iam/deployer-phaseT.json` to `obs-deployer` for the tests.
+
+```bash
+AWS_PROFILE=<admin> aws cloudformation deploy --stack-name obs-phase0 \
+  --template-file infra/phase0-foundation.yaml --capabilities CAPABILITY_NAMED_IAM
+aws cloudformation deploy --stack-name obs-phase1 --template-file infra/phase1-write-path.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
+infra/deploy-phase3.sh
+infra/phase0-test.sh obs-phase0      # now includes cross-tenant deny checks
+infra/phase3-test.sh                 # lookups, including tenant isolation
+```
+
+Data written before this change (`logs/`, `_incoming/logs/`, index keys without a tenant)
+is no longer read or compacted; it's test data and can be deleted.

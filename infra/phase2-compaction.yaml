@@ -164,7 +164,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: obs-compaction-stuck
-      AlarmDescription: Raw _incoming/logs data older than 3 hours, or the dispatcher is not running.
+      AlarmDescription: Raw _incoming/ logs data (any tenant) older than 3 hours, or the dispatcher is not running.
       Namespace: obs
       MetricName: OldestIncomingAgeMinutes
       Dimensions:
@@ -199,13 +199,16 @@ Resources:
           projection.hour.type: integer
           projection.hour.range: "0,23"
           projection.hour.digits: "2"
-          # service=... subfolders are read recursively; service is also a column.
-          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/logs/dt=${!dt}/hour=${!hour}/"
+          # Queries must name a tenant: WHERE tenant = '...'. service=...
+          # subfolders are read recursively; service is also a column.
+          projection.tenant.type: injected
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=${!tenant}/logs/dt=${!dt}/hour=${!hour}/"
         PartitionKeys:
+          - { Name: tenant, Type: string }
           - { Name: dt, Type: string }
           - { Name: hour, Type: string }
         StorageDescriptor:
-          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/logs/"
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/"
           InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
           OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
           SerdeInfo:

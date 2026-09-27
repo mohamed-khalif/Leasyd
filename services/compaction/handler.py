@@ -1,6 +1,8 @@
 """Compaction Lambdas.
 
-dispatcher: on a schedule, splits each closed _incoming/ hour into chunks,
+Paths and keys are per tenant; see layout.py.
+
+dispatcher: on a schedule, splits each tenant's closed _incoming/ hours into chunks,
             records a plan per chunk, and invokes one worker per plan, so a
             busy hour is compacted by many workers in parallel.
 worker:     compacts one planned chunk into Parquet, indexes it, then deletes
@@ -34,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 
 import compact
+import layout
 
 BUCKET = os.environ["BUCKET"]
 TABLE = os.environ["INDEX_TABLE"]
@@ -60,20 +63,18 @@ lam = boto3.client("lambda")
 cw = boto3.client("cloudwatch")
 
 
-def _plan_pk(signal, dt, hour):
-    return f"_plan#{signal}#{dt}#{hour}"
-
-
 # ---------------------------------------------------------------- dispatcher
 
 def dispatcher(event, context):
     """Scheduled run: plan and invoke every closed hour.
 
-    Test hook: {"plan_only": {"signal", "dt", "hour"}} plans that one hour,
-    ignoring the grace period, and returns its batch ids without invoking
-    workers.
+    Test hook: {"plan_only": {"tenant", "signal", "dt", "hour"}} plans that
+    one hour, ignoring the grace period, and returns its batch ids without
+    invoking workers.
     """
     only = (event or {}).get("plan_only")
+    if only:
+        layout.check_tenant(only["tenant"])
     now = datetime.now(timezone.utc)
     result = {"planned": [], "invoked": []}
     for signal in [only["signal"]] if only else SIGNALS:
@@ -85,18 +86,19 @@ def dispatcher(event, context):
             continue
         try:
             if only:
-                hours = [(only["dt"], only["hour"])]
+                hours = [(only["tenant"], only["dt"], only["hour"])]
             else:
                 partitions = list(_incoming_partitions(signal))
                 _put_oldest_age_metric(signal, now, partitions)
-                hours = [(dt, hr) for dt, hr, start in partitions
+                hours = [(t, dt, hr) for t, dt, hr, start in partitions
                          if now >= start + timedelta(hours=1) + GRACE]
-            for dt, hour in hours:
-                batch_ids = _plan_hour(signal, dt, hour, now)
+            for tenant, dt, hour in hours:
+                batch_ids = _plan_hour(tenant, signal, dt, hour, now)
                 result["planned"].extend(batch_ids)
                 if not only:
                     for b in batch_ids:
-                        _invoke_worker({"signal": signal, "dt": dt, "hour": hour, "batch_id": b})
+                        _invoke_worker({"tenant": tenant, "signal": signal, "dt": dt, "hour": hour,
+                                        "batch_id": b})
                         result["invoked"].append(b)
         finally:
             _release_lease(*lease)
@@ -104,15 +106,15 @@ def dispatcher(event, context):
     return result
 
 
-def _plan_hour(signal, dt, hour, now):
+def _plan_hour(tenant, signal, dt, hour, now):
     """Plan chunks for any unplanned raw files in the hour. Returns every
     plan for the hour, new and existing (existing ones are retried)."""
-    pk = _plan_pk(signal, dt, hour)
+    pk = layout.plan_pk(tenant, signal, dt, hour)
     existing = _query(pk)
     planned_keys = {v["S"] for item in existing for v in item["inputs"]["L"]}
     batch_ids = [item["sk"]["S"] for item in existing]
 
-    fresh = [o for o in _list(f"_incoming/{signal}/dt={dt}/hour={hour}/") if o["Key"] not in planned_keys]
+    fresh = [o for o in _list(layout.incoming_prefix(tenant, signal, dt, hour)) if o["Key"] not in planned_keys]
     for chunk in _chunks(fresh):
         keys = [o["Key"] for o in chunk]
         batch_id = hashlib.sha256("\n".join(keys).encode()).hexdigest()[:16]
@@ -144,7 +146,8 @@ def _chunks(objects):
 
 
 def _put_oldest_age_metric(signal, now, partitions):
-    oldest = min((start for _, _, start in partitions), default=None)
+    """Across all tenants: one stuck tenant is enough to alarm."""
+    oldest = min((p[-1] for p in partitions), default=None)
     cw.put_metric_data(
         Namespace="obs",
         MetricData=[{
@@ -156,12 +159,20 @@ def _put_oldest_age_metric(signal, now, partitions):
 
 
 def _incoming_partitions(signal):
-    for dt_prefix in _common_prefixes(f"_incoming/{signal}/"):
-        dt = dt_prefix.rstrip("/").rsplit("dt=", 1)[1]
-        for hour_prefix in _common_prefixes(dt_prefix):
-            hour = hour_prefix.rstrip("/").rsplit("hour=", 1)[1]
-            start = datetime.strptime(f"{dt} {hour}", "%Y-%m-%d %H").replace(tzinfo=timezone.utc)
-            yield dt, hour, start
+    """(tenant, dt, hour, hour start) for every raw hour of every tenant."""
+    for tenant_prefix in _common_prefixes("_incoming/"):
+        tenant = tenant_prefix.rstrip("/").rsplit("tenant=", 1)[-1]
+        try:
+            layout.check_tenant(tenant)
+        except ValueError:
+            print(json.dumps({"skipped_prefix": tenant_prefix}))  # not a tenant=<T>/ folder
+            continue
+        for dt_prefix in _common_prefixes(layout.incoming_prefix(tenant, signal)):
+            dt = dt_prefix.rstrip("/").rsplit("dt=", 1)[1]
+            for hour_prefix in _common_prefixes(dt_prefix):
+                hour = hour_prefix.rstrip("/").rsplit("hour=", 1)[1]
+                start = datetime.strptime(f"{dt} {hour}", "%Y-%m-%d %H").replace(tzinfo=timezone.utc)
+                yield tenant, dt, hour, start
 
 
 def _common_prefixes(prefix):
@@ -177,21 +188,23 @@ def _invoke_worker(payload):
 # -------------------------------------------------------------------- worker
 
 def worker(event, context):
+    tenant = layout.check_tenant(event["tenant"])
     signal, dt, hour, batch_id = event["signal"], event["dt"], event["hour"], event["batch_id"]
     if signal != "logs":
         raise ValueError(f"no compactor for signal {signal!r} yet")
     crash_after = event.get("crash_after") if ALLOW_CRASH_INJECTION else None
-    lease = _acquire_lease(f"_lease#{signal}#{dt}#{hour}#{batch_id}", context, WORKER_LEASE_SECONDS)
+    lease = _acquire_lease(layout.worker_lease_pk(tenant, signal, dt, hour, batch_id), context,
+                           WORKER_LEASE_SECONDS)
     if lease is None:
         return _done(batch_id, skipped="another worker holds this chunk")
     try:
-        return _compact_chunk(signal, dt, hour, batch_id, crash_after)
+        return _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after)
     finally:
         _release_lease(*lease)
 
 
-def _compact_chunk(signal, dt, hour, batch_id, crash_after):
-    key = {"pk": {"S": _plan_pk(signal, dt, hour)}, "sk": {"S": batch_id}}
+def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
+    key = {"pk": {"S": layout.plan_pk(tenant, signal, dt, hour)}, "sk": {"S": batch_id}}
     plan = ddb.get_item(TableName=TABLE, Key=key, ConsistentRead=True).get("Item")
     if plan is None:
         return _done(batch_id, skipped="no such plan (already finished)")
@@ -215,21 +228,22 @@ def _compact_chunk(signal, dt, hour, batch_id, crash_after):
                 memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
                 bloom_attributes=BLOOM_ATTRIBUTES,
             )
+            prefix = layout.data_prefix(tenant, signal)
             for w in written:
-                w["key"] = f"{signal}/{w['relpath']}"
+                w["key"] = prefix + w["relpath"]
                 s3.upload_file(w["path"], BUCKET, w["key"])
                 bits = w["bloom"].to_bytes()
                 if len(bits) > BLOOM_INLINE_MAX_BYTES:
-                    w["bloom_key"] = f"{signal}/_bloom/{batch_id}-{w['part']:03d}-{w['service']}.bloom"
+                    w["bloom_key"] = f"{prefix}_bloom/{batch_id}-{w['part']:03d}-{w['service']}.bloom"
                     s3.put_object(Bucket=BUCKET, Key=w["bloom_key"], Body=bits)
             _maybe_crash(crash_after, "write")
 
             # 2. index
             now = datetime.now(timezone.utc).isoformat()
-            _batch_write([_index_item(signal, batch_id, w, now) for w in written])
+            _batch_write([_index_item(tenant, signal, batch_id, w, now) for w in written])
             if written:  # registry of services, for lookups across all of them
                 ddb.update_item(
-                    TableName=TABLE, Key={"pk": {"S": f"_services#{signal}"}, "sk": {"S": "all"}},
+                    TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}},
                     UpdateExpression="ADD services :s",
                     ExpressionAttributeValues={":s": {"SS": sorted({w["service"] for w in written})}},
                 )
@@ -252,17 +266,17 @@ def _compact_chunk(signal, dt, hour, batch_id, crash_after):
     ddb.delete_item(TableName=TABLE, Key=key)
 
     return _done(
-        batch_id, signal=signal, dt=dt, hour=hour, inputs=len(keys), resumed=resumed,
+        batch_id, tenant=tenant, signal=signal, dt=dt, hour=hour, inputs=len(keys), resumed=resumed,
         outputs=[{k: w[k] for k in ("key", "rows", "size_bytes", "min_ts", "max_ts")} for w in written],
     )
 
 
 # ------------------------------------------------------------------- helpers
 
-def _index_item(signal, batch_id, w, now):
+def _index_item(tenant, signal, batch_id, w, now):
     b = w["bloom"]
     item = {
-        "pk": {"S": f"{signal}#{w['service']}"},
+        "pk": {"S": layout.index_pk(tenant, signal, w["service"])},
         "sk": {"S": f"{w['min_ts']}#{batch_id}-{w['part']:03d}"},
         "min_ts": {"S": w["min_ts"]},
         "max_ts": {"S": w["max_ts"]},

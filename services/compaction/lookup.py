@@ -1,6 +1,7 @@
 """Index lookup: which Parquet files could hold the rows a query asks for.
 
-    {"signal": "logs",                      # default logs
+    {"tenant": "acme",                      # required
+     "signal": "logs",                      # default logs
      "services": ["checkout"],              # optional; default every service
      "start": "2026-09-26T10:30:00Z",       # inclusive
      "end":   "2026-09-26T11:15:00Z",       # inclusive
@@ -8,6 +9,11 @@
 
 Returns the files with their time range, row count and size, plus how many
 candidates each stage kept, so callers (and tests) can see the pruning.
+
+Every read goes through obs-tenant-reader, assumed with the tenant as a
+session tag. IAM then refuses any index key or object outside that tenant,
+so even a bug here can't return another tenant's files. (In the query API
+the tenant comes from the caller's credentials, never from the request.)
 
 The time range needs no S3 listing: each file spans at most one hour (the
 compactor guarantees it), so every file overlapping [start, end] has
@@ -23,35 +29,41 @@ from datetime import datetime, timedelta, timezone
 import boto3
 
 import bloom
+import layout
 
 TABLE = os.environ["INDEX_TABLE"]
 BUCKET = os.environ["BUCKET"]
+TENANT_READER_ROLE = os.environ["TENANT_READER_ROLE_ARN"]
 MAX_FILE_SPAN = timedelta(hours=1)
+SESSION_SECONDS = 3600
+REFRESH_BEFORE_EXPIRY = 300
 
-ddb = boto3.client("dynamodb")
-s3 = boto3.client("s3")
+sts = boto3.client("sts")
+_sessions = {}  # tenant -> (boto3.Session, expiry epoch); reused across warm invocations
 
 
 def handler(event, context):
     return lookup(**event)
 
 
-def lookup(start, end, signal="logs", services=None, match=None):
+def lookup(tenant, start, end, signal="logs", services=None, match=None):
     t0 = time.perf_counter()
+    layout.check_tenant(tenant)
     start_dt, end_dt = _parse(start), _parse(end)
     if end_dt < start_dt:
         raise ValueError("end is before start")
     terms = [bloom.term(f, v) for f, v in sorted((match or {}).items())]
-    services = services or _all_services(signal)
+    ddb, s3 = _clients_for(tenant)
+    services = services or _all_services(ddb, tenant, signal)
 
     lo = _iso(start_dt - MAX_FILE_SPAN)
     hi = _iso(end_dt) + "#￿"  # every sort key with min_ts <= end
     stats = {"services": len(services), "in_time_range": 0, "after_bloom": 0, "read_units": 0.0}
     files = []
     for service in services:
-        for item in _query(f"{signal}#{service}", lo, hi, _iso(start_dt), stats):
+        for item in _query(ddb, layout.index_pk(tenant, signal, service), lo, hi, _iso(start_dt), stats):
             stats["in_time_range"] += 1
-            if terms and not _bloom_says_maybe(item, terms):
+            if terms and not _bloom_says_maybe(s3, item, terms):
                 continue
             stats["after_bloom"] += 1
             files.append({
@@ -66,12 +78,30 @@ def lookup(start, end, signal="logs", services=None, match=None):
     files.sort(key=lambda f: (f["min_ts"], f["file_path"]))
     stats["ms"] = round((time.perf_counter() - t0) * 1000, 1)
     result = {"files": files, "stats": stats}
-    print(json.dumps({"lookup": {"start": start, "end": end, "services": services, "match": match},
+    print(json.dumps({"lookup": {"tenant": tenant, "start": start, "end": end, "services": services,
+                                 "match": sorted(match or {})},
                       "stats": stats}))
     return result
 
 
-def _query(pk, lo, hi, start_iso, stats):
+def _clients_for(tenant):
+    """DynamoDB and S3 clients whose credentials only reach this tenant."""
+    session, expiry = _sessions.get(tenant, (None, 0))
+    if time.time() > expiry - REFRESH_BEFORE_EXPIRY:
+        creds = sts.assume_role(
+            RoleArn=TENANT_READER_ROLE, RoleSessionName=f"lookup-{tenant}"[:64],
+            DurationSeconds=SESSION_SECONDS, Tags=[{"Key": "tenant", "Value": tenant}],
+        )["Credentials"]
+        session = boto3.Session(
+            aws_access_key_id=creds["AccessKeyId"], aws_secret_access_key=creds["SecretAccessKey"],
+            aws_session_token=creds["SessionToken"],
+        )
+        expiry = creds["Expiration"].timestamp()
+        _sessions[tenant] = (session, expiry)
+    return session.client("dynamodb"), session.client("s3")
+
+
+def _query(ddb, pk, lo, hi, start_iso, stats):
     kwargs = dict(
         TableName=TABLE,
         KeyConditionExpression="pk = :pk AND sk BETWEEN :lo AND :hi",
@@ -89,7 +119,7 @@ def _query(pk, lo, hi, start_iso, stats):
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
-def _bloom_says_maybe(item, terms):
+def _bloom_says_maybe(s3, item, terms):
     """False only if the file certainly holds none of the terms. Files
     indexed before blooms existed, or indexing other fields, always pass."""
     fields = {f["S"] for f in item.get("bloom_fields", {}).get("L", [])}
@@ -106,10 +136,10 @@ def _bloom_says_maybe(item, terms):
     return all(b.might_contain(t) for t in checkable)
 
 
-def _all_services(signal):
+def _all_services(ddb, tenant, signal):
     resp = ddb.query(
         TableName=TABLE, KeyConditionExpression="pk = :pk",
-        ExpressionAttributeValues={":pk": {"S": f"_services#{signal}"}},
+        ExpressionAttributeValues={":pk": {"S": layout.services_pk(tenant, signal)}},
     )
     return sorted(s for item in resp["Items"] for s in item.get("services", {}).get("SS", []))
 

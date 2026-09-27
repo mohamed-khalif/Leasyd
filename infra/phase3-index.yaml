@@ -23,7 +23,7 @@ Resources:
       Architectures: [arm64]
       Handler: lookup.handler
       Code: ../services/compaction/build
-      # Created in phase 0: read-only on the data and the index.
+      # Created in phase 0: no direct data access; reads through obs-tenant-reader.
       Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-query"
       MemorySize: 512
       Timeout: 30
@@ -31,6 +31,7 @@ Resources:
         Variables:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
           INDEX_TABLE: obs-index
+          TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "3" }

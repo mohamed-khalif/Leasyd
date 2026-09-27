@@ -9,6 +9,7 @@ STACK="${1:-obs-phase1}"
 : "${AWS_DEFAULT_REGION:?set AWS_DEFAULT_REGION}"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="obs-data-${ACCOUNT}-${AWS_DEFAULT_REGION}"
+TENANT="${TENANT:-default}"   # the collector files everything here until authenticated ingest (T2)
 RUN_ID="run-$(date -u +%Y%m%dT%H%M%S)"
 BATCH_WAIT="${BATCH_WAIT:-90}"   # collector batch timeout (60s) + upload margin
 FAILED=0
@@ -69,13 +70,13 @@ DAYS=("$(date -u -d "@$started" +%Y-%m-%d)")
 [[ "$(date -u +%Y-%m-%d)" != "${DAYS[0]}" ]] && DAYS+=("$(date -u +%Y-%m-%d)")
 KEYS=""
 for d in "${DAYS[@]}"; do
-  KEYS+="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "_incoming/logs/dt=${d}/" \
+  KEYS+="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "_incoming/tenant=${TENANT}/logs/dt=${d}/" \
     --query 'Contents[].Key' --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$')"$'\n'
 done
 KEYS="$(sed '/^$/d' <<<"$KEYS")"
 n_keys=$(grep -c . <<<"$KEYS")
-bad=$(grep -cvE '^_incoming/logs/dt=[0-9]{4}-[0-9]{2}-[0-9]{2}/hour=([01][0-9]|2[0-3])/logs_[0-9a-f-]+\.json\.gz$' <<<"$KEYS")
-if (( n_keys > 0 && bad == 0 )); then pass "$n_keys file(s) under _incoming/logs/dt=/hour=/, all names well-formed"
+bad=$(grep -cvE '^_incoming/tenant=[a-z0-9-]+/logs/dt=[0-9]{4}-[0-9]{2}-[0-9]{2}/hour=([01][0-9]|2[0-3])/logs_[0-9a-f-]+\.json\.gz$' <<<"$KEYS")
+if (( n_keys > 0 && bad == 0 )); then pass "$n_keys file(s) under _incoming/tenant=${TENANT}/logs/dt=/hour=/, all names well-formed"
 else fail "$n_keys file(s), $bad with unexpected keys:"; grep -vE 'logs_[0-9a-f-]+\.json\.gz$' <<<"$KEYS" | head -5; fi
 
 # ---- 4. Athena reads them back with the right counts ----
@@ -87,7 +88,7 @@ FROM obs.raw_logs
 CROSS JOIN UNNEST(resourcelogs) AS t1(rl)
 CROSS JOIN UNNEST(rl.scopelogs) AS t2(sl)
 CROSS JOIN UNNEST(sl.logrecords) AS t3(lr)
-WHERE dt IN (${dt_list})
+WHERE tenant = '${TENANT}' AND dt IN (${dt_list})
   AND any_match(lr.attributes, a -> a.key = 'run.id' AND a.value.stringvalue = '${RUN_ID}')
 GROUP BY 1 ORDER BY 1"
 

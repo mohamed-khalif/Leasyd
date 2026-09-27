@@ -63,23 +63,12 @@ Resources:
           Prefix: _incoming/
       LifecycleConfiguration:
         Rules:
-          # Compacted data only. _incoming/ gets no transitions or expiry:
-          # a stuck compaction must never silently lose data.
-          - Id: logs-tiering
+          # Compacted data only (data/tenant=<T>/<signal>/...). _incoming/
+          # gets no transitions or expiry: a stuck compaction must never
+          # silently lose data.
+          - Id: data-tiering
             Status: Enabled
-            Prefix: logs/
-            Transitions:
-              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
-              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
-          - Id: traces-tiering
-            Status: Enabled
-            Prefix: traces/
-            Transitions:
-              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
-              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
-          - Id: metrics-tiering
-            Status: Enabled
-            Prefix: metrics/
+            Prefix: data/
             Transitions:
               - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
               - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
@@ -185,6 +174,12 @@ Resources:
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-*"
               - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:obs-*"
               - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:obs-*"
+          - Sid: TenantScopedReads
+            Effect: Allow
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
           - Sid: Telemetry
             Effect: Allow
             Action:
@@ -271,10 +266,7 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:AbortMultipartUpload
-                Resource:
-                  - !Sub "${DataBucket.Arn}/logs/*"
-                  - !Sub "${DataBucket.Arn}/traces/*"
-                  - !Sub "${DataBucket.Arn}/metrics/*"
+                Resource: !Sub "${DataBucket.Arn}/data/*"
               - Sid: WriteIndex
                 Effect: Allow
                 Action:
@@ -323,27 +315,20 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: List
+              # No direct access to tenant data or the index: every read goes
+              # through obs-tenant-reader, tagged with the one tenant it serves.
+              - Sid: AssumeTenantReader
                 Effect: Allow
-                Action: s3:ListBucket
-                Resource: !GetAtt DataBucket.Arn
-              - Sid: ReadCompacted
-                Effect: Allow
-                Action: s3:GetObject
-                Resource:
-                  - !Sub "${DataBucket.Arn}/logs/*"
-                  - !Sub "${DataBucket.Arn}/traces/*"
-                  - !Sub "${DataBucket.Arn}/metrics/*"
+                Action:
+                  - sts:AssumeRole
+                  - sts:TagSession
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
               - Sid: LargeResults
                 Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                 Resource: !Sub "${DataBucket.Arn}/_results/*"
-              - Sid: ReadIndex
-                Effect: Allow
-                Action: dynamodb:Query
-                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
               - Sid: ResultCache
                 Effect: Allow
                 Action:
@@ -353,6 +338,59 @@ Resources:
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }
+
+  # Reads one tenant's data and index entries. The tenant comes from the
+  # session tag set when the query role assumes this role; IAM itself then
+  # refuses any object or index key belonging to another tenant, whatever
+  # the calling code asks for.
+  TenantReaderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-tenant-reader
+      PermissionsBoundary: !Ref PermissionsBoundary
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt QueryRole.Arn
+            Action: [sts:AssumeRole, sts:TagSession]
+            Condition:
+              StringLike: { "aws:RequestTag/tenant": "?*" }
+          - !If
+            - TestAssume
+            - Effect: Allow
+              Principal:
+                AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+              Action: [sts:AssumeRole, sts:TagSession]
+              Condition:
+                StringLike: { "aws:RequestTag/tenant": "?*" }
+            - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: one-tenant
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadTenantData
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${DataBucket.Arn}/data/tenant=${!aws:PrincipalTag/tenant}/*"
+              - Sid: ListTenantData
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+                Condition:
+                  StringLike: { "s3:prefix": "data/tenant=${aws:PrincipalTag/tenant}/*" }
+              - Sid: ReadTenantIndex
+                Effect: Allow
+                Action: [dynamodb:Query, dynamodb:GetItem]
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
+                Condition:
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": "${aws:PrincipalTag/tenant}#*" }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T" }
 
   # ---------- Cost guardrail ----------
 
@@ -400,5 +438,7 @@ Outputs:
     Value: !GetAtt CompactionRole.Arn
   QueryRoleArn:
     Value: !GetAtt QueryRole.Arn
+  TenantReaderRoleArn:
+    Value: !GetAtt TenantReaderRole.Arn
   PermissionsBoundaryArn:
     Value: !Ref PermissionsBoundary

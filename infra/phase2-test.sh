@@ -19,6 +19,7 @@ MODE="${1:-}"
 : "${AWS_DEFAULT_REGION:?set AWS_DEFAULT_REGION}"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="obs-data-${ACCOUNT}-${AWS_DEFAULT_REGION}"
+TENANT="${TENANT:-default}"   # the collector files everything here until authenticated ingest (T2)
 WORKER=obs-compaction-worker
 TABLE=obs-index
 FAILED=0
@@ -93,7 +94,7 @@ TARGET=""
 if [[ $# -ge 3 ]]; then
   TARGET="$2 $3"
 else
-  for dtp in $(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix _incoming/logs/ --delimiter / \
+  for dtp in $(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "_incoming/tenant=${TENANT}/logs/" --delimiter / \
                  --query 'CommonPrefixes[].Prefix' --output text); do
     for hp in $(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$dtp" --delimiter / \
                   --query 'CommonPrefixes[].Prefix' --output text); do
@@ -105,7 +106,7 @@ else
 fi
 [[ -z "$TARGET" ]] && { echo "No closed raw hour yet: wait until an hour has fully passed + 10 min."; exit 1; }
 read -r DT HR <<<"$TARGET"
-PREFIX="_incoming/logs/dt=${DT}/hour=${HR}/"
+PREFIX="_incoming/tenant=${TENANT}/logs/dt=${DT}/hour=${HR}/"
 echo "Test hour: dt=${DT} hour=${HR}"
 
 read -r RAW_FILES RAW_BYTES < <(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" \
@@ -118,7 +119,7 @@ SELECT element_at(filter(rl.resource.attributes, a -> a.key = 'service.name'), 1
        count(*) FROM obs.raw_logs
 CROSS JOIN UNNEST(resourcelogs) AS t1(rl) CROSS JOIN UNNEST(rl.scopelogs) AS t2(sl)
 CROSS JOIN UNNEST(sl.logrecords) AS t3(lr)
-WHERE dt = '${DT}' AND hour = '${HR}' GROUP BY 1 ORDER BY 1"
+WHERE tenant = '${TENANT}' AND dt = '${DT}' AND hour = '${HR}' GROUP BY 1 ORDER BY 1"
 athena "$RAW_SQL" || { fail "raw baseline query"; exit 1; }
 RAW_COUNTS="$(athena_rows)"; read -r RAW_SCANNED RAW_MS < <(athena_stats)
 RAW_TOTAL=$(awk '{s+=$2} END {print s+0}' <<<"$RAW_COUNTS")
@@ -126,13 +127,13 @@ echo "INFO  raw rows: ${RAW_TOTAL}; query scanned ${RAW_SCANNED} bytes in ${RAW_
 
 # 2. Plan the hour, crash the first chunk's worker mid-delete, then run every chunk.
 DISPATCHER=obs-compaction-dispatcher
-invoke_lambda "$DISPATCHER" "{\"plan_only\":{\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\"}}" \
+invoke_lambda "$DISPATCHER" "{\"plan_only\":{\"tenant\":\"${TENANT}\",\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\"}}" \
   || { fail "planning failed: $RESULT"; exit 1; }
 BATCHES="$(python3 -c 'import json,sys; print(" ".join(json.loads(sys.argv[1])["planned"]))' "$RESULT")"
 read -ra BATCH_LIST <<<"$BATCHES"
 (( ${#BATCH_LIST[@]} > 0 )) && pass "hour planned as ${#BATCH_LIST[@]} chunk(s): ${BATCHES}" || { fail "no chunks planned"; exit 1; }
 
-EVENT="\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\""
+EVENT="\"tenant\":\"${TENANT}\",\"signal\":\"logs\",\"dt\":\"${DT}\",\"hour\":\"${HR}\""
 if invoke_worker "{${EVENT},\"batch_id\":\"${BATCH_LIST[0]}\",\"crash_after\":\"partial_delete\"}"; then
   fail "crash injection did not crash (is AllowCrashInjection=true?)"
 else
@@ -153,7 +154,7 @@ left=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$PREFIX" --query '
 # 3. Parquet files and index entries for the hour's chunks.
 PQ_KEYS=""; IDX=""
 for b in "${BATCH_LIST[@]}"; do
-  PQ_KEYS+="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix logs/ \
+  PQ_KEYS+="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "data/tenant=${TENANT}/logs/" \
     --query "Contents[?contains(Key, 'part-${b}-')].[Key,Size]" --output text)"$'\n'
   IDX+="$(aws dynamodb scan --table-name "$TABLE" --filter-expression 'batch_id = :b' \
     --expression-attribute-values "{\":b\":{\"S\":\"${b}\"}}" \
@@ -169,7 +170,7 @@ IDX_N=$(grep -c . <<<"$IDX"); IDX_ROWS=$(awk '{s+=$1} END {print s+0}' <<<"$IDX"
 bad_span=$(awk '{ if (substr($2,1,13) != substr($3,1,13)) n++ } END {print n+0}' <<<"$IDX")
 (( bad_span == 0 )) && pass "every file spans at most one hour" || fail "${bad_span} file(s) span more than one hour"
 leftover=$(aws dynamodb query --table-name "$TABLE" --key-condition-expression 'pk = :p' \
-  --expression-attribute-values "{\":p\":{\"S\":\"_plan#logs#${DT}#${HR}\"}}" --query Count --output text)
+  --expression-attribute-values "{\":p\":{\"S\":\"_plan#${TENANT}#logs#${DT}#${HR}\"}}" --query Count --output text)
 (( leftover == 0 )) && pass "no chunk plan left behind" || fail "${leftover} plan(s) left for the hour"
 
 # 4. Same question against the compacted Parquet.
@@ -177,7 +178,7 @@ DTS="$(awk '{print "'"'"'" substr($2,1,10) "'"'"'"}' <<<"$IDX" | sort -u | paste
 HRS="$(awk '{print "'"'"'" substr($2,12,2) "'"'"'"}' <<<"$IDX" | sort -u | paste -sd,)"
 BATCH_RE="$(IFS='|'; echo "${BATCH_LIST[*]}")"
 PQ_SQL="SELECT service, count(*) FROM obs.logs
-WHERE dt IN (${DTS}) AND hour IN (${HRS}) AND regexp_like(\"\$path\", 'part-(${BATCH_RE})-[0-9]{3}\.parquet\$')
+WHERE tenant = '${TENANT}' AND dt IN (${DTS}) AND hour IN (${HRS}) AND regexp_like(\"\$path\", 'part-(${BATCH_RE})-[0-9]{3}\.parquet\$')
 GROUP BY 1 ORDER BY 1"
 athena "$PQ_SQL" || { fail "compacted query"; exit 1; }
 PQ_COUNTS="$(athena_rows)"; read -r PQ_SCANNED PQ_MS < <(athena_stats)
