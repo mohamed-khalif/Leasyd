@@ -12,7 +12,7 @@ import pytest
 from moto import mock_aws
 
 os.environ.update(
-    BUCKET="obs-data-test", INDEX_TABLE="obs-index", WORKER_FUNCTION="obs-compaction-worker",
+    BUCKET="obs-data-test", INDEX_TABLE="obs-index", USAGE_TABLE="obs-usage", WORKER_FUNCTION="obs-compaction-worker",
     ALLOW_CRASH_INJECTION="true", AWS_DEFAULT_REGION="us-east-1",
     TENANT_READER_ROLE_ARN="arn:aws:iam::123456789012:role/obs-tenant-reader",
     AWS_ACCESS_KEY_ID="testing", AWS_SECRET_ACCESS_KEY="testing",
@@ -20,6 +20,16 @@ os.environ.update(
 os.environ.pop("AWS_SESSION_TOKEN", None)
 
 H20 = 1790452800 * 10**9
+
+
+def create_usage_table():
+    boto3.client("dynamodb").create_table(
+        TableName="obs-usage", BillingMode="PAY_PER_REQUEST",
+        AttributeDefinitions=[{"AttributeName": "tenant", "AttributeType": "S"},
+                              {"AttributeName": "sk", "AttributeType": "S"}],
+        KeySchema=[{"AttributeName": "tenant", "KeyType": "HASH"},
+                   {"AttributeName": "sk", "KeyType": "RANGE"}],
+    )
 
 
 @pytest.fixture
@@ -36,6 +46,7 @@ def aws(monkeypatch):
             KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"},
                        {"AttributeName": "sk", "KeyType": "RANGE"}],
         )
+        create_usage_table()
         invoked = []
         monkeypatch.setattr(handler, "_invoke_worker", invoked.append)
         yield handler, invoked
@@ -217,3 +228,24 @@ def test_invalid_tenant_rejected(aws):
         handler.worker({**HOUR, "tenant": "../other", "batch_id": "x"}, ctx())
     with pytest.raises(ValueError):
         handler.dispatcher({"plan_only": {**HOUR, "tenant": "A#B"}}, ctx())
+
+
+def usage_items():
+    return boto3.client("dynamodb").scan(TableName="obs-usage")["Items"]
+
+
+@pytest.mark.parametrize("step", [None, "index", "commit"])
+def test_usage_counted_exactly_once(aws, tmp_path, step):
+    handler, _ = aws
+    put_raw(4, 250)
+    [b] = plan(handler)
+    if step:
+        with pytest.raises(RuntimeError, match="injected crash"):
+            handler.worker({**HOUR, "batch_id": b, "crash_after": step}, ctx(1))
+    handler.worker({**HOUR, "batch_id": b}, ctx(2))
+    [u] = usage_items()
+    assert (u["tenant"]["S"], u["sk"]["S"], u["signal"]["S"]) == ("acme", f"2026-09-26#logs#{b}", "logs")
+    assert (u["records"]["N"], u["files"]["N"], u["inputs"]["N"]) == ("1000", "1", "4")
+    _, parquet, _, index, _ = state(tmp_path)
+    assert int(u["stored_bytes"]["N"]) == int(index[0]["size_bytes"]["N"]) > 0
+    assert int(u["raw_bytes"]["N"]) > 0

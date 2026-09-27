@@ -204,3 +204,42 @@ alarm (`obs-compaction-stuck`, `-traces`, `-metrics`).
 infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
 infra/phaseT4-test.sh
 ```
+
+## Phase T5: tenant operations
+
+`obs-tenant-admin` (a Lambda, `services/tenants/admin.py`) is the control plane; `infra/tenant.sh`
+wraps it:
+
+```bash
+infra/tenant.sh create acme            # streams + first API key (printed once)
+infra/tenant.sh rotate acme 24         # new key; old keys keep working for 24 h, then are refused
+infra/tenant.sh revoke acme [key-id]   # refuse one key, or all
+infra/tenant.sh usage acme 2026-09-01 2026-09-30
+infra/tenant.sh status acme
+infra/tenant.sh delete acme            # everything the tenant has, see below
+infra/tenant.sh list
+```
+
+- **Usage:** each compacted chunk writes one record to `obs-usage` (records, raw bytes received,
+  Parquet bytes stored), before its commit and under a key fixed by the chunk, so a re-run
+  never counts twice. Usage appears once an hour is compacted (about an hour behind).
+  Bytes scanned by queries will be metered by the query engine (Phase 4).
+- **Rotation:** the authorizer accepts a rotated key until its `expires_at`; the sweep
+  (every 15 min) then disables it in API Gateway too.
+- **Deletion:** keys are refused at once (within API Gateway's 1-minute cache), streams deleted,
+  then a purge pass deletes all of the tenant's objects (`_incoming/`, `data/`, error files)
+  and index entries. Passes repeat 20 minutes apart (longer than a compaction worker's lease)
+  until one finds nothing, so data a worker was still writing is caught; then the tenant is
+  `deleted` and its id can be reused. Usage records are kept (billing).
+
+Deploy (the boundary changes, so **Phase 0 needs admin credentials**; attach
+`infra/iam/deployer-phaseT5.json` to `obs-deployer` first):
+
+```bash
+AWS_PROFILE=<admin> aws cloudformation deploy --stack-name obs-phase0 \
+  --template-file infra/phase0-foundation.yaml --capabilities CAPABILITY_NAMED_IAM
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
+infra/deploy-phaseT2.sh
+infra/deploy-phaseT5.sh
+infra/phaseT5-test.sh      # ~30-45 min: waits for a deletion to finish (QUICK=1 skips that wait)
+```

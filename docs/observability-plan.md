@@ -165,6 +165,9 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - Same fast lane, handover, chunking and crash safety as logs: one code path, parameterised by signal.
   - Not yet: metric exemplars (they would link metrics to traces); spans are placed by start time, so a lookup finds a long span by when it started.
 - **T5. Tenant operations.** Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
+  - One control-plane Lambda, `obs-tenant-admin`: create, rotate (old keys work for a grace period), revoke, status, usage, list, delete. Serverless; a 15-minute sweep expires rotated keys and advances deletions.
+  - Metering: each compacted chunk writes one usage record (records, raw bytes, stored bytes) before its commit, keyed by the chunk, so re-runs never double count. Bytes scanned come with the query engine (Phase 4).
+  - Deletion: keys refused, streams deleted, then purge passes 20 minutes apart (longer than a worker lease) until one finds nothing, so in-flight compaction can't leave data behind. Usage records are kept.
 - **T6. Scale, fault and soak tests** against the targets above.
   - Ramp load; inject faults under load (kill collector tasks, force S3 and DynamoDB throttling, lose an AZ); run for several days at steady load.
   - Freshness under load: a new stream's Firehose delivery sometimes takes ~60 s (seen once in T4); measure the distribution across many streams.

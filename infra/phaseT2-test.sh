@@ -30,7 +30,7 @@ p1() { aws cloudformation describe-stacks --stack-name obs-phase1 \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
 t2() { aws cloudformation describe-stacks --stack-name obs-phaseT2 \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
-cleanup() { for t in "$A" "$B" "$TINY"; do "$HERE/tenant.sh" revoke "$t" >/dev/null 2>&1; done; }
+cleanup() { for t in "$A" "$B" "$TINY"; do "$HERE/tenant.sh" delete "$t" >/dev/null 2>&1; done; }
 trap cleanup EXIT
 
 ENDPOINT="$(t2 IngestEndpoint)"; HOST="${ENDPOINT#https://}"; HOST="${HOST%%/*}"; STAGE="/${ENDPOINT##*/}"

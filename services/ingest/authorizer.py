@@ -7,6 +7,9 @@ requestContext.authorizer (which only the authorizer can set), and the key is
 returned as usageIdentifierKey so API Gateway applies the tenant's usage plan
 (rate limits and quotas).
 
+A key is accepted while its status is "active", or "expiring" (replaced by a
+rotation) until its expires_at.
+
 API Gateway caches the answer per key for 60 s, so a revoked key is refused
 within that; disabling the key in API Gateway (infra/tenant.sh revoke does
 both) usually refuses it sooner. New keys take about a minute to reach every
@@ -17,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 import boto3
 
@@ -30,6 +34,14 @@ def key_hash(key):
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def _live(item):
+    status = item.get("status", {}).get("S")
+    if status == "active":
+        return True
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return status == "expiring" and item.get("expires_at", {}).get("S", "") > now
+
+
 def handler(event, context):
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     key = (headers.get("x-api-key") or "").strip()
@@ -37,7 +49,7 @@ def handler(event, context):
         raise Exception("Unauthorized")  # API Gateway turns exactly this into a 401
 
     item = ddb.get_item(TableName=TABLE, Key={"pk": {"S": f"key#{key_hash(key)}"}}).get("Item")
-    if not item or item.get("status", {}).get("S") != "active":
+    if not item or not _live(item):
         print(json.dumps({"denied": "unknown or inactive key"}))
         raise Exception("Unauthorized")
     tenant = item["tenant"]["S"]

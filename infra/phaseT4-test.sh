@@ -21,7 +21,7 @@ FAILED=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; FAILED=1; }
 info() { echo "INFO  $*"; }
-trap '"$HERE/tenant.sh" revoke "$T" >/dev/null 2>&1' EXIT
+trap '"$HERE/tenant.sh" delete "$T" >/dev/null 2>&1' EXIT
 
 PAYLOAD_FMT=()
 [[ "$(aws --version 2>&1)" == aws-cli/1.* ]] || PAYLOAD_FMT=(--cli-binary-format raw-in-base64-out)

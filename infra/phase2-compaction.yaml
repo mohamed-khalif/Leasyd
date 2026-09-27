@@ -62,6 +62,26 @@ Resources:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "2" }
 
+  # One item per compacted chunk: records and bytes, per tenant, day and
+  # signal (T5 metering). Billing records: kept when a tenant is deleted.
+  UsageTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-usage
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: tenant, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: tenant, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T5" }
+
   # ---------- Lambdas ----------
 
   WorkerLogGroup:
@@ -95,6 +115,7 @@ Resources:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
           INDEX_TABLE: !Ref IndexTable
           WORKER_FUNCTION: obs-compaction-worker
+          USAGE_TABLE: !Ref UsageTable
           ALLOW_CRASH_INJECTION: !Ref AllowCrashInjection
           BLOOM_ATTRIBUTES: !Ref BloomAttributes
       Tags:
@@ -453,3 +474,5 @@ Outputs:
     Value: !Ref DispatcherFunction
   IndexTable:
     Value: !Ref IndexTable
+  UsageTable:
+    Value: !Ref UsageTable

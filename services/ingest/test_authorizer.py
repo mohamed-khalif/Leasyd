@@ -21,10 +21,15 @@ def auth():
         ddb.create_table(TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
                          AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
                          KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
-        for key, tenant, status in [("good-key", "acme", "active"), ("old-key", "acme", "revoked"),
-                                    ("bad-tenant-key", "Acme#x", "active")]:
-            ddb.put_item(TableName="obs-tenants", Item={
-                "pk": {"S": f"key#{authorizer.key_hash(key)}"}, "tenant": {"S": tenant}, "status": {"S": status}})
+        for key, tenant, status, expires in [
+                ("good-key", "acme", "active", None), ("old-key", "acme", "revoked", None),
+                ("bad-tenant-key", "Acme#x", "active", None),
+                ("rotated-key", "acme", "expiring", "2999-01-01T00:00:00Z"),
+                ("expired-key", "acme", "expiring", "2020-01-01T00:00:00Z")]:
+            item = {"pk": {"S": f"key#{authorizer.key_hash(key)}"}, "tenant": {"S": tenant}, "status": {"S": status}}
+            if expires:
+                item["expires_at"] = {"S": expires}
+            ddb.put_item(TableName="obs-tenants", Item=item)
         yield authorizer
 
 
@@ -41,7 +46,7 @@ def test_valid_key_maps_to_tenant(auth):
     assert stmt["Resource"] == "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/*"
 
 
-@pytest.mark.parametrize("headers", [{}, {"x-api-key": ""}, {"x-api-key": "nope"}, {"x-api-key": "old-key"},
+@pytest.mark.parametrize("headers", [{}, {"x-api-key": ""}, {"x-api-key": "nope"}, {"x-api-key": "old-key"}, {"x-api-key": "expired-key"},
                                      {"x-api-key": "bad-tenant-key"}, {"x-api-key": "x" * 300},
                                      {"authorization": "good-key"}])
 def test_rejected(auth, headers):
@@ -52,3 +57,7 @@ def test_rejected(auth, headers):
 def test_keys_are_stored_hashed(auth):
     items = boto3.client("dynamodb").scan(TableName="obs-tenants")["Items"]
     assert not any("good-key" in str(i) for i in items)
+
+
+def test_rotated_key_works_until_it_expires(auth):
+    assert call(auth, {"x-api-key": "rotated-key"})["context"] == {"tenant": "acme"}

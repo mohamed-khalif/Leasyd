@@ -20,7 +20,8 @@ recent_indexer: on each new raw file (S3 event via EventBridge), indexes it
 Worker steps, in this order, so any crash can be re-run safely:
   0. take a lease on the plan, so only one worker runs per chunk
   1. write Parquet   part-<batch_id>-NNN.parquet  (same inputs -> same keys)
-  2. write index     sk = <min_ts>#<batch_id>-NNN (same inputs -> same keys)
+  2. write index     sk = <min_ts>#<batch_id>-NNN (same inputs -> same keys),
+                     and the chunk's usage record (key: tenant, day, signal, batch_id)
   3. commit          mark the plan committed
   4. retire the inputs' raw index entries
   5. delete inputs
@@ -53,6 +54,7 @@ import layout
 
 BUCKET = os.environ["BUCKET"]
 TABLE = os.environ["INDEX_TABLE"]
+USAGE_TABLE = os.environ.get("USAGE_TABLE", "")  # per-tenant metering (T5)
 WORKER = os.environ.get("WORKER_FUNCTION", "")
 SIGNALS = [s for s in os.environ.get("COMPACT_SIGNALS", "logs").split(",") if s]
 GRACE = timedelta(minutes=int(os.environ.get("GRACE_MINUTES", "10")))
@@ -261,6 +263,18 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
                     UpdateExpression="ADD services :s",
                     ExpressionAttributeValues={":s": {"SS": sorted({w["service"] for w in written})}},
                 )
+            if USAGE_TABLE:
+                # Written before the commit, under a key fixed by the chunk: a
+                # re-run overwrites it, so each chunk is counted exactly once.
+                ddb.put_item(TableName=USAGE_TABLE, Item={
+                    "tenant": {"S": tenant}, "sk": {"S": f"{dt}#{signal}#{batch_id}"},
+                    "dt": {"S": dt}, "hour": {"S": hour}, "signal": {"S": signal},
+                    "records": {"N": str(sum(w["rows"] for w in written))},
+                    "raw_bytes": {"N": str(int(plan.get("input_bytes", {}).get("N", "0")))},
+                    "stored_bytes": {"N": str(sum(w["size_bytes"] for w in written))},
+                    "files": {"N": str(len(written))}, "inputs": {"N": str(len(keys))},
+                    "compacted_at": {"S": now},
+                })
             _maybe_crash(crash_after, "index")
         finally:
             shutil.rmtree(work, ignore_errors=True)

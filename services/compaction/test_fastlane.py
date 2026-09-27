@@ -35,6 +35,7 @@ def aws(monkeypatch):
             KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"},
                        {"AttributeName": "sk", "KeyType": "RANGE"}],
         )
+        test_handler.create_usage_table()
         monkeypatch.setattr(handler, "_invoke_worker", lambda p: None)
         yield handler, lookup
 

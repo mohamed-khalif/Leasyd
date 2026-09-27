@@ -26,6 +26,7 @@ Resources:
 
   # pk "key#<sha256 of API key>" -> tenant, status. API keys themselves are
   # never stored here (API Gateway holds them for usage plans).
+  # pk "tenant#<T>" -> the tenant's status and plan (T5, obs-tenant-admin).
   TenantsTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -35,8 +36,16 @@ Resources:
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: tenant, AttributeType: S }
       KeySchema:
         - { AttributeName: pk, KeyType: HASH }
+      # A tenant's keys (and its tenant record), for rotation, revocation and deletion (T5).
+      GlobalSecondaryIndexes:
+        - IndexName: by-tenant
+          KeySchema:
+            - { AttributeName: tenant, KeyType: HASH }
+            - { AttributeName: pk, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
       PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
       Tags:
         - { Key: project, Value: obs }
