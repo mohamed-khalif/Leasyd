@@ -77,77 +77,11 @@ def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memor
     min_ts / max_ts (ISO-8601, UTC, microseconds), size_bytes, and a bloom
     filter over the file's trace_id and bloom_attributes values.
     """
-    con = duckdb.connect()
+    con = _connect(out_dir, memory_limit)
     try:
-        tmp = os.path.join(out_dir, ".duckdb_tmp")
-        con.execute(f"SET memory_limit='{memory_limit}'")
-        con.execute(f"SET temp_directory='{tmp}'")
-        con.execute("SET TimeZone='UTC'")
-
-        fallback_us = _hour_start_us(con, arrival_dt, arrival_hour)
-        con.execute(
-            f"""
-            CREATE TEMP TABLE rows AS
-            WITH rl AS (
-                SELECT unnest(resourceLogs) AS rl
-                FROM read_json(?, columns={{'resourceLogs': '{LOGS_JSON_TYPE}'}},
-                               format='newline_delimited', compression='gzip',
-                               maximum_object_size={MAX_JSON_OBJECT_BYTES})
-            ),
-            sl AS (
-                SELECT rl.resource.attributes AS res_attrs, unnest(rl.scopeLogs) AS sl FROM rl
-            ),
-            lr AS (
-                SELECT res_attrs, sl.scope.name AS scope_name, unnest(sl.logRecords) AS lr FROM sl
-            ),
-            flat AS (
-                SELECT
-                    coalesce(nullif(TRY_CAST(lr.timeUnixNano AS BIGINT), 0),
-                             nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0),
-                             {fallback_us} * 1000) AS ts_unix_nano,
-                    nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0) AS observed_unix_nano,
-                    -- obs.* are the collector's own routing labels (tenant, S3 prefix);
-                    -- the tenant is already in the path, so they aren't stored.
-                    {_ATTR_MAP.format(a="list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))")} AS resource_attributes,
-                    scope_name,
-                    lr.severityNumber AS severity_number,
-                    lr.severityText AS severity_text,
-                    {_ANYVALUE.format(v='lr.body')} AS body,
-                    nullif(lr.traceId, '') AS trace_id,
-                    nullif(lr.spanId, '') AS span_id,
-                    {_ATTR_MAP.format(a='lr.attributes')} AS attributes
-                FROM lr
-            )
-            SELECT
-                make_timestamp(ts_unix_nano // 1000) AS ts,
-                ts_unix_nano,
-                make_timestamp(observed_unix_nano // 1000) AS observed_ts,
-                coalesce(resource_attributes['service.name'], 'unknown') AS service,
-                severity_number, severity_text, body, trace_id, span_id, scope_name,
-                attributes, resource_attributes
-            FROM flat
-            """,
-            [input_paths],
-        )
-
-        groups = con.execute(
-            """
-            SELECT service, strftime(ts, '%Y-%m-%d') AS dt, strftime(ts, '%H') AS hour
-            FROM rows GROUP BY ALL ORDER BY ALL
-            """
-        ).fetchall()
-
         written = []
-        for service, dt, hour in groups:
-            con.execute(
-                """
-                CREATE OR REPLACE TEMP TABLE grp AS
-                SELECT *, row_number() OVER (ORDER BY ts_unix_nano) - 1 AS rn FROM rows
-                WHERE service = ? AND strftime(ts, '%Y-%m-%d') = ? AND strftime(ts, '%H') = ?
-                """,
-                [service, dt, hour],
-            )
-            n_rows = con.execute("SELECT count(*) FROM grp").fetchone()[0]
+        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour):
+            n_rows = _select_group(con, service, dt, hour)
             for part in range(-(-n_rows // max_rows_per_file)):
                 rel = (f"dt={dt}/hour={hour}/service={safe_service(service)}/"
                        f"part-{batch_id}-{part:03d}.parquet")
@@ -175,6 +109,106 @@ def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memor
         return written
     finally:
         con.close()
+
+
+def summarize_logs(input_paths, work_dir, arrival_dt, arrival_hour, memory_limit="1GB",
+                   bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES, bloom_fpp=bloom.DEFAULT_FPP):
+    """What compaction would index for these raw files, without writing any:
+    one dict per (service, event hour) with rows, min_ts / max_ts and a bloom
+    filter. Used to index raw files as they arrive (the fast lane), with the
+    same parsing rules as compaction so both see the same rows."""
+    con = _connect(work_dir, memory_limit)
+    try:
+        out = []
+        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour):
+            n_rows = _select_group(con, service, dt, hour)
+            lo, hi = con.execute(
+                "SELECT strftime(min(ts), '%Y-%m-%dT%H:%M:%S.%fZ'), "
+                "strftime(max(ts), '%Y-%m-%dT%H:%M:%S.%fZ') FROM grp"
+            ).fetchone()
+            out.append({"service": service, "dt": dt, "hour": hour, "rows": n_rows, "min_ts": lo, "max_ts": hi,
+                        "bloom": _bloom_for(con, 0, n_rows, bloom_attributes, bloom_fpp)})
+        return out
+    finally:
+        con.close()
+
+
+def _connect(work_dir, memory_limit):
+    con = duckdb.connect()
+    con.execute(f"SET memory_limit='{memory_limit}'")
+    con.execute(f"SET temp_directory='{os.path.join(work_dir, '.duckdb_tmp')}'")
+    con.execute("SET TimeZone='UTC'")
+    return con
+
+
+def load_rows(con, input_paths, arrival_dt, arrival_hour):
+    """Parse raw OTLP-JSON log files into the temp table `rows` (one row per
+    log record, the Parquet schema) and return its (service, dt, hour)
+    groups in order."""
+    fallback_us = _hour_start_us(con, arrival_dt, arrival_hour)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE rows AS
+        WITH rl AS (
+            SELECT unnest(resourceLogs) AS rl
+            FROM read_json(?, columns={{'resourceLogs': '{LOGS_JSON_TYPE}'}},
+                           format='newline_delimited', compression='gzip',
+                           maximum_object_size={MAX_JSON_OBJECT_BYTES})
+        ),
+        sl AS (
+            SELECT rl.resource.attributes AS res_attrs, unnest(rl.scopeLogs) AS sl FROM rl
+        ),
+        lr AS (
+            SELECT res_attrs, sl.scope.name AS scope_name, unnest(sl.logRecords) AS lr FROM sl
+        ),
+        flat AS (
+            SELECT
+                coalesce(nullif(TRY_CAST(lr.timeUnixNano AS BIGINT), 0),
+                         nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0),
+                         {fallback_us} * 1000) AS ts_unix_nano,
+                nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0) AS observed_unix_nano,
+                -- obs.* are the platform's own routing labels; the tenant is
+                -- already in the path, so they aren't stored.
+                {_ATTR_MAP.format(a="list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))")} AS resource_attributes,
+                scope_name,
+                lr.severityNumber AS severity_number,
+                lr.severityText AS severity_text,
+                {_ANYVALUE.format(v='lr.body')} AS body,
+                nullif(lr.traceId, '') AS trace_id,
+                nullif(lr.spanId, '') AS span_id,
+                {_ATTR_MAP.format(a='lr.attributes')} AS attributes
+            FROM lr
+        )
+        SELECT
+            make_timestamp(ts_unix_nano // 1000) AS ts,
+            ts_unix_nano,
+            make_timestamp(observed_unix_nano // 1000) AS observed_ts,
+            coalesce(resource_attributes['service.name'], 'unknown') AS service,
+            severity_number, severity_text, body, trace_id, span_id, scope_name,
+            attributes, resource_attributes
+        FROM flat
+        """,
+        [input_paths],
+    )
+    return con.execute(
+        """
+        SELECT service, strftime(ts, '%Y-%m-%d') AS dt, strftime(ts, '%H') AS hour
+        FROM rows GROUP BY ALL ORDER BY ALL
+        """
+    ).fetchall()
+
+
+def _select_group(con, service, dt, hour):
+    """Temp table `grp`: one (service, event hour) group, numbered in time order."""
+    con.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE grp AS
+        SELECT *, row_number() OVER (ORDER BY ts_unix_nano) - 1 AS rn FROM rows
+        WHERE service = ? AND strftime(ts, '%Y-%m-%d') = ? AND strftime(ts, '%H') = ?
+        """,
+        [service, dt, hour],
+    )
+    return con.execute("SELECT count(*) FROM grp").fetchone()[0]
 
 
 def _bloom_for(con, lo_rn, hi_rn, attributes, fpp):

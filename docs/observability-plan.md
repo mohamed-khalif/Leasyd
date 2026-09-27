@@ -157,9 +157,9 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - No servers: nothing runs or costs while idle. (A first version with an OpenTelemetry Collector fleet behind a load balancer was built and tested locally, then replaced before deployment: it cost ~$75/month idle, and every job it did has a serverless equivalent.)
   - One Firehose stream per tenant per signal rather than one shared stream with dynamic partitioning: no partitioning fees ($0.020/GB, JQ hours, per-object charges), no shared 500-active-partition limit, per-tenant throughput limits, and a 30 s flush. Firehose bills each record as at least 5 KB, so tiny requests cost more per byte; T6 measures it.
 - **T3. Fast lane for recent data (freshness).**
-  - The collector flushes every few seconds. An S3 event on each new raw file triggers a small Lambda that indexes it as a *recent* file (tenant, service, time range).
-  - Lookups return recent raw files alongside compacted Parquet, so the query engine reads both.
-  - When compaction commits a chunk, the chunk's recent-file entries are retired in the same step, so a search never counts a record twice or misses it during the handover.
+  - An S3 event (via EventBridge) on each new raw file triggers `obs-recent-indexer`, which indexes it as `kind=raw` entries: one per (service, event hour), with time range, row count and bloom filter. It uses compaction's own parsing code, so both see the same rows.
+  - Lookups return raw files alongside compacted Parquet, marked by `kind`, so the query engine (Phase 4) reads both.
+  - Handover: each raw file belongs to its arrival hour's compaction plan. While the plan is `planned`, raw entries are visible and the new Parquet entries hidden; one write marks it `committed`, which flips both; cleanup then deletes the raw entries and files. A search never counts a record twice or misses it, whatever step a crash interrupts.
 - **T4. Traces and metrics compaction.** Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
 - **T5. Tenant operations.** Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
 - **T6. Scale, fault and soak tests** against the targets above.

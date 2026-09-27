@@ -1,4 +1,4 @@
-"""Index lookup: which Parquet files could hold the rows a query asks for.
+"""Index lookup: which files could hold the rows a query asks for.
 
     {"tenant": "acme",                      # required
      "signal": "logs",                      # default logs
@@ -7,8 +7,17 @@
      "end":   "2026-09-26T11:15:00Z",       # inclusive
      "match": {"trace_id": "4bf9..."}}      # optional; ANDed, bloom-checked
 
-Returns the files with their time range, row count and size, plus how many
-candidates each stage kept, so callers (and tests) can see the pruning.
+Returns the files with their kind ("parquet", compacted; or "raw", the fast
+lane: gzipped OTLP JSON not yet compacted), time range, row count and size,
+plus how many candidates each stage kept, so callers can see the pruning.
+
+Fast lane handover: each raw file belongs to a compaction plan for its
+arrival hour, and that plan's Parquet output replaces it. The plan's status
+decides which copy is visible, so a query never counts a record twice or
+misses it:
+  plan absent or "planned" (being compacted)  -> raw visible, Parquet hidden
+  plan "committed"                            -> Parquet visible, raw hidden
+  plan gone after cleanup                     -> only Parquet remains
 
 Every read goes through obs-tenant-reader, assumed with the tenant as a
 session tag. IAM then refuses any index key or object outside that tenant,
@@ -35,6 +44,9 @@ TABLE = os.environ["INDEX_TABLE"]
 BUCKET = os.environ["BUCKET"]
 TENANT_READER_ROLE = os.environ["TENANT_READER_ROLE_ARN"]
 MAX_FILE_SPAN = timedelta(hours=1)
+# Parquet entries older than this are from long-finished plans; skip checking
+# their plan (a plan stuck longer than this also trips the stuck alarm).
+PLAN_CHECK_WINDOW = timedelta(hours=6)
 SESSION_SECONDS = 3600
 REFRESH_BEFORE_EXPIRY = 300
 
@@ -58,23 +70,30 @@ def lookup(tenant, start, end, signal="logs", services=None, match=None):
 
     lo = _iso(start_dt - MAX_FILE_SPAN)
     hi = _iso(end_dt) + "#￿"  # every sort key with min_ts <= end
-    stats = {"services": len(services), "in_time_range": 0, "after_bloom": 0, "read_units": 0.0}
-    files = []
+    stats = {"services": len(services), "in_time_range": 0, "after_bloom": 0, "read_units": 0.0,
+             "hidden_by_handover": 0}
+    candidates = []
     for service in services:
         for item in _query(ddb, layout.index_pk(tenant, signal, service), lo, hi, _iso(start_dt), stats):
             stats["in_time_range"] += 1
             if terms and not _bloom_says_maybe(s3, item, terms):
                 continue
             stats["after_bloom"] += 1
-            files.append({
-                "service": service,
-                "file_path": item["file_path"]["S"],
-                "min_ts": item["min_ts"]["S"],
-                "max_ts": item["max_ts"]["S"],
-                "row_count": int(item["row_count"]["N"]),
-                "size_bytes": int(item["size_bytes"]["N"]),
-                "storage_class": item.get("storage_class", {}).get("S", "STANDARD"),
-            })
+            candidates.append((service, item))
+
+    visible = _visible(ddb, candidates, stats)
+    files = []
+    for service, item in visible:
+        files.append({
+            "service": service,
+            "kind": item.get("kind", {}).get("S", "parquet"),
+            "file_path": item["file_path"]["S"],
+            "min_ts": item["min_ts"]["S"],
+            "max_ts": item["max_ts"]["S"],
+            "row_count": int(item["row_count"]["N"]),
+            "size_bytes": int(item["size_bytes"]["N"]),
+            "storage_class": item.get("storage_class", {}).get("S", "STANDARD"),
+        })
     files.sort(key=lambda f: (f["min_ts"], f["file_path"]))
     stats["ms"] = round((time.perf_counter() - t0) * 1000, 1)
     result = {"files": files, "stats": stats}
@@ -82,6 +101,49 @@ def lookup(tenant, start, end, signal="logs", services=None, match=None):
                                  "match": sorted(match or {})},
                       "stats": stats}))
     return result
+
+
+def _visible(ddb, candidates, stats):
+    """Apply the fast-lane handover rule (see module docstring)."""
+    recent = _iso(datetime.now(timezone.utc) - PLAN_CHECK_WINDOW)
+    need = set()
+    for _, item in candidates:
+        kind = item.get("kind", {}).get("S", "parquet")
+        if "plan_pk" in item and (kind == "raw" or item.get("compacted_at", {}).get("S", "") >= recent):
+            need.add(item["plan_pk"]["S"])
+    status = {}           # (plan_pk, batch_id) -> "planned" | "committed"
+    committed_inputs = {}  # plan_pk -> raw keys in committed plans
+    for pk in need:
+        for plan in _plans(ddb, pk, stats):
+            status[(pk, plan["sk"]["S"])] = plan["status"]["S"]
+            if plan["status"]["S"] == "committed":
+                committed_inputs.setdefault(pk, set()).update(v["S"] for v in plan["inputs"]["L"])
+
+    out = []
+    for service, item in candidates:
+        kind = item.get("kind", {}).get("S", "parquet")
+        pk = item.get("plan_pk", {}).get("S")
+        if kind == "parquet" and status.get((pk, item.get("batch_id", {}).get("S"))) == "planned":
+            stats["hidden_by_handover"] += 1   # its plan isn't committed yet: the raw copy is visible
+            continue
+        if kind == "raw" and item["raw_key"]["S"] in committed_inputs.get(pk, ()):
+            stats["hidden_by_handover"] += 1   # already replaced by committed Parquet
+            continue
+        out.append((service, item))
+    return out
+
+
+def _plans(ddb, pk, stats):
+    kwargs = dict(TableName=TABLE, KeyConditionExpression="pk = :pk", ConsistentRead=True,
+                  ProjectionExpression="sk, #s, inputs", ExpressionAttributeNames={"#s": "status"},
+                  ExpressionAttributeValues={":pk": {"S": pk}}, ReturnConsumedCapacity="TOTAL")
+    while True:
+        page = ddb.query(**kwargs)
+        stats["read_units"] += page.get("ConsumedCapacity", {}).get("CapacityUnits", 0)
+        yield from page["Items"]
+        if "LastEvaluatedKey" not in page:
+            return
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
 def _clients_for(tenant):

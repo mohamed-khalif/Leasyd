@@ -79,6 +79,9 @@ for t in acme globex; do  # index entries for the reader checks
     --item "{\"pk\":{\"S\":\"${t}#logs#phase0-test\"},\"sk\":{\"S\":\"x\"}}"
 done
 
+aws s3api put-object --bucket "$BUCKET" --key "$IN/r.json" --body "$TMP/small.txt" >/dev/null
+aws s3api put-object --bucket "$BUCKET" --key "${IN/tenant=acme/tenant=globex}/r.json" --body "$TMP/small.txt" >/dev/null
+
 # The query role itself reaches no tenant data: it must go through obs-tenant-reader.
 expect deny  "query reads data/ directly"         "$QUERY" aws s3api get-object --bucket "$BUCKET" --key "$A/a.parquet" "$TMP/out"
 expect deny  "query reads the index directly"     "$QUERY" aws dynamodb query --table-name obs-index \
@@ -88,6 +91,8 @@ expect deny  "query writes _incoming/"            "$QUERY" aws s3api put-object 
 # obs-tenant-reader, tagged tenant=acme: acme's data and index only.
 export TAG=acme
 expect allow "reader(acme) reads acme data"       "$READER" aws s3api get-object --bucket "$BUCKET" --key "$A/a.parquet" "$TMP/out"
+expect allow "reader(acme) reads acme raw files"  "$READER" aws s3api get-object --bucket "$BUCKET" --key "$IN/r.json" "$TMP/out"
+expect deny  "reader(acme) reads globex raw files" "$READER" aws s3api get-object --bucket "$BUCKET" --key "${IN/tenant=acme/tenant=globex}/r.json" "$TMP/out"
 expect deny  "reader(acme) reads globex data"     "$READER" aws s3api get-object --bucket "$BUCKET" --key "$G/a.parquet" "$TMP/out"
 expect allow "reader(acme) lists acme data"       "$READER" aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "data/tenant=acme/" --max-items 1
 expect deny  "reader(acme) lists globex data"     "$READER" aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "data/tenant=globex/" --max-items 1
@@ -96,8 +101,12 @@ expect allow "reader(acme) queries acme index"    "$READER" aws dynamodb query -
   --key-condition-expression 'pk = :p' --expression-attribute-values '{":p":{"S":"acme#logs#phase0-test"}}'
 expect deny  "reader(acme) queries globex index"  "$READER" aws dynamodb query --table-name obs-index \
   --key-condition-expression 'pk = :p' --expression-attribute-values '{":p":{"S":"globex#logs#phase0-test"}}'
-expect deny  "reader(acme) reads internal plans"  "$READER" aws dynamodb query --table-name obs-index \
-  --key-condition-expression 'pk = :p' --expression-attribute-values '{":p":{"S":"_plan#acme#logs#2026-01-01#00"}}'
+expect allow "reader(acme) reads acme's plans"     "$READER" aws dynamodb query --table-name obs-index \
+  --key-condition-expression 'pk = :p' --expression-attribute-values '{":p":{"S":"acme#_plan#logs#2026-01-01#00"}}'
+expect deny  "reader(acme) reads globex's plans"   "$READER" aws dynamodb query --table-name obs-index \
+  --key-condition-expression 'pk = :p' --expression-attribute-values '{":p":{"S":"globex#_plan#logs#2026-01-01#00"}}'
+expect deny  "reader(acme) reads leases"           "$READER" aws dynamodb query --table-name obs-index \
+  --key-condition-expression 'pk = :p' --expression-attribute-values '{":p":{"S":"_lease#dispatcher#logs"}}'
 expect deny  "reader(acme) writes acme data"      "$READER" aws s3api put-object --bucket "$BUCKET" --key "$A/b.parquet" --body "$TMP/small.txt"
 unset TAG
 expect deny  "reader without a tenant tag"        "$READER" aws s3api get-object --bucket "$BUCKET" --key "$A/a.parquet" "$TMP/out"
@@ -105,6 +114,8 @@ expect deny  "reader without a tenant tag"        "$READER" aws s3api get-object
 # Clean up: objects with the caller's own credentials, index entries with the compaction role.
 aws s3api delete-object --bucket "$BUCKET" --key "$A/a.parquet" >/dev/null 2>&1
 aws s3api delete-object --bucket "$BUCKET" --key "$G/a.parquet" >/dev/null 2>&1
+aws s3api delete-object --bucket "$BUCKET" --key "$IN/r.json" >/dev/null 2>&1
+aws s3api delete-object --bucket "$BUCKET" --key "${IN/tenant=acme/tenant=globex}/r.json" >/dev/null 2>&1
 for t in acme globex; do
   as_role "$COMPACTION" aws dynamodb delete-item --table-name obs-index \
     --key "{\"pk\":{\"S\":\"${t}#logs#phase0-test\"},\"sk\":{\"S\":\"x\"}}" >/dev/null 2>&1

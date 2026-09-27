@@ -65,8 +65,9 @@ def state(tmp_path):
         s3.download_file("obs-data-test", k, str(p))
         rows += duckdb.sql(f"SELECT count(*) FROM read_parquet('{p}')").fetchone()[0]
     items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
-    index = [i for i in items if not i["pk"]["S"].startswith("_") and "#_services#" not in i["pk"]["S"]]
-    internal = [i for i in items if i["pk"]["S"].startswith(("_plan#", "_lease#"))]
+    index = [i for i in items if not i["pk"]["S"].startswith("_") and "#_" not in i["pk"]["S"]]
+    internal = [i for i in items if i["pk"]["S"].startswith("_lease#") or "#_plan#" in i["pk"]["S"]
+                or "#_raw#" in i["pk"]["S"]]
     return incoming, parquet, rows, index, internal
 
 

@@ -12,17 +12,27 @@ A plan fixes a chunk's input keys up front, and its batch_id is a hash of
 them, so every retry of a chunk works on exactly the same inputs and writes
 the same output keys.
 
+recent_indexer: on each new raw file (S3 event via EventBridge), indexes it
+            as kind=raw entries, one per (service, event hour), so lookups
+            can return data within about a minute of arrival.
+
 Worker steps, in this order, so any crash can be re-run safely:
   0. take a lease on the plan, so only one worker runs per chunk
   1. write Parquet   part-<batch_id>-NNN.parquet  (same inputs -> same keys)
   2. write index     sk = <min_ts>#<batch_id>-NNN (same inputs -> same keys)
   3. commit          mark the plan committed
-  4. delete inputs
-  5. delete the plan
+  4. retire the inputs' raw index entries
+  5. delete inputs
+  6. delete the plan
 A crash before 3 redoes 1-2, overwriting the same keys. A crash after 3 skips
 straight to 4. The dispatcher re-invokes any plan still present, so a
-crashed chunk is retried on the next run. (A crash between 4 and 5 leaves
+crashed chunk is retried on the next run. (A crash between 5 and 6 leaves
 a plan whose inputs are all gone; it holds no data and is harmless.)
+
+Handover between the fast lane and Parquet is step 3, a single write.
+Lookups show a chunk's Parquet entries only once its plan is committed (or
+gone), and hide raw entries whose file is in a committed plan, so a query
+never counts a record twice or misses it (see lookup.py).
 """
 
 import hashlib
@@ -31,9 +41,11 @@ import os
 import shutil
 import tempfile
 import time
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 import boto3
+import botocore.exceptions
 
 import compact
 import layout
@@ -240,7 +252,8 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
 
             # 2. index
             now = datetime.now(timezone.utc).isoformat()
-            _batch_write([_index_item(tenant, signal, batch_id, w, now) for w in written])
+            plan_pk = layout.plan_pk(tenant, signal, dt, hour)
+            _batch_write([_index_item(tenant, signal, batch_id, w, now, plan_pk) for w in written])
             if written:  # registry of services, for lookups across all of them
                 ddb.update_item(
                     TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}},
@@ -258,7 +271,11 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
         )
         _maybe_crash(crash_after, "commit")
 
-    # 4-5. clean up
+    # 4. retire the raw (fast lane) index entries of the inputs
+    _retire_raw_entries(tenant, signal, dt, hour, keys)
+    _maybe_crash(crash_after, "retire")
+
+    # 5-6. clean up
     if crash_after == "partial_delete":
         _delete_keys(keys[: len(keys) // 2])
         _maybe_crash(crash_after, "partial_delete")
@@ -271,13 +288,123 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
     )
 
 
+# ---------------------------------------------------------------- fast lane
+
+def recent_indexer(event, context):
+    """Index a new raw file (EventBridge "Object Created") as kind=raw entries.
+
+    Writes the raw-file record (listing the entries) before the entries, so
+    compaction can always find and retire them. Idempotent: the same file
+    always produces the same keys."""
+    detail = event.get("detail") or {}
+    key = urllib.parse.unquote_plus((detail.get("object") or {}).get("key", ""))
+    parsed = layout.parse_incoming_key(key)
+    if parsed is None:
+        return _done(None, skipped=f"not a raw file: {key}")
+    tenant, signal, dt, hour = parsed
+    if signal != "logs":
+        return _done(None, skipped=f"no fast lane for {signal} yet")
+
+    work = tempfile.mkdtemp(dir="/tmp")
+    try:
+        local = os.path.join(work, "raw.json.gz")
+        try:
+            s3.download_file(BUCKET, key, local)
+        except botocore.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return _done(None, skipped=f"already compacted: {key}")
+            raise
+        size = os.path.getsize(local)
+        mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048"))
+        groups = compact.summarize_logs([local], work, dt, hour, memory_limit=f"{int(mem_mb * 0.6)}MB",
+                                        bloom_attributes=BLOOM_ATTRIBUTES)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    fid = hashlib.sha256(key.encode()).hexdigest()[:16]
+    plan_pk = layout.plan_pk(tenant, signal, dt, hour)
+    items = []
+    for i, g in enumerate(groups):
+        item = {
+            "pk": {"S": layout.index_pk(tenant, signal, g["service"])},
+            "sk": {"S": f"{g['min_ts']}#raw#{fid}-{i:03d}"},
+            "kind": {"S": "raw"},
+            "plan_pk": {"S": plan_pk},
+            "raw_key": {"S": key},
+            "min_ts": {"S": g["min_ts"]},
+            "max_ts": {"S": g["max_ts"]},
+            "file_path": {"S": f"s3://{BUCKET}/{key}"},
+            "row_count": {"N": str(g["rows"])},
+            "size_bytes": {"N": str(size)},  # of the whole raw file, which may hold several groups
+            "storage_class": {"S": "STANDARD"},
+            "indexed_at": {"S": datetime.now(timezone.utc).isoformat()},
+            "bloom_m": {"N": str(g["bloom"].m)},
+            "bloom_k": {"N": str(g["bloom"].k)},
+            "bloom_n": {"N": str(g["bloom"].n)},
+            "bloom_fields": {"L": [{"S": f} for f in ("trace_id", *BLOOM_ATTRIBUTES)]},
+        }
+        bits = g["bloom"].to_bytes()
+        if len(bits) > BLOOM_INLINE_MAX_BYTES:
+            bkey = f"{layout.data_prefix(tenant, signal)}_bloom/raw-{fid}-{i:03d}.bloom"
+            s3.put_object(Bucket=BUCKET, Key=bkey, Body=bits)
+            item["bloom_s3_key"] = {"S": bkey}
+        else:
+            item["bloom"] = {"B": bits}
+        items.append(item)
+
+    ddb.put_item(TableName=TABLE, Item={
+        "pk": {"S": layout.raw_files_pk(tenant, signal, dt, hour)}, "sk": {"S": key},
+        "entries": {"L": [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items]},
+    })
+    _batch_write(items)
+    if items:
+        ddb.update_item(
+            TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}},
+            UpdateExpression="ADD services :s",
+            ExpressionAttributeValues={":s": {"SS": sorted({g["service"] for g in groups})}},
+        )
+    return _done(None, tenant=tenant, key=key, entries=len(items), rows=sum(g["rows"] for g in groups))
+
+
+def _retire_raw_entries(tenant, signal, dt, hour, keys):
+    """Delete the fast-lane entries (and raw-file records) of these raw files."""
+    pk = layout.raw_files_pk(tenant, signal, dt, hour)
+    for i in range(0, len(keys), 100):
+        req = {TABLE: {"Keys": [{"pk": {"S": pk}, "sk": {"S": k}} for k in keys[i:i + 100]],
+                       "ConsistentRead": True}}
+        while req:
+            resp = ddb.batch_get_item(RequestItems=req)
+            for rec in resp.get("Responses", {}).get(TABLE, []):
+                entries = [e["M"] for e in rec.get("entries", {}).get("L", [])]
+                _batch_delete([{"pk": e["pk"], "sk": e["sk"]} for e in entries])
+                ddb.delete_item(TableName=TABLE, Key={"pk": rec["pk"], "sk": rec["sk"]})
+            req = resp.get("UnprocessedKeys") or None
+
+
+def _batch_delete(keys):
+    for i in range(0, len(keys), 25):
+        pending = [{"DeleteRequest": {"Key": k}} for k in keys[i:i + 25]]
+        for attempt in range(8):
+            resp = ddb.batch_write_item(RequestItems={TABLE: pending})
+            pending = resp.get("UnprocessedItems", {}).get(TABLE, [])
+            if not pending:
+                break
+            time.sleep(min(2 ** attempt * 0.1, 5))
+        else:
+            raise RuntimeError(f"{len(pending)} index deletes left unprocessed")
+
+
 # ------------------------------------------------------------------- helpers
 
-def _index_item(tenant, signal, batch_id, w, now):
+def _index_item(tenant, signal, batch_id, w, now, plan_pk):
     b = w["bloom"]
     item = {
         "pk": {"S": layout.index_pk(tenant, signal, w["service"])},
         "sk": {"S": f"{w['min_ts']}#{batch_id}-{w['part']:03d}"},
+        "kind": {"S": "parquet"},
+        # Lookups hide this entry while its plan is still "planned" (the
+        # raw files it replaces are still the visible copy).
+        "plan_pk": {"S": plan_pk},
         "min_ts": {"S": w["min_ts"]},
         "max_ts": {"S": w["max_ts"]},
         "file_path": {"S": f"s3://{BUCKET}/{w['key']}"},

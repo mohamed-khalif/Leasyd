@@ -155,3 +155,29 @@ infra/phaseT2-test.sh
 
 Onboard a tenant: `infra/tenant.sh create acme` (creates its streams, prints the key once).
 Revoke: `infra/tenant.sh revoke acme`.
+
+## Phase T3: fast lane (searchable within about a minute)
+
+Each new raw file (Firehose flushes every 30 s) triggers `obs-recent-indexer` through an S3
+event on EventBridge. It indexes the file as `kind=raw` entries, one per (service, event
+hour) with time range, row count and bloom filter, using the same parsing code as compaction.
+`obs-index-lookup` returns raw and Parquet files together, marked by `kind`.
+
+Handover: a chunk's compaction plan decides which copy lookups show. While the plan is
+`planned`, raw entries are visible and its new Parquet entries hidden; once it's `committed`
+(a single write), Parquet is visible and those raw entries hidden; cleanup then deletes the raw
+entries and files. So a query never counts a record twice or misses it, whatever step a crash
+interrupts (tested in `services/compaction/test_fastlane.py`).
+
+Plan records moved to `<T>#_plan#...` so a tenant's lookups can read them; the tenant reader
+can now also read that tenant's raw files. No plans may be in flight when deploying this
+(`aws dynamodb scan --table-name obs-index --filter-expression 'begins_with(pk, :p)'
+--expression-attribute-values '{":p":{"S":"_plan#"}}' --select COUNT` should be 0).
+
+```bash
+aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
+infra/deploy-phase3.sh
+infra/phaseT3-test.sh
+```

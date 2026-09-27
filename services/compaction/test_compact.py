@@ -151,3 +151,16 @@ def test_collector_routing_labels_not_stored(tmp_path):
     [w], _ = run(tmp_path, [str(path)])
     [(m,)] = read(w["path"], "SELECT resource_attributes FROM t")
     assert m == {"service.name": "api", "host.name": "h1"}
+
+
+def test_summarize_matches_what_compaction_writes(tmp_path):
+    recs = [rec(H20 + n * 10**9) for n in range(30)] + [rec(H20 + 3600 * 10**9 + 5)]
+    for n, r in enumerate(recs):
+        r["traceId"] = f"{n:032x}"
+    f = batch(tmp_path / "a.json.gz", "api", recs)
+    summary = compact.summarize_logs([f], str(tmp_path / "s"), "2026-09-26", "20")
+    written = compact.compact_logs([f], str(tmp_path / "o"), "b1", "2026-09-26", "20")
+    key = lambda d: (d["service"], d["dt"], d["hour"], d["rows"], d["min_ts"], d["max_ts"])
+    assert [key(d) for d in summary] == [key(w) for w in written]
+    assert [d["bloom"].to_bytes() for d in summary] == [w["bloom"].to_bytes() for w in written]
+    assert not os.path.exists(tmp_path / "s" / "dt=2026-09-26")  # nothing written

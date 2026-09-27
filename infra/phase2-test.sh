@@ -172,7 +172,7 @@ IDX_N=$(grep -c . <<<"$IDX"); IDX_ROWS=$(awk '{s+=$1} END {print s+0}' <<<"$IDX"
 bad_span=$(awk '{ if (substr($2,1,13) != substr($3,1,13)) n++ } END {print n+0}' <<<"$IDX")
 (( bad_span == 0 )) && pass "every file spans at most one hour" || fail "${bad_span} file(s) span more than one hour"
 leftover=$(aws dynamodb query --table-name "$TABLE" --key-condition-expression 'pk = :p' \
-  --expression-attribute-values "{\":p\":{\"S\":\"_plan#${TENANT}#logs#${DT}#${HR}\"}}" --query Count --output text)
+  --expression-attribute-values "{\":p\":{\"S\":\"${TENANT}#_plan#logs#${DT}#${HR}\"}}" --query Count --output text)
 (( leftover == 0 )) && pass "no chunk plan left behind" || fail "${leftover} plan(s) left for the hour"
 
 # 4. Same question against the compacted Parquet.

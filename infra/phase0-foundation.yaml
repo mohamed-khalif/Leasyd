@@ -61,6 +61,11 @@ Resources:
       MetricsConfigurations:
         - Id: incoming
           Prefix: _incoming/
+      # Object-created events go to EventBridge, where the fast-lane indexer
+      # (obs-phase2) picks up new raw files. Free for AWS service events.
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
       LifecycleConfiguration:
         Rules:
           # Compacted data only (data/tenant=<T>/<signal>/...). _incoming/
@@ -282,6 +287,7 @@ Resources:
                   - dynamodb:BatchWriteItem
                   - dynamodb:Query
                   - dynamodb:GetItem     # chunk plans
+                  - dynamodb:BatchGetItem  # raw-file records, when retiring fast-lane entries
                   - dynamodb:UpdateItem  # mark a plan committed
                   - dynamodb:DeleteItem  # plans and leases
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
@@ -383,7 +389,10 @@ Resources:
               - Sid: ReadTenantData
                 Effect: Allow
                 Action: s3:GetObject
-                Resource: !Sub "${DataBucket.Arn}/data/tenant=${!aws:PrincipalTag/tenant}/*"
+                Resource:
+                  - !Sub "${DataBucket.Arn}/data/tenant=${!aws:PrincipalTag/tenant}/*"
+                  # Raw files not yet compacted (the fast lane, T3).
+                  - !Sub "${DataBucket.Arn}/_incoming/tenant=${!aws:PrincipalTag/tenant}/*"
               - Sid: ListTenantData
                 Effect: Allow
                 Action: s3:ListBucket
