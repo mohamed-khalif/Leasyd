@@ -26,6 +26,7 @@ import boto3
 
 REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 KEYS_DEFAULT = os.path.expanduser("~/.obs-t6-keys.json")
+RUNS_FILE = os.path.expanduser("~/.obs-t6-runs.json")   # step -> start/end/target, for reports
 RUN = "t6"
 WORKER_BYTES_PER_S = 2_000_000   # what one loadgen invocation is asked to send at most
 WORKER_MAX_TENANTS = 20
@@ -179,10 +180,10 @@ def run(args):
               if tenant_name(r) in keys]
     start = time.time()
     end = start + args.minutes * 60
-    ddb.put_item(TableName="obs-loadtest", Item={
-        "pk": {"S": f"{RUN}#{args.step}"}, "sk": {"S": "meta"}, "gbph": {"N": str(args.gbph)},
-        "minutes": {"N": str(args.minutes)}, "tenants": {"N": str(len(keys))},
-        "workers": {"N": str(len(workers))}, "start": {"N": str(int(start))}, "end": {"N": str(int(end))}})
+    runs = _load_runs()
+    runs[args.step] = {"gbph": args.gbph, "minutes": args.minutes, "tenants": len(keys),
+                       "workers": len(workers), "start": int(start), "end": int(end)}
+    _save_runs(runs)
     window = 0
     while time.time() < end - 30:
         dur = min(WINDOW_S, end - time.time())
@@ -273,9 +274,10 @@ def firehose_totals(tenants, start, end):
 
 def report(args):
     items = _items(args.step)
-    meta = next((i for i in items if i["sk"]["S"] == "meta"), None)
-    if not meta:
-        sys.exit(f"no run {args.step}")
+    run_ = _load_runs().get(args.step)
+    if not run_:
+        sys.exit(f"no run {args.step} in {RUNS_FILE}")
+    meta = {k: {"N": str(v)} for k, v in run_.items()}
     start = datetime.fromtimestamp(_n(meta, "start"), timezone.utc)
     end = datetime.fromtimestamp(_n(meta, "end"), timezone.utc) + timedelta(minutes=2)
     minutes = (end - start).total_seconds() / 60
@@ -377,6 +379,18 @@ def _load_keys(path, missing_ok=False):
         sys.exit(f"no keys file {path}; run 'tenants create' first")
     with open(path) as f:
         return json.load(f)
+
+
+def _load_runs():
+    if not os.path.exists(RUNS_FILE):
+        return {}
+    with open(RUNS_FILE) as f:
+        return json.load(f)
+
+
+def _save_runs(runs):
+    with open(RUNS_FILE, "w") as f:
+        json.dump(runs, f, indent=1)
 
 
 def _save_keys(path, keys):

@@ -246,3 +246,10 @@ def test_compaction_reads_traces_and_metrics_from_protobuf(fh, tmp_path):
             assert got == [("cpu", "gauge", 0.25, None, None, None, None, None, None),
                            ("lat", "histogram", None, 1, None, 3, 7.5, [1, 2], [5.0]),
                            ("reqs", "sum", float(2**40), 2, True, None, None, None, None)]
+
+
+def test_gzip_header_on_an_already_decompressed_body(fh):
+    """API Gateway can decompress the body but keep Content-Encoding: gzip."""
+    ev = event(logs_pb(n=3).SerializeToString(), headers={"Content-Encoding": "gzip"})
+    assert ingest.handler(ev, None)["statusCode"] == 200
+    assert len(lines(fh)) == 1

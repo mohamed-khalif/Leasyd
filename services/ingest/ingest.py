@@ -83,7 +83,9 @@ def handler(event, context):
 def _body(event, headers):
     raw = event.get("body") or ""
     data = base64.b64decode(raw) if event.get("isBase64Encoded") else raw.encode()
-    if headers.get("content-encoding", "").lower() == "gzip":
+    # API Gateway may already have decompressed a gzip body (keeping the
+    # Content-Encoding header), so trust the gzip magic bytes, not the header.
+    if headers.get("content-encoding", "").lower() == "gzip" and data[:2] == b"\x1f\x8b":
         try:
             with gzip.GzipFile(fileobj=io.BytesIO(data)) as f:
                 data = f.read(MAX_DECOMPRESSED_BYTES + 1)
