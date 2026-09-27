@@ -172,7 +172,8 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - Tooling (T6.1): serverless load generator (realistic OTLP protobuf through the public endpoint, 100 Zipf-sized tenants), a freshness prober, and a report with cost per GB. Steps run 45 min each; estimated platform cost ~$2 (1 GB/h), ~$3 (10 GB/h), ~$7 (50 GB/h), plus compaction.
   - Ramp load; inject faults under load (kill collector tasks, force S3 and DynamoDB throttling, lose an AZ); run for several days at steady load.
   - Freshness under load: a new stream's Firehose delivery sometimes takes ~60 s (seen once in T4); measure the distribution across many streams.
-  - Known issue to fix here: bloom filters stored inside index items make wide time-range lookups read ~48 KB per file. Move them out of the items, with a coarser per-day filter checked first.
+  - Fixed (T6 fixes A/B, before load): blooms over 1 KB moved from index items to S3; parallel lookups; sharded per-day ID filters built by an hourly sealer, trusted only while no chunk was added after sealing, so an ID lookup across 30 days reads ~30 small ranges. Dispatcher lists tenants in parallel. Fast-lane bloom files no longer leak.
+  - Found in preflight: the account's Lambda concurrency limit is 10 (new-account default). Raised limit requested; a production account needs 1,000+.
   - The dispatcher lists every tenant's raw folders each run; check it stays within its timeout at 100+ tenants.
 - **Also:** configurable bloom attributes cover common request-ID names by default (`request.id`, `http.request_id`, `request_id`, `x-request-id`).
 

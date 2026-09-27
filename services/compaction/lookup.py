@@ -39,6 +39,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 
 import bloom
+import dayfilter
 import layout
 
 TABLE = os.environ["INDEX_TABLE"]
@@ -90,6 +91,10 @@ def lookup(tenant, start, end, signal="logs", services=None, match=None):
 
     candidates = in_range
     if terms:
+        # Whole days first: a sealed day filter that rules the IDs out drops
+        # every Parquet file of that day without reading their blooms.
+        candidates = _day_filter(ddb, s3, tenant, signal, candidates, terms, stats)
+        in_range = candidates
         # Blooms too big for the index item are in S3: fetch those in parallel.
         stats["bloom_fetches"] = sum(1 for _, it in in_range if "bloom_s3_key" in it and _checkable(it, terms))
         with ThreadPoolExecutor(BLOOM_THREADS) as pool:
@@ -195,6 +200,46 @@ def _query(ddb, pk, lo, hi, start_iso, stats):
         if "LastEvaluatedKey" not in page:
             return
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def _day_filter(ddb, s3, tenant, signal, candidates, terms, stats):
+    days = sorted({it["min_ts"]["S"][:10] for _, it in candidates if it.get("kind", {}).get("S", "parquet") == "parquet"})
+    stats.update(days_checked=0, days_ruled_out=0)
+    fields = {t.split("=", 1)[0] for t in terms}
+    if not days:
+        return candidates
+    resp = ddb.query(TableName=TABLE, KeyConditionExpression="pk = :p AND sk BETWEEN :a AND :b",
+                     ExpressionAttributeValues={":p": {"S": layout.day_pk(tenant, signal)},
+                                                ":a": {"S": days[0]}, ":b": {"S": days[-1]}},
+                     ReturnConsumedCapacity="TOTAL")
+    stats["read_units"] += resp.get("ConsumedCapacity", {}).get("CapacityUnits", 0)
+    # Trusted only while no chunk was added after sealing.
+    # and only if every chunk of the day indexed the fields asked about.
+    def usable(it):
+        fs = it.get("fieldsets", {}).get("SS", [])
+        return ("groups" in it and it.get("sealed", {}).get("N") == it.get("dirty", {}).get("N")
+                and len(fs) == 1 and fields <= set(fs[0].split(",")))
+    sealed = {it["sk"]["S"]: it for it in resp["Items"] if usable(it)}
+
+    def day_maybe(day):
+        item = sealed[day]
+        for t in terms:
+            d = dayfilter.digest(t)
+            g = item["groups"]["M"][str(dayfilter.group_of(d))]["M"]
+            subshards, m = int(g["s"]["N"]), int(g["m"]["N"])
+            lo, hi = dayfilter.byte_range(d, subshards, m)
+            key = layout.day_filter_key(tenant, signal, day, item["sealed"]["N"], dayfilter.group_of(d))
+            bits = s3.get_object(Bucket=BUCKET, Key=key, Range=f"bytes={lo}-{hi}")["Body"].read()
+            if not dayfilter.might_contain(bits, d, subshards, m):
+                return False
+        return True
+
+    check = [d for d in days if d in sealed]
+    with ThreadPoolExecutor(BLOOM_THREADS) as pool:
+        ruled_out = {d for d, maybe in zip(check, pool.map(day_maybe, check)) if not maybe}
+    stats["days_checked"], stats["days_ruled_out"] = len(check), len(ruled_out)
+    return [(svc, it) for svc, it in candidates
+            if not (it.get("kind", {}).get("S", "parquet") == "parquet" and it["min_ts"]["S"][:10] in ruled_out)]
 
 
 def _checkable(item, terms):

@@ -234,6 +234,54 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt RawFileCreatedRule.Arn
 
+  # ---------- Day filters: one ID filter per tenant, signal and day (T6) ----------
+
+  SealerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-day-sealer
+      RetentionInDays: 14
+
+  SealerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SealerLogGroup
+    Properties:
+      FunctionName: obs-day-sealer
+      Description: Builds each closed day's ID filter from compaction's digests
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.sealer
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
+      MemorySize: 3008
+      Timeout: 900
+      EphemeralStorage: { Size: 2048 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: !Ref IndexTable
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T6" }
+
+  SealerSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-day-sealer-schedule
+      ScheduleExpression: rate(1 hour)
+      State: !Ref ScheduleState
+      Targets:
+        - Id: sealer
+          Arn: !GetAtt SealerFunction.Arn
+
+  SealerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SealerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SealerSchedule.Arn
+
   # ---------- Stuck-compaction alarm ----------
 
   AlertTopic:

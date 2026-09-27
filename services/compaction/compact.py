@@ -16,6 +16,7 @@ import re
 import duckdb
 
 import bloom
+import dayfilter
 
 # Largest single batch file (uncompressed). The collector caps batches at
 # 40k records, ~15 MB; DuckDB allocates a buffer this size per thread.
@@ -124,7 +125,7 @@ def bloom_fields(signal, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES):
 
 def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB",
             max_rows_per_file=DEFAULT_MAX_ROWS_PER_FILE, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES,
-            bloom_fpp=bloom.DEFAULT_FPP):
+            bloom_fpp=bloom.DEFAULT_FPP, id_digests=None):
     """Compact gzipped OTLP-JSON batches of one signal into Parquet.
 
     Rows are split by service and by the hour of their own timestamp, so no
@@ -137,6 +138,10 @@ def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, me
     Returns one dict per written file: service, dt, hour, part, path, rows,
     min_ts / max_ts (ISO-8601, UTC, microseconds), size_bytes, and a bloom
     filter over the file's bloom_fields(signal) values.
+
+    If id_digests is a dict, it is filled with {event day: {group: bytes}}:
+    the dayfilter digests of every distinct ID in the chunk, for sealing
+    day filters.
     """
     fields = bloom_fields(signal, bloom_attributes)
     con = _connect(out_dir, memory_limit)
@@ -168,6 +173,8 @@ def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, me
                     "size_bytes": os.path.getsize(path),
                     "bloom": _bloom_for(con, lo_rn, lo_rn + max_rows_per_file, fields, bloom_fpp),
                 })
+        if id_digests is not None and fields:
+            _day_digests(con, fields, id_digests)
         return written
     finally:
         con.close()
@@ -454,6 +461,22 @@ def _bloom_for(con, lo_rn, hi_rn, fields, fpp):
             b.add(t)
     b.n = n
     return b
+
+
+def _day_digests(con, fields, out):
+    """Digests of the distinct IDs in `rows`, by event day and group."""
+    parts, params = [], []
+    for field in fields:
+        if field == "trace_id":
+            parts.append("SELECT ts, 'trace_id=' || lower(trim(trace_id)) AS t FROM rows WHERE trace_id IS NOT NULL")
+        else:
+            parts.append("SELECT ts, ? || '=' || lower(trim(attributes[?])) FROM rows WHERE attributes[?] IS NOT NULL")
+            params += [field, field, field]
+    cur = con.execute("SELECT DISTINCT strftime(ts, '%Y-%m-%d'), t FROM (" + " UNION ALL ".join(parts) + ")", params)
+    while rows := cur.fetchmany(100_000):
+        for dt, t in rows:
+            d = dayfilter.digest(t)
+            out.setdefault(dt, {}).setdefault(dayfilter.group_of(d), bytearray()).extend(d)
 
 
 def _hour_start_us(con, dt, hour):

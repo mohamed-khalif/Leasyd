@@ -268,3 +268,25 @@ python3 infra/t6/loadtest.py report --step s1
 python3 infra/t6/loadtest.py compaction --since-minutes 180   # after the hours close
 python3 infra/t6/loadtest.py tenants delete                   # at the end of T6
 ```
+
+### T6 fixes (no load needed)
+
+- Bloom filters over 1 KB live in S3, not in index items, so time-range lookups read small items.
+  Lookups query services and fetch blooms in parallel.
+- **Day filters** (`services/compaction/dayfilter.py`): compaction writes each chunk's ID digests;
+  `obs-day-sealer` (hourly, 2 h after a day ends) builds one sharded filter per tenant, signal and
+  day. An ID lookup reads one small range per day (tens of KB) and skips every file of a day that
+  can't hold the ID. A day filter is used only while no chunk was added to the day after sealing
+  (`dirty == sealed`), so late data is never missed; it's re-sealed on the next run. Digests are
+  deleted 3 days after the day; later late data leaves that day on per-file blooms.
+- Dispatcher lists tenants in parallel (timeout 5 min). Fast-lane bloom files are deleted with
+  their entries.
+
+Deploy: Phase 0 (role policy only; no boundary change), then Phase 2 and Phase 3.
+
+```bash
+aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
+infra/deploy-phase3.sh
+```

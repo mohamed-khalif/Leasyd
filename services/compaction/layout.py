@@ -5,6 +5,8 @@ S3
   _incoming/tenant=<T>/<signal>/dt=<D>/hour=<H>/...            raw, from Firehose
   data/tenant=<T>/<signal>/dt=<D>/hour=<H>/service=<S>/...     compacted Parquet
   data/tenant=<T>/<signal>/_bloom/...                          bloom filters too big for the index
+  data/tenant=<T>/<signal>/_bloom/day/dt=<D>/v=<N>/g=<G>.bloom  sealed day filters (dayfilter.py)
+  data/tenant=<T>/<signal>/_ids/dt=<D>/g=<G>/<batch>.bin       ID digests per chunk, for sealing
 
 obs-index partition keys
   <T>#<signal>#<service>          one item per Parquet file (kind=parquet) and
@@ -15,6 +17,8 @@ obs-index partition keys
                                   read them to decide raw vs Parquet visibility.
   <T>#_raw#<signal>#<D>#<H>       one item per raw file: the index items it produced,
                                   so compaction can retire them
+  <T>#_day#<signal>               one item per event day: whether its day filter is
+                                  sealed and current (dirty == sealed)
   _lease#...                      leases (internal)
 
 Everything a tenant may read starts with "data/tenant=<T>/",
@@ -77,3 +81,23 @@ def parse_incoming_key(key):
 
 def worker_lease_pk(tenant, signal, dt, hour, batch_id):
     return f"_lease#{tenant}#{signal}#{dt}#{hour}#{batch_id}"
+
+
+def day_pk(tenant, signal):
+    return f"{tenant}#_day#{signal}"
+
+
+def ids_prefix(tenant, signal, dt):
+    return f"{data_prefix(tenant, signal)}_ids/dt={dt}/"
+
+
+def ids_key(tenant, signal, dt, group, batch_id):
+    return f"{ids_prefix(tenant, signal, dt)}g={group:02d}/{batch_id}.bin"
+
+
+def day_filter_prefix(tenant, signal, dt):
+    return f"{data_prefix(tenant, signal)}_bloom/day/dt={dt}/"
+
+
+def day_filter_key(tenant, signal, dt, version, group):
+    return f"{day_filter_prefix(tenant, signal, dt)}v={version}/g={group:02d}.bloom"
