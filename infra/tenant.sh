@@ -69,7 +69,7 @@ case "${1:-}" in
         \"api_key_id\":{\"S\":\"${key_id}\"},\"plan\":{\"S\":\"${plan}\"},\"created_at\":{\"S\":\"$(date -u +%FT%TZ)\"}}"
     echo "tenant:   ${tenant} (${plan} plan)" >&2
     echo "endpoint: $(out IngestEndpoint)" >&2
-    echo "api key (shown once; store it securely):" >&2
+    echo "api key (shown once; store it securely). It becomes active within 1-2 minutes:" >&2
     echo "$key"
     ;;
   provision)
@@ -89,7 +89,7 @@ case "${1:-}" in
       aws dynamodb update-item --table-name "$TABLE" --key "{\"pk\":{\"S\":\"${pk}\"}}" \
         --update-expression 'SET #s = :r, revoked_at = :now' --expression-attribute-names '{"#s":"status"}' \
         --expression-attribute-values "{\":r\":{\"S\":\"revoked\"},\":now\":{\"S\":\"$(date -u +%FT%TZ)\"}}"
-      echo "revoked key ${key_id} of ${tenant}"
+      echo "revoked key ${key_id} of ${tenant} (refused everywhere within about a minute)"
     done <<<"$rows"
     ;;
   list)

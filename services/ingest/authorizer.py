@@ -7,9 +7,10 @@ requestContext.authorizer (which only the authorizer can set), and the key is
 returned as usageIdentifierKey so API Gateway applies the tenant's usage plan
 (rate limits and quotas).
 
-API Gateway caches the answer per key for a few minutes, so a revoked key is
-refused within the cache TTL; disabling the key in API Gateway (infra/tenant.sh
-revoke does both) refuses it at once.
+API Gateway caches the answer per key for 60 s, so a revoked key is refused
+within that; disabling the key in API Gateway (infra/tenant.sh revoke does
+both) usually refuses it sooner. New keys take about a minute to reach every
+API Gateway node, and are refused (403) until then.
 """
 
 import hashlib

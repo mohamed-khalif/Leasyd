@@ -149,7 +149,7 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - Raw: `_incoming/tenant=<T>/<signal>/dt=/hour=/`. Compacted: `data/tenant=<T>/<signal>/dt=/hour=/service=/`. Lifecycle tiering moves to the `data/` prefix.
   - Index keys become `<T>#<signal>#<service>`; every internal record carries the tenant.
   - Lookups require a tenant and read through a tenant-scoped role (`obs-tenant-reader`) that IAM restricts to `data/tenant=<T>/*` and index keys starting `<T>#`.
-- **T2. Authenticated, serverless ingest.**
+- **T2. Authenticated, serverless ingest.** ✅ Deployed and tested on AWS: auth, tenant isolation, throttling, revocation (~1 min), 20,000 protobuf records stored exactly once, data in S3 ~20–35 s after sending. New API keys take up to ~1 minute to become active.
   - API Gateway (TLS) → Lambda authorizer (API key → tenant, from an `obs-tenants` table) → ingest Lambda → the tenant's own Firehose stream per signal → `_incoming/tenant=<T>/<signal>/`.
   - The tenant comes only from the authorizer; client-sent `obs.*` attributes are stripped.
   - Durability: the client gets 200 only once Firehose has stored the records; otherwise 503 and the SDK retries.

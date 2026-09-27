@@ -216,7 +216,10 @@ Resources:
       Type: REQUEST
       IdentitySource: method.request.header.x-api-key
       AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations"
-      AuthorizerResultTtlInSeconds: 300
+      # How long API Gateway reuses an allow/deny per key: a revoked key can
+      # keep working up to this long (disabling it in API Gateway usually
+      # takes effect sooner). 60 s costs only a few extra authorizer calls.
+      AuthorizerResultTtlInSeconds: 60
 
   V1Resource:
     Type: AWS::ApiGateway::Resource

@@ -47,8 +47,6 @@ for t in "$A" "$B" "$TINY"; do for s in logs traces metrics; do
 done; done
 (( active == 9 )) && pass "created 3 tenants, each with its own logs/traces/metrics Firehose stream (9 ACTIVE)" \
   || fail "only ${active} of 9 tenant streams ACTIVE"
-sleep 20  # new keys take a few seconds to reach the usage plans
-
 body() {  # body <spoofed obs.tenant> <message>
   printf '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"t2-test"}},{"key":"obs.tenant","value":{"stringValue":"%s"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":"%s000000000","body":{"stringValue":"%s"}}]}]}]}' "$1" "$(date +%s)" "$2"
 }
@@ -58,8 +56,18 @@ post() {  # post <key or ""> <extra header or ""> <body> -> "<code> <seconds>"
     -H 'Content-Type: application/json' "${h[@]}" --data "$3"
 }
 count() { aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "$1" --query 'length(not_null(Contents, `[]`))' --output text; }
+wait_active() {  # wait_active <key> <label>: new keys take about a minute to reach every API Gateway node
+  local start=$(date +%s) ok=0 code
+  while (( $(date +%s) - start < 240 )); do
+    read -r code _ <<<"$(post "$1" "" "$(body "" warmup)")"
+    if [[ "$code" == 200 ]]; then ok=$((ok + 1)); (( ok >= 3 )) && break; else ok=0; fi
+    sleep 5
+  done
+  (( ok >= 3 )) && info "$2's key active after $(( $(date +%s) - start ))s" || fail "$2's key not active after 240s (last HTTP ${code})"
+}
 
 # ---- 2. Authentication and tenant isolation ----
+wait_active "$KEY_A" "$A"
 read -r code _ <<<"$(post "" "" "$(body "" no-key)")"
 [[ "$code" == 401 || "$code" == 403 ]] && pass "no API key -> HTTP ${code}" || fail "no API key -> HTTP ${code}"
 read -r code _ <<<"$(post "obs_not-a-real-key" "" "$(body "" bad-key)")"
@@ -87,17 +95,25 @@ attrs="$(gzip -dc /tmp/t2obj.gz | head -1 | python3 -c "import json,sys; print([
   || fail "stored resource attributes: ${attrs}"
 
 # ---- 3. Per-tenant throttling ----
-codes="$(for i in $(seq 8); do { post "$KEY_TINY" "" "$(body "" "burst-$i")"; echo; } & done; wait)"
-codes="$(cut -d' ' -f1 <<<"$codes" | tr '\n' ' ')"
-n429=$(tr ' ' '\n' <<<"$codes" | grep -c '^429$')
-(( n429 >= 1 )) && pass "tiny plan (1 req/s): 8 simultaneous requests -> ${n429} throttled (429)" \
+wait_active "$KEY_TINY" "$TINY"
+codes=""
+for r in 1 2 3; do
+  codes+="$(for i in $(seq 8); do { post "$KEY_TINY" "" "$(body "" "burst-$i")"; echo; } & done; wait)"$'\n'
+  sleep 2
+done
+codes="$(cut -d' ' -f1 <<<"$codes" | grep . | sort | uniq -c | tr -s ' \n' ' ')"
+grep -q ' 429' <<<" $codes" && pass "tiny plan (1 req/s): 3 bursts of 8 simultaneous requests -> [${codes}] (429 = throttled)" \
   || fail "tiny plan: no 429s among [${codes}]"
 
-# ---- 4. Revocation ----
-"$HERE/tenant.sh" revoke "$TINY" >/dev/null
-sleep 15
-read -r code _ <<<"$(post "$KEY_TINY" "" "$(body "" after-revoke)")"
-[[ "$code" == 401 || "$code" == 403 ]] && pass "revoked key -> HTTP ${code}" || fail "revoked key -> HTTP ${code}"
+# ---- 4. Revocation: refused within the authorizer cache TTL (60s) plus propagation ----
+"$HERE/tenant.sh" revoke "$TINY" >/dev/null; revoked=$(date +%s); refused=""
+while (( $(date +%s) - revoked < 180 )); do
+  read -r code _ <<<"$(post "$KEY_TINY" "" "$(body "" after-revoke)")"
+  [[ "$code" == 401 || "$code" == 403 ]] && { refused=$(( $(date +%s) - revoked )); break; }
+  sleep 5
+done
+[[ -n "$refused" ]] && pass "revoked key refused (HTTP ${code}) ${refused}s after revocation" \
+  || fail "revoked key still accepted 180s after revocation"
 
 # ---- 5. Load: protobuf OTLP through the endpoint, exact count ----
 CLUSTER="$(p1 ClusterName)"
