@@ -6,7 +6,8 @@ S3
   data/tenant=<T>/<signal>/dt=<D>/hour=<H>/service=<S>/...     compacted Parquet
   data/tenant=<T>/<signal>/_bloom/...                          bloom filters too big for the index
   data/tenant=<T>/<signal>/_bloom/day/dt=<D>/v=<N>/g=<G>.bloom  sealed day filters (dayfilter.py)
-  data/tenant=<T>/<signal>/_ids/dt=<D>/g=<G>/<batch>.bin       ID digests per chunk, for sealing
+  data/tenant=<T>/<signal>/_bloom/hour/dt=<D>/hour=<H>/v=<N>/g=<G>.bloom  sealed hour filters
+  data/tenant=<T>/<signal>/_ids/dt=<D>/hour=<H>/g=<G>/<batch>.bin  ID digests per chunk, for sealing
 
 obs-index partition keys
   <T>#<signal>#<service>          one item per Parquet file (kind=parquet) and
@@ -19,6 +20,8 @@ obs-index partition keys
                                   so compaction can retire them
   <T>#_day#<signal>               one item per event day: whether its day filter is
                                   sealed and current (dirty == sealed)
+  <T>#_hour#<signal>              the same per event hour (sk <D>T<H>), for days not
+                                  sealed yet (today)
   _lease#...                      leases (internal)
 
 Everything a tenant may read starts with "data/tenant=<T>/",
@@ -91,8 +94,25 @@ def ids_prefix(tenant, signal, dt):
     return f"{data_prefix(tenant, signal)}_ids/dt={dt}/"
 
 
-def ids_key(tenant, signal, dt, group, batch_id):
-    return f"{ids_prefix(tenant, signal, dt)}g={group:02d}/{batch_id}.bin"
+def hour_pk(tenant, signal):
+    return f"{tenant}#_hour#{signal}"
+
+
+def ids_hour_prefix(tenant, signal, dt, hour):
+    return f"{ids_prefix(tenant, signal, dt)}hour={hour}/"
+
+
+def ids_key(tenant, signal, dt, hour, group, batch_id):
+    return f"{ids_hour_prefix(tenant, signal, dt, hour)}g={group:02d}/{batch_id}.bin"
+
+
+def hour_filter_prefix(tenant, signal, dt, hour=None):
+    p = f"{data_prefix(tenant, signal)}_bloom/hour/dt={dt}/"
+    return p if hour is None else f"{p}hour={hour}/"
+
+
+def hour_filter_key(tenant, signal, dt, hour, version, group):
+    return f"{hour_filter_prefix(tenant, signal, dt, hour)}v={version}/g={group:02d}.bloom"
 
 
 def day_filter_prefix(tenant, signal, dt):

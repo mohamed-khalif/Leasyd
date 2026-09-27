@@ -206,43 +206,80 @@ def _query(ddb, pk, lo, hi, start_iso, stats):
 
 
 def _day_filter(ddb, s3, tenant, signal, candidates, terms, stats):
-    days = sorted({it["min_ts"]["S"][:10] for _, it in candidates if it.get("kind", {}).get("S", "parquet") == "parquet"})
-    stats.update(days_checked=0, days_ruled_out=0)
-    fields = {t.split("=", 1)[0] for t in terms}
+    """Drop Parquet candidates in days, then hours, whose sealed filter rules
+    the IDs out. Days use day filters; days without a trusted one (today, or
+    changed since sealing) use hour filters for their hours."""
+    stats.update(days_checked=0, days_ruled_out=0, hours_checked=0, hours_ruled_out=0)
+    parquet = [it for _, it in candidates if it.get("kind", {}).get("S", "parquet") == "parquet"]
+    days = sorted({it["min_ts"]["S"][:10] for it in parquet})
     if not days:
         return candidates
-    resp = ddb.query(TableName=TABLE, KeyConditionExpression="pk = :p AND sk BETWEEN :a AND :b",
-                     ExpressionAttributeValues={":p": {"S": layout.day_pk(tenant, signal)},
-                                                ":a": {"S": days[0]}, ":b": {"S": days[-1]}},
-                     ReturnConsumedCapacity="TOTAL")
-    stats["read_units"] += resp.get("ConsumedCapacity", {}).get("CapacityUnits", 0)
-    # Trusted only while no chunk was added after sealing.
-    # and only if every chunk of the day indexed the fields asked about.
+    fields = {t.split("=", 1)[0] for t in terms}
+
+    checked, out_days = _check_periods(
+        ddb, s3, layout.day_pk(tenant, signal), days, terms, fields, stats,
+        lambda day, v, g: layout.day_filter_key(tenant, signal, day, v, g))
+    stats["days_checked"], stats["days_ruled_out"] = len(checked), len(out_days)
+
+    hours = sorted({it["min_ts"]["S"][:13] for it in parquet if it["min_ts"]["S"][:10] not in checked})
+    h_checked, out_hours = _check_periods(
+        ddb, s3, layout.hour_pk(tenant, signal), hours, terms, fields, stats,
+        lambda dh, v, g: layout.hour_filter_key(tenant, signal, dh[:10], dh[11:13], v, g))
+    stats["hours_checked"], stats["hours_ruled_out"] = len(h_checked), len(out_hours)
+
+    def ruled_out(it):
+        if it.get("kind", {}).get("S", "parquet") != "parquet":
+            return False  # raw files are never in a sealed filter
+        return it["min_ts"]["S"][:10] in out_days or it["min_ts"]["S"][:13] in out_hours
+    return [(svc, it) for svc, it in candidates if not ruled_out(it)]
+
+
+def _check_periods(ddb, s3, pk, periods, terms, fields, stats, filter_key):
+    """(periods with a trusted filter, those whose filter rules the terms out).
+    Periods are day ("2026-09-27") or hour ("2026-09-27T22") sort keys."""
+    if not periods:
+        return set(), set()
+    items, kw = [], dict(TableName=TABLE, KeyConditionExpression="pk = :p AND sk BETWEEN :a AND :b",
+                         ExpressionAttributeValues={":p": {"S": pk}, ":a": {"S": periods[0]}, ":b": {"S": periods[-1]}},
+                         ReturnConsumedCapacity="TOTAL")
+    while True:
+        resp = ddb.query(**kw)
+        stats["read_units"] += resp.get("ConsumedCapacity", {}).get("CapacityUnits", 0)
+        items += resp["Items"]
+        if "LastEvaluatedKey" not in resp:
+            break
+        kw["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+
+    # Trusted only while no chunk was added after sealing, and only if every
+    # chunk of the period indexed the fields asked about.
     def usable(it):
         fs = it.get("fieldsets", {}).get("SS", [])
         return ("groups" in it and it.get("sealed", {}).get("N") == it.get("dirty", {}).get("N")
                 and len(fs) == 1 and fields <= set(fs[0].split(",")))
-    sealed = {it["sk"]["S"]: it for it in resp["Items"] if usable(it)}
+    wanted = set(periods)
+    sealed = {it["sk"]["S"]: it for it in items if it["sk"]["S"] in wanted and usable(it)}
 
-    def day_maybe(day):
-        item = sealed[day]
+    def maybe(period):
+        item = sealed[period]
         for t in terms:
             d = dayfilter.digest(t)
-            g = item["groups"]["M"][str(dayfilter.group_of(d))]["M"]
-            subshards, m = int(g["s"]["N"]), int(g["m"]["N"])
+            g = dayfilter.group_of(d)
+            geo = item["groups"]["M"][str(g)]["M"]
+            subshards, m = int(geo["s"]["N"]), int(geo["m"]["N"])
             lo, hi = dayfilter.byte_range(d, subshards, m)
-            key = layout.day_filter_key(tenant, signal, day, item["sealed"]["N"], dayfilter.group_of(d))
-            bits = s3.get_object(Bucket=BUCKET, Key=key, Range=f"bytes={lo}-{hi}")["Body"].read()
+            try:
+                bits = s3.get_object(Bucket=BUCKET, Key=filter_key(period, item["sealed"]["N"], g),
+                                     Range=f"bytes={lo}-{hi}")["Body"].read()
+            except s3.exceptions.NoSuchKey:
+                return True  # re-sealed meanwhile and this version removed: can't rule out
             if not dayfilter.might_contain(bits, d, subshards, m):
                 return False
         return True
 
-    check = [d for d in days if d in sealed]
+    check = sorted(sealed)
     with ThreadPoolExecutor(BLOOM_THREADS) as pool:
-        ruled_out = {d for d, maybe in zip(check, pool.map(day_maybe, check)) if not maybe}
-    stats["days_checked"], stats["days_ruled_out"] = len(check), len(ruled_out)
-    return [(svc, it) for svc, it in candidates
-            if not (it.get("kind", {}).get("S", "parquet") == "parquet" and it["min_ts"]["S"][:10] in ruled_out)]
+        out = {p for p, keep in zip(check, pool.map(maybe, check)) if not keep}
+    return set(check), out
 
 
 def _checkable(item, terms):

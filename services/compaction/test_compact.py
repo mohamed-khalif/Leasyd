@@ -164,3 +164,15 @@ def test_summarize_matches_what_compaction_writes(tmp_path):
     assert [key(d) for d in summary] == [key(w) for w in written]
     assert [d["bloom"].to_bytes() for d in summary] == [w["bloom"].to_bytes() for w in written]
     assert not os.path.exists(tmp_path / "s" / "dt=2026-09-26")  # nothing written
+
+
+def test_spill_dir_exists_before_duckdb_needs_it(tmp_path):
+    """A chunk bigger than the memory limit spills to <out>/.duckdb_tmp. DuckDB creates that
+    folder but not its parents, and <out> doesn't exist yet (every big chunk failed on AWS)."""
+    out = tmp_path / "not" / "yet" / "there"
+    con = compact._connect(str(out), "100MB")
+    try:
+        assert (out / ".duckdb_tmp").is_dir()
+        assert con.execute("SELECT current_setting('temp_directory')").fetchone()[0] == str(out / ".duckdb_tmp")
+    finally:
+        con.close()

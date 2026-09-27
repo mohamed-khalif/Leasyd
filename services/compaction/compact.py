@@ -139,7 +139,7 @@ def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, me
     min_ts / max_ts (ISO-8601, UTC, microseconds), size_bytes, and a bloom
     filter over the file's bloom_fields(signal) values.
 
-    If id_digests is a dict, it is filled with {event day: {group: bytes}}:
+    If id_digests is a dict, it is filled with {(event day, hour): {group: bytes}}:
     the dayfilter digests of every distinct ID in the chunk, for sealing
     day filters.
     """
@@ -190,7 +190,8 @@ def summarize(signal, input_paths, work_dir, arrival_dt, arrival_hour, memory_li
     con = _connect(work_dir, memory_limit)
     try:
         out = []
-        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour, signal):
+        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour, signal,
+                                           summary_of=[f for f in fields if f != "trace_id"]):
             n_rows = _select_group(con, service, dt, hour, signal)
             lo, hi = con.execute(
                 "SELECT strftime(min(ts), '%Y-%m-%dT%H:%M:%S.%fZ'), "
@@ -212,20 +213,30 @@ def summarize_logs(input_paths, work_dir, arrival_dt, arrival_hour, **kw):
 
 
 def _connect(work_dir, memory_limit):
+    # DuckDB spills big chunks here; it creates the folder but not its parents.
+    tmp = os.path.join(work_dir, ".duckdb_tmp")
+    os.makedirs(tmp, exist_ok=True)
     con = duckdb.connect()
     con.execute(f"SET memory_limit='{memory_limit}'")
-    con.execute(f"SET temp_directory='{os.path.join(work_dir, '.duckdb_tmp')}'")
+    con.execute(f"SET temp_directory='{tmp}'")
     con.execute("SET TimeZone='UTC'")
     return con
 
 
-def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs"):
+def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs", summary_of=None):
     """Parse raw OTLP-JSON files of one signal into the temp table `rows`
-    (the Parquet schema) and return its (service, dt, hour) groups in order."""
+    (the Parquet schema) and return its (service, dt, hour) groups in order.
+
+    summary_of: a list of attribute keys to load only what the fast lane
+    indexes (ts, service, trace_id, and those attributes), ~3x faster. It
+    uses the same rules as the full rows, so both see the same groups, times
+    and IDs (tested in test_signals.py and test_compact.py)."""
     if signal not in _ROWS_SQL:
         raise ValueError(f"unknown signal {signal!r}")
     fallback_ns = f"{_hour_start_us(con, arrival_dt, arrival_hour)} * 1000"
-    con.execute(f"CREATE OR REPLACE TEMP TABLE rows AS {_ROWS_SQL[signal](fallback_ns)}", [input_paths])
+    sql = (_ROWS_SQL[signal](fallback_ns) if summary_of is None
+           else _SUMMARY_SQL[signal](fallback_ns, summary_of))
+    con.execute(f"CREATE OR REPLACE TEMP TABLE rows AS {sql}", [input_paths])
     return con.execute(
         """
         SELECT service, strftime(ts, '%Y-%m-%d') AS dt, strftime(ts, '%H') AS hour
@@ -417,6 +428,67 @@ def _metrics_sql(fallback_ns):
 
 _ROWS_SQL = {"logs": _logs_sql, "traces": _traces_sql, "metrics": _metrics_sql}
 
+
+# ---- summary rows (fast lane): only what the index needs ----
+# service.name is the first such resource attribute, as in the full rows' map.
+_SUMMARY_SERVICE = ("coalesce(" + _ANYVALUE.format(v="list_filter(res_attrs, z -> z.key = 'service.name')[1].value")
+                    + ", 'unknown') AS service")
+
+
+def _id_attrs(attrs, keys):
+    if not keys:
+        return "MAP {}::MAP(VARCHAR, VARCHAR)"
+    quoted = ", ".join("'" + k.replace("'", "''") + "'" for k in keys)
+    return _ATTR_MAP.format(a=f"list_filter({attrs}, x -> x.key IN ({quoted}))")
+
+
+def _logs_summary_sql(fallback_ns, keys):
+    return f"""
+        WITH rl AS ({_read('resourceLogs', LOGS_JSON_TYPE)}),
+        sl AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeLogs) AS sl FROM rl),
+        lr AS (SELECT res_attrs, unnest(sl.logRecords) AS lr FROM sl),
+        flat AS (SELECT *, coalesce({_ns('lr.timeUnixNano')}, {_ns('lr.observedTimeUnixNano')}, {fallback_ns})
+                           AS ts_unix_nano FROM lr)
+        SELECT {_ts('ts_unix_nano')} AS ts, ts_unix_nano, {_SUMMARY_SERVICE},
+               nullif(lr.traceId, '') AS trace_id, {_id_attrs('lr.attributes', keys)} AS attributes
+        FROM flat
+    """
+
+
+def _traces_summary_sql(fallback_ns, keys):
+    return f"""
+        WITH rs AS ({_read('resourceSpans', SPANS_JSON_TYPE)}),
+        ss AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeSpans) AS ss FROM rs),
+        sp AS (SELECT res_attrs, unnest(ss.spans) AS sp FROM ss),
+        flat AS (SELECT *, coalesce({_ns('sp.startTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano FROM sp)
+        SELECT {_ts('ts_unix_nano')} AS ts, ts_unix_nano, {_SUMMARY_SERVICE},
+               nullif(sp.traceId, '') AS trace_id, {_id_attrs('sp.attributes', keys)} AS attributes
+        FROM flat
+    """
+
+
+def _metrics_summary_sql(fallback_ns, keys):
+    # Metric points carry no IDs: only time, service and metric name.
+    return f"""
+        WITH rm AS ({_read('resourceMetrics', METRICS_JSON_TYPE)}),
+        sm AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeMetrics) AS sm FROM rm),
+        m AS (SELECT res_attrs, unnest(sm.metrics) AS m FROM sm),
+        pts AS (
+            SELECT res_attrs, m.name AS metric_name, unnest(m.gauge.dataPoints).timeUnixNano AS t FROM m
+            UNION ALL SELECT res_attrs, m.name, unnest(m.sum.dataPoints).timeUnixNano FROM m
+            UNION ALL SELECT res_attrs, m.name, unnest(m.histogram.dataPoints).timeUnixNano FROM m
+            UNION ALL SELECT res_attrs, m.name, unnest(m.exponentialHistogram.dataPoints).timeUnixNano FROM m
+            UNION ALL SELECT res_attrs, m.name, unnest(m.summary.dataPoints).timeUnixNano FROM m
+        ),
+        flat AS (SELECT *, coalesce({_ns('t')}, {fallback_ns}) AS ts_unix_nano FROM pts)
+        SELECT {_ts('ts_unix_nano')} AS ts, ts_unix_nano, {_SUMMARY_SERVICE}, metric_name,
+               NULL::VARCHAR AS trace_id, MAP {{}}::MAP(VARCHAR, VARCHAR) AS attributes
+        FROM flat
+    """
+
+
+_SUMMARY_SQL = {"logs": _logs_summary_sql, "traces": _traces_summary_sql, "metrics": _metrics_summary_sql}
+
 # Row order within a file: by time; metric points by metric first, so each
 # metric's points sit together (better compression, and row-group stats
 # can skip other metrics).
@@ -464,7 +536,7 @@ def _bloom_for(con, lo_rn, hi_rn, fields, fpp):
 
 
 def _day_digests(con, fields, out):
-    """Digests of the distinct IDs in `rows`, by event day and group."""
+    """Digests of the distinct IDs in `rows`, by event hour and group."""
     parts, params = [], []
     for field in fields:
         if field == "trace_id":
@@ -472,11 +544,12 @@ def _day_digests(con, fields, out):
         else:
             parts.append("SELECT ts, ? || '=' || lower(trim(attributes[?])) FROM rows WHERE attributes[?] IS NOT NULL")
             params += [field, field, field]
-    cur = con.execute("SELECT DISTINCT strftime(ts, '%Y-%m-%d'), t FROM (" + " UNION ALL ".join(parts) + ")", params)
+    cur = con.execute("SELECT DISTINCT strftime(ts, '%Y-%m-%d'), strftime(ts, '%H'), t FROM ("
+                      + " UNION ALL ".join(parts) + ")", params)
     while rows := cur.fetchmany(100_000):
-        for dt, t in rows:
+        for dt, hour, t in rows:
             d = dayfilter.digest(t)
-            out.setdefault(dt, {}).setdefault(dayfilter.group_of(d), bytearray()).extend(d)
+            out.setdefault((dt, hour), {}).setdefault(dayfilter.group_of(d), bytearray()).extend(d)
 
 
 def _hour_start_us(con, dt, hour):

@@ -269,22 +269,22 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
                     # and part number for several event hours.
                     w["bloom_key"] = f"{prefix}_bloom/{w['relpath'][:-len('.parquet')]}.bloom"
                     s3.put_object(Bucket=BUCKET, Key=w["bloom_key"], Body=bits)
-            # ID digests for the day filters (same keys on a re-run).
-            for day, groups in digests.items():
+            # ID digests for the day and hour filters (same keys on a re-run).
+            for (day, ev_hour), groups in digests.items():
                 for g, buf in groups.items():
-                    s3.put_object(Bucket=BUCKET, Key=layout.ids_key(tenant, signal, day, g, batch_id), Body=bytes(buf))
+                    s3.put_object(Bucket=BUCKET, Key=layout.ids_key(tenant, signal, day, ev_hour, g, batch_id),
+                                  Body=bytes(buf))
             _maybe_crash(crash_after, "write")
 
-            # 2. index. First mark the days this chunk adds to as changed, so a
-            # day filter sealed without this chunk's IDs is no longer trusted
-            # (see sealer).
-            for day in digests:
-                # fieldsets: which ID fields the digests cover; lookups use a day
-                # filter only if every chunk of the day covered the same fields.
-                ddb.update_item(TableName=TABLE, Key={"pk": {"S": layout.day_pk(tenant, signal)}, "sk": {"S": day}},
-                                UpdateExpression="ADD dirty :one, fieldsets :fs",
-                                ExpressionAttributeValues={":one": {"N": "1"}, ":fs": {"SS": [",".join(
-                                    compact.bloom_fields(signal, BLOOM_ATTRIBUTES))]}})
+            # 2. index. First mark the days and hours this chunk adds to as
+            # changed, so a filter sealed without this chunk's IDs is no longer
+            # trusted (see sealer). fieldsets: which ID fields the digests cover;
+            # lookups use a filter only if every chunk covered the same fields.
+            fieldsets = {"SS": [",".join(compact.bloom_fields(signal, BLOOM_ATTRIBUTES))]}
+            for period in sorted({_period_key("day", tenant, signal, d, h) for d, h in digests}
+                                 | {_period_key("hour", tenant, signal, d, h) for d, h in digests}):
+                ddb.update_item(TableName=TABLE, Key=_ddb_key(period), UpdateExpression="ADD dirty :one, fieldsets :fs",
+                                ExpressionAttributeValues={":one": {"N": "1"}, ":fs": fieldsets})
             now = datetime.now(timezone.utc).isoformat()
             plan_pk = layout.plan_pk(tenant, signal, dt, hour)
             _batch_write([_index_item(tenant, signal, batch_id, w, now, plan_pk) for w in written])
@@ -416,41 +416,55 @@ def recent_indexer(event, context):
 
 # -------------------------------------------------------------- day filters
 
-SEAL_AFTER = timedelta(hours=int(os.environ.get("SEAL_AFTER_HOURS", "2")))  # after the day ends
-KEEP_IDS = timedelta(days=int(os.environ.get("KEEP_IDS_DAYS", "3")))        # digests kept for re-sealing
+SEAL_AFTER = timedelta(hours=int(os.environ.get("SEAL_AFTER_HOURS", "2")))            # after the day ends
+SEAL_HOUR_AFTER = timedelta(minutes=int(os.environ.get("SEAL_HOUR_AFTER_MINUTES", "20")))  # after an hour ends
+KEEP_IDS = timedelta(days=int(os.environ.get("KEEP_IDS_DAYS", "3")))                    # digests kept for re-sealing
 SEAL_LEASE_SECONDS = 16 * 60
 
 
 def sealer(event, context):
-    """Hourly: build the day filter of every closed day whose filter is
-    missing or out of date, and delete old digests.
+    """Every 15 min: build the filter of every closed day, and of every
+    closed hour of days not closed yet (today), whose filter is missing or
+    out of date; delete old digests.
 
-    Consistency: a worker writes its digests, then bumps the day's `dirty`
-    counter, then writes its index items. The sealer reads `dirty`, lists
-    and merges the digests, and records `sealed = dirty` only if `dirty` is
-    unchanged. Lookups trust a day filter only while sealed == dirty, so a
-    chunk added during or after sealing makes them fall back to per-file
-    blooms for that day until the next seal.
+    Consistency: a worker writes its digests, then bumps the `dirty` counter
+    of each day and hour it adds to, then writes its index items. The sealer
+    reads `dirty`, lists and merges the digests, and records `sealed = dirty`
+    only if `dirty` is unchanged. Lookups trust a filter only while
+    sealed == dirty, so a chunk added during or after sealing makes them fall
+    back to finer filters (hour, then per-file) until the next seal.
 
-    Test hook: {"only": {"tenant", "signal", "dt"}} seals that day now.
+    Test hook: {"only": {"tenant", "signal", "dt"[, "hour"]}} seals that day
+    (or hour) now.
     """
     now = datetime.now(timezone.utc)
     deadline = time.time() + (context.get_remaining_time_in_millis() / 1000 - 90 if context else 600)
     only = (event or {}).get("only")
     if only:
-        days = [(layout.check_tenant(only["tenant"]), only["signal"], only["dt"])]
+        layout.check_tenant(only["tenant"])
+        todo = [("hour" if "hour" in only else "day", only["tenant"], only["signal"], only["dt"], only.get("hour"))]
     else:
-        days = [d for d in _days_with_ids() if now >= _day_end(d[2]) + SEAL_AFTER]
+        todo = []
+        for tenant, signal, day in _days_with_ids():
+            if now >= _day_end(day) + SEAL_AFTER:
+                todo.append(("day", tenant, signal, day, None))
+            else:
+                for p in _common_prefixes(layout.ids_prefix(tenant, signal, day)):
+                    if "/hour=" in p:
+                        hour = p.rstrip("/").rsplit("hour=", 1)[1]
+                        if now >= _hour_end(day, hour) + SEAL_HOUR_AFTER:
+                            todo.append(("hour", tenant, signal, day, hour))
     result = {"sealed": [], "up_to_date": 0, "ids_deleted": [], "skipped": []}
-    for tenant, signal, day in days:
+    for kind, tenant, signal, day, hour in todo:
+        name = f"{tenant}/{signal}/{day}" + (f"T{hour}" if hour else "")
         if time.time() > deadline:
-            result["skipped"].append(f"{tenant}/{signal}/{day}")
+            result["skipped"].append(name)
             continue
-        outcome = _seal_day(tenant, signal, day, now, context, force=bool(only))
+        outcome = _seal(kind, tenant, signal, day, hour, now, context, force=bool(only))
         if outcome == "sealed":
-            result["sealed"].append(f"{tenant}/{signal}/{day}")
+            result["sealed"].append(name)
         elif outcome == "ids_deleted":
-            result["ids_deleted"].append(f"{tenant}/{signal}/{day}")
+            result["ids_deleted"].append(name)
         else:
             result["up_to_date"] += 1
     print(json.dumps(result))
@@ -459,6 +473,20 @@ def sealer(event, context):
 
 def _day_end(day):
     return datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+
+
+def _hour_end(day, hour):
+    return datetime.strptime(f"{day} {hour}", "%Y-%m-%d %H").replace(tzinfo=timezone.utc) + timedelta(hours=1)
+
+
+def _period_key(kind, tenant, signal, day, hour):
+    if kind == "day":
+        return (("pk", layout.day_pk(tenant, signal)), ("sk", day))
+    return (("pk", layout.hour_pk(tenant, signal)), ("sk", f"{day}T{hour}"))
+
+
+def _ddb_key(key):
+    return {k: {"S": v} for k, v in key}
 
 
 def _days_with_ids():
@@ -476,15 +504,15 @@ def _days_with_ids():
     return out
 
 
-def _seal_day(tenant, signal, day, now, context, force=False):
-    key = {"pk": {"S": layout.day_pk(tenant, signal)}, "sk": {"S": day}}
+def _seal(kind, tenant, signal, day, hour, now, context, force=False):
+    key = _ddb_key(_period_key(kind, tenant, signal, day, hour))
     item = ddb.get_item(TableName=TABLE, Key=key, ConsistentRead=True).get("Item", {})
     dirty = int(item.get("dirty", {}).get("N", "0"))
     sealed = int(item.get("sealed", {}).get("N", "-1"))
     if dirty == 0 or item.get("ids_deleted"):
         return "nothing to seal"   # no committed chunk yet, or digests gone (per-file blooms serve it)
     if sealed == dirty:
-        if now >= _day_end(day) + KEEP_IDS and not force:
+        if kind == "day" and now >= _day_end(day) + KEEP_IDS and not force:
             # Re-sealing needs every digest, so from here on a late chunk leaves
             # the day on per-file blooms instead.
             ddb.update_item(TableName=TABLE, Key=key, UpdateExpression="SET ids_deleted = :t",
@@ -492,12 +520,21 @@ def _seal_day(tenant, signal, day, now, context, force=False):
             _delete_keys([o["Key"] for o in _list(layout.ids_prefix(tenant, signal, day))])
             return "ids_deleted"
         return "up to date"
-    lease = _acquire_lease(f"_lease#seal#{tenant}#{signal}#{day}", context, SEAL_LEASE_SECONDS)
+    name = f"{day}T{hour}" if hour else day
+    lease = _acquire_lease(f"_lease#seal#{tenant}#{signal}#{name}", context, SEAL_LEASE_SECONDS)
     if lease is None:
         return "another sealer is on it"
     try:
+        ids = (layout.ids_prefix(tenant, signal, day) if kind == "day"
+               else layout.ids_hour_prefix(tenant, signal, day, hour))
+        if kind == "day":
+            filter_key = lambda g: layout.day_filter_key(tenant, signal, day, dirty, g)  # noqa: E731
+            filter_prefix = layout.day_filter_prefix(tenant, signal, day)
+        else:
+            filter_key = lambda g: layout.hour_filter_key(tenant, signal, day, hour, dirty, g)  # noqa: E731
+            filter_prefix = layout.hour_filter_prefix(tenant, signal, day, hour)
         by_group = {}
-        for o in _list(layout.ids_prefix(tenant, signal, day)):
+        for o in _list(ids):
             g = int(o["Key"].rsplit("/g=", 1)[1].split("/", 1)[0])
             by_group.setdefault(g, []).append(o["Key"])
         groups, n_total = {}, 0
@@ -506,7 +543,7 @@ def _seal_day(tenant, signal, day, now, context, force=False):
             for k in by_group.get(g, []):
                 buf.extend(s3.get_object(Bucket=BUCKET, Key=k)["Body"].read())
             subshards, m, n, bits = dayfilter.build_group(bytes(buf))
-            s3.put_object(Bucket=BUCKET, Key=layout.day_filter_key(tenant, signal, day, dirty, g), Body=bits)
+            s3.put_object(Bucket=BUCKET, Key=filter_key(g), Body=bits)
             groups[str(g)] = {"M": {"s": {"N": str(subshards)}, "m": {"N": str(m)}}}
             n_total += n
         try:
@@ -518,13 +555,15 @@ def _seal_day(tenant, signal, day, now, context, force=False):
                                            ":n": {"N": str(n_total)}, ":t": {"S": now.isoformat()}})
         except ddb.exceptions.ConditionalCheckFailedException:
             return "changed while sealing; next run"
-        # Older versions of this day's filter are no longer referenced.
-        old = [o["Key"] for o in _list(layout.day_filter_prefix(tenant, signal, day))
-               if f"/v={dirty}/" not in o["Key"]]
-        _delete_keys(old)
+        # Older versions of this filter are no longer referenced.
+        _delete_keys([o["Key"] for o in _list(filter_prefix) if f"/v={dirty}/" not in o["Key"]])
         return "sealed"
     finally:
         _release_lease(*lease)
+
+
+def _seal_day(tenant, signal, day, now, context, force=False):
+    return _seal("day", tenant, signal, day, None, now, context, force)
 
 
 def _retire_raw_entries(tenant, signal, dt, hour, keys):

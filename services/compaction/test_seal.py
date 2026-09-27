@@ -148,3 +148,55 @@ def test_blooms_of_one_chunk_spanning_hours_do_not_collide(aws, monkeypatch):  #
     assert len(blooms) == 2
     for t in (early[7], late[7]):
         assert len(lookup.lookup(**RANGE, match={"trace_id": t})["files"]) == 1
+
+
+# ---- hour filters: closed hours of a day that isn't sealed yet (today) ----
+
+def hour_item(hour="10"):
+    return boto3.client("dynamodb").get_item(TableName="obs-index", Key={
+        "pk": {"S": "acme#_hour#logs"}, "sk": {"S": f"{DAY}T{hour}"}}).get("Item", {})
+
+
+@pytest.fixture
+def today(aws, monkeypatch):  # noqa: F811
+    """DAY's 10:00 hour is compacted; the clock says DAY 13:00, so the day is still open."""
+    handler, lookup = aws
+    monkeypatch.setattr(handler, "BLOOM_INLINE_MAX_BYTES", 0)
+    put("10", "a", T[:100], "api")
+    put("10", "b", T[100:], "web")
+    compact_hour(handler, "10")
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 26, 13, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(handler, "datetime", Clock)
+    return handler, lookup
+
+
+def test_scheduled_sealer_seals_closed_hours_of_an_open_day(today):
+    handler, lookup = today
+    out = handler.sealer({}, None)
+    assert out["sealed"] == [f"acme/logs/{DAY}T10"]          # the hour, not the day
+    assert "sealed" not in day_item() and hour_item()["sealed"]["N"] == hour_item()["dirty"]["N"] == "1"
+    assert len(keys(f"data/tenant=acme/logs/_bloom/hour/dt={DAY}/hour=10/v=1/")) == 16
+    miss = lookup.lookup(**RANGE, match={"trace_id": "f" * 32})
+    assert miss["files"] == [] and miss["stats"]["days_checked"] == 0
+    assert miss["stats"]["hours_ruled_out"] == 1 and miss["stats"]["bloom_fetches"] == 0
+    hit = lookup.lookup(**RANGE, match={"trace_id": T[150]})
+    assert [f["service"] for f in hit["files"]] == ["web"] and hit["stats"]["hours_checked"] == 1
+
+
+def test_late_chunk_makes_the_hour_untrusted_until_resealed(today):
+    handler, lookup = today
+    handler.sealer({}, None)
+    late = "e" * 32
+    put("23", "late", [late])   # event time 10:00 (same hour), arriving later
+    compact_hour(handler, "23")
+    assert hour_item()["dirty"]["N"] == "2"
+    out = lookup.lookup(**RANGE, match={"trace_id": late})
+    assert len(out["files"]) == 1 and out["stats"]["hours_checked"] == 0   # fell back to per-file blooms
+    assert handler.sealer({}, None)["sealed"] == [f"acme/logs/{DAY}T10"]
+    out = lookup.lookup(**RANGE, match={"trace_id": late})
+    assert len(out["files"]) == 1 and out["stats"]["hours_checked"] == 1
+    assert keys(f"data/tenant=acme/logs/_bloom/hour/dt={DAY}/hour=10/v=1/") == []   # old version removed

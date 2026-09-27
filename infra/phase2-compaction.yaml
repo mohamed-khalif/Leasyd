@@ -247,7 +247,7 @@ Resources:
     DependsOn: SealerLogGroup
     Properties:
       FunctionName: obs-day-sealer
-      Description: Builds each closed day's ID filter from compaction's digests
+      Description: Builds ID filters for closed days, and closed hours of today, from compaction's digests
       Runtime: python3.12
       Architectures: [arm64]
       Handler: handler.sealer
@@ -268,7 +268,8 @@ Resources:
     Type: AWS::Events::Rule
     Properties:
       Name: obs-day-sealer-schedule
-      ScheduleExpression: rate(1 hour)
+      # Hours of today are sealed ~20 min after they end, days 2 h after they end.
+      ScheduleExpression: rate(15 minutes)
       State: !Ref ScheduleState
       Targets:
         - Id: sealer
