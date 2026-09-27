@@ -128,6 +128,30 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 - Athena confirms that file really holds the ID (no false negatives).
 - Report warm lookup latency and DynamoDB read units, and the table's consumed capacity at idle.
 
+## Phase T: Multi-tenancy and production hardening
+
+The platform will serve many separate customers (tenants). This phase comes before Phase 4, because it changes storage paths and index keys, and the query engine is where tenant isolation is enforced.
+
+**Decisions**
+- **Isolation:** one shared bucket and index; every path and index key starts with the tenant ID. Queries run under credentials that AWS restricts to the tenant's prefix and index keys (IAM session tags), so a bug in our code still cannot read another tenant's data.
+- **Ingest:** a public HTTPS endpoint. Each customer's OpenTelemetry SDK sends OTLP/HTTP with an API key header. The key maps to a tenant ID; requests without a valid key are rejected. (OTLP/HTTP rather than gRPC, since API Gateway doesn't proxy gRPC; every OpenTelemetry SDK supports both.)
+- **Scale:** elastic. The collector autoscales behind a load balancer, compaction and queries fan out across Lambdas, and DynamoDB is on-demand. Per-tenant rate limits and quotas stop one customer from starving the others.
+
+**Build, in order**
+- **T1. Tenant-aware storage, compaction and lookups.**
+  - Raw: `_incoming/tenant=<T>/<signal>/dt=/hour=/`. Compacted: `data/tenant=<T>/<signal>/dt=/hour=/service=/`. Lifecycle tiering moves to the `data/` prefix.
+  - Index keys become `<T>#<signal>#<service>`; every internal record carries the tenant.
+  - Lookups require a tenant and read through a tenant-scoped role (`obs-tenant-reader`) that IAM restricts to `data/tenant=<T>/*` and index keys starting `<T>#`.
+- **T2. Authenticated, autoscaling ingest.**
+  - API Gateway (TLS) → Lambda authorizer (API key → tenant, from a `obs-tenants` table) → VPC link → internal load balancer → collector tasks.
+  - The gateway passes the tenant ID as a header; the collector stamps it on every record, overriding anything the client sent, and batches per tenant.
+  - Per-tenant throttling and quotas via API Gateway usage plans.
+  - Collector: at least 2 tasks across AZs, CPU-based autoscaling, batches bounded by bytes as well as records, so very large log lines can't create a batch too big to compact.
+- **T3. Traces and metrics compaction.** Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
+- **T4. Tenant operations.** Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
+- **T5. Scale test.** Ramp load across many tenants, step by step, until something saturates. Record ingest throughput, compaction lag and cost at each step, and fix the first bottleneck found.
+- **Also:** configurable bloom attributes cover common request-ID names by default (`request.id`, `http.request_id`, `request_id`, `x-request-id`).
+
 ## Phase 4: Single-worker query path
 
 **Build**
