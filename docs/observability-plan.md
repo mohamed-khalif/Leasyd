@@ -180,6 +180,15 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 - Run a popular query twice. On the second call, the Lambda invocation count in CloudWatch should stay flat.
 - Run a very broad query and compare the estimate with the actual bytes scanned and duration. Tune it until the error is within an agreed margin (e.g. ±25%). A badly calibrated estimate is worse than none.
 
+## Instrumentation (later phase)
+
+The collector only receives OTLP (gRPC 4317, HTTP 4318); it does not scrape or pull anything. Real services will send telemetry with the **OpenTelemetry SDK**, pointed at the collector. Until then the only source is the `telemetrygen` load generator.
+
+When this is picked up:
+- Give the collector a stable address (an internal load balancer or Cloud Map name) instead of the task's private IP.
+- Decide how services outside the platform VPC reach it (VPC peering or PrivateLink), since the security group admits only VPC traffic today.
+- Extend compaction to traces and metrics before sending them, or raw files will pile up in `_incoming/traces/` and `_incoming/metrics/`.
+
 ## Data freshness
 
 A cold-path query only sees data that has been compacted and indexed. Worst-case lag is about **one hour of partition + 10 minutes of grace + up to 15 minutes until the next dispatcher run**, so roughly 25 to 85 minutes.
