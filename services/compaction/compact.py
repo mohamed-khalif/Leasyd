@@ -7,6 +7,8 @@ import re
 
 import duckdb
 
+import bloom
+
 # Largest single batch file (uncompressed). The collector caps batches at
 # 40k records, ~15 MB; DuckDB allocates a buffer this size per thread.
 MAX_JSON_OBJECT_BYTES = 64 * 1024 * 1024
@@ -54,8 +56,14 @@ def safe_service(name):
 DEFAULT_MAX_ROWS_PER_FILE = 4_000_000
 
 
+# Log attributes whose values go into each file's bloom filter, alongside
+# trace_id. IDs people look up one at a time, not low-cardinality labels.
+DEFAULT_BLOOM_ATTRIBUTES = ("request.id",)
+
+
 def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB",
-                 max_rows_per_file=DEFAULT_MAX_ROWS_PER_FILE):
+                 max_rows_per_file=DEFAULT_MAX_ROWS_PER_FILE, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES,
+                 bloom_fpp=bloom.DEFAULT_FPP):
     """Compact gzipped OTLP-JSON log batches into Parquet.
 
     Rows are split by service and by the hour of their own timestamp, so no
@@ -66,7 +74,8 @@ def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memor
     count, so the same inputs always produce the same file names.
 
     Returns one dict per written file: service, dt, hour, part, path, rows,
-    min_ts / max_ts (ISO-8601, UTC, microseconds) and size_bytes.
+    min_ts / max_ts (ISO-8601, UTC, microseconds), size_bytes, and a bloom
+    filter over the file's trace_id and bloom_attributes values.
     """
     con = duckdb.connect()
     try:
@@ -159,10 +168,31 @@ def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memor
                     "service": service, "dt": dt, "hour": hour, "part": part, "relpath": rel,
                     "path": path, "rows": n, "min_ts": lo, "max_ts": hi,
                     "size_bytes": os.path.getsize(path),
+                    "bloom": _bloom_for(con, lo_rn, lo_rn + max_rows_per_file, bloom_attributes, bloom_fpp),
                 })
         return written
     finally:
         con.close()
+
+
+def _bloom_for(con, lo_rn, hi_rn, attributes, fpp):
+    """Bloom filter of the distinct indexed values in rows [lo_rn, hi_rn) of grp."""
+    parts = [f"SELECT 'trace_id=' || lower(trim(trace_id)) AS t FROM grp "
+             f"WHERE rn >= {lo_rn} AND rn < {hi_rn} AND trace_id IS NOT NULL"]
+    params = []
+    for key in attributes:
+        parts.append(f"SELECT ? || '=' || lower(trim(attributes[?])) FROM grp "
+                     f"WHERE rn >= {lo_rn} AND rn < {hi_rn} AND attributes[?] IS NOT NULL")
+        params += [key, key, key]
+    sql = "SELECT DISTINCT t FROM (" + " UNION ALL ".join(parts) + ")"
+    n = con.execute(f"SELECT count(*) FROM ({sql})", params).fetchone()[0]
+    b = bloom.Bloom.for_capacity(n, fpp)
+    cur = con.execute(sql, params)
+    while rows := cur.fetchmany(100_000):
+        for (t,) in rows:
+            b.add(t)
+    b.n = n
+    return b
 
 
 def _hour_start_us(con, dt, hour):

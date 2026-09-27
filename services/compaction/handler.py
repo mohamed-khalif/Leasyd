@@ -45,6 +45,11 @@ GRACE = timedelta(minutes=int(os.environ.get("GRACE_MINUTES", "10")))
 MAX_INPUT_FILES = int(os.environ.get("MAX_INPUT_FILES", "2000"))
 MAX_INPUT_BYTES = int(os.environ.get("MAX_INPUT_BYTES", str(200 * 1024 * 1024)))
 MAX_ROWS_PER_FILE = int(os.environ.get("MAX_ROWS_PER_FILE", str(compact.DEFAULT_MAX_ROWS_PER_FILE)))
+BLOOM_ATTRIBUTES = tuple(a for a in os.environ.get(
+    "BLOOM_ATTRIBUTES", ",".join(compact.DEFAULT_BLOOM_ATTRIBUTES)).split(",") if a)
+# Blooms up to this size go in the index item itself (DynamoDB items max out
+# at 400 KB); bigger ones go to S3 next to the data. 300 KB is ~250k IDs.
+BLOOM_INLINE_MAX_BYTES = int(os.environ.get("BLOOM_INLINE_MAX_BYTES", str(300 * 1024)))
 ALLOW_CRASH_INJECTION = os.environ.get("ALLOW_CRASH_INJECTION") == "true"
 WORKER_LEASE_SECONDS = 16 * 60      # longer than the worker's 15-minute maximum timeout
 DISPATCHER_LEASE_SECONDS = 3 * 60   # longer than the dispatcher's 2-minute timeout
@@ -208,26 +213,26 @@ def _compact_chunk(signal, dt, hour, batch_id, crash_after):
             written = compact.compact_logs(
                 local, os.path.join(work, "out"), batch_id, dt, hour,
                 memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
+                bloom_attributes=BLOOM_ATTRIBUTES,
             )
             for w in written:
                 w["key"] = f"{signal}/{w['relpath']}"
                 s3.upload_file(w["path"], BUCKET, w["key"])
+                bits = w["bloom"].to_bytes()
+                if len(bits) > BLOOM_INLINE_MAX_BYTES:
+                    w["bloom_key"] = f"{signal}/_bloom/{batch_id}-{w['part']:03d}-{w['service']}.bloom"
+                    s3.put_object(Bucket=BUCKET, Key=w["bloom_key"], Body=bits)
             _maybe_crash(crash_after, "write")
 
             # 2. index
             now = datetime.now(timezone.utc).isoformat()
-            _batch_write([{
-                "pk": {"S": f"{signal}#{w['service']}"},
-                "sk": {"S": f"{w['min_ts']}#{batch_id}-{w['part']:03d}"},
-                "min_ts": {"S": w["min_ts"]},
-                "max_ts": {"S": w["max_ts"]},
-                "file_path": {"S": f"s3://{BUCKET}/{w['key']}"},
-                "row_count": {"N": str(w["rows"])},
-                "size_bytes": {"N": str(w["size_bytes"])},
-                "storage_class": {"S": "STANDARD"},
-                "batch_id": {"S": batch_id},
-                "compacted_at": {"S": now},
-            } for w in written])
+            _batch_write([_index_item(signal, batch_id, w, now) for w in written])
+            if written:  # registry of services, for lookups across all of them
+                ddb.update_item(
+                    TableName=TABLE, Key={"pk": {"S": f"_services#{signal}"}, "sk": {"S": "all"}},
+                    UpdateExpression="ADD services :s",
+                    ExpressionAttributeValues={":s": {"SS": sorted({w["service"] for w in written})}},
+                )
             _maybe_crash(crash_after, "index")
         finally:
             shutil.rmtree(work, ignore_errors=True)
@@ -253,6 +258,31 @@ def _compact_chunk(signal, dt, hour, batch_id, crash_after):
 
 
 # ------------------------------------------------------------------- helpers
+
+def _index_item(signal, batch_id, w, now):
+    b = w["bloom"]
+    item = {
+        "pk": {"S": f"{signal}#{w['service']}"},
+        "sk": {"S": f"{w['min_ts']}#{batch_id}-{w['part']:03d}"},
+        "min_ts": {"S": w["min_ts"]},
+        "max_ts": {"S": w["max_ts"]},
+        "file_path": {"S": f"s3://{BUCKET}/{w['key']}"},
+        "row_count": {"N": str(w["rows"])},
+        "size_bytes": {"N": str(w["size_bytes"])},
+        "storage_class": {"S": "STANDARD"},
+        "batch_id": {"S": batch_id},
+        "compacted_at": {"S": now},
+        "bloom_m": {"N": str(b.m)},
+        "bloom_k": {"N": str(b.k)},
+        "bloom_n": {"N": str(b.n)},
+        "bloom_fields": {"L": [{"S": f} for f in ("trace_id", *BLOOM_ATTRIBUTES)]},
+    }
+    if "bloom_key" in w:
+        item["bloom_s3_key"] = {"S": w["bloom_key"]}
+    else:
+        item["bloom"] = {"B": b.to_bytes()}
+    return item
+
 
 def _acquire_lease(pk, context, seconds):
     """Conditional put: succeeds only if nobody holds the lease or it has

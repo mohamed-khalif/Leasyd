@@ -65,7 +65,7 @@ def state(tmp_path):
         rows += duckdb.sql(f"SELECT count(*) FROM read_parquet('{p}')").fetchone()[0]
     items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
     index = [i for i in items if not i["pk"]["S"].startswith("_")]
-    internal = [i for i in items if i["pk"]["S"].startswith("_")]
+    internal = [i for i in items if i["pk"]["S"].startswith(("_plan#", "_lease#"))]
     return incoming, parquet, rows, index, internal
 
 

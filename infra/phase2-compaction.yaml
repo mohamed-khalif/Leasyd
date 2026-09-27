@@ -25,6 +25,12 @@ Parameters:
     Type: Number
     Default: 10
     Description: Wait this long after an hour closes before compacting it (late data).
+  BloomAttributes:
+    Type: String
+    Default: request.id
+    Description: >
+      Comma-separated log attributes whose values go into each file's bloom
+      filter, alongside trace_id (Phase 3). Pick IDs people look up one at a time.
   AllowCrashInjection:
     Type: String
     Default: "true"
@@ -85,6 +91,7 @@ Resources:
           INDEX_TABLE: !Ref IndexTable
           WORKER_FUNCTION: obs-compaction-worker
           ALLOW_CRASH_INJECTION: !Ref AllowCrashInjection
+          BLOOM_ATTRIBUTES: !Ref BloomAttributes
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "2" }

@@ -106,21 +106,27 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 ## Phase 3: Metadata index
 
 **Build**
-- DynamoDB table, on-demand billing:
+- DynamoDB table `obs-index` (created in Phase 2), on-demand billing:
   - **Partition key:** `signal#service`
-  - **Sort key:** `min_ts#file_id`
+  - **Sort key:** `min_ts#<batch_id>-NNN`
   - **Attributes:**
     - `max_ts`, `file_path`, `row_count`, `size_bytes`
     - `storage_class`: set when lifecycle rules move the file, for cost estimates
-    - `bloom`: the bloom filter for high-cardinality fields (trace_id, request_id, etc.). Stored inline if under about 300 KB. Otherwise it goes to S3 and the item holds `bloom_s3_key`.
+    - `bloom`, `bloom_m`, `bloom_k`, `bloom_n`, `bloom_fields`: a bloom filter over every `trace_id` and `request.id` value in the file (the attributes are configurable: `BloomAttributes` on the Phase 2 stack). Sized for 1% false positives, about 10 bits per distinct value. Stored inline if under 300 KB (~250,000 values); otherwise it goes to `{signal}/_bloom/` in S3 and the item holds `bloom_s3_key`.
+  - A `_services#{signal}` item lists every service seen, so a lookup that names no service can search them all.
 - The Phase 2 worker fills the index in the same pass, since it already reads every row.
-- **Range lookup:** for `[t0, t1]`, query `min_ts BETWEEN (t0 − 1h) AND t1`, then filter `max_ts ≥ t0`. The one-hour lookback works because no file spans more than one hour.
+- **Lookup Lambda** `obs-index-lookup` (runs as the read-only query role). Input: services (optional), start, end, and optionally `match` on a trace or request ID. Output: the files to read, plus how many candidates each step kept.
+  - **Time range:** for `[t0, t1]`, query `min_ts BETWEEN (t0 − 1h) AND t1`, then filter `max_ts ≥ t0`. The one-hour lookback works because no file spans more than one hour. No S3 listing.
+  - **ID match:** drop every file whose bloom filter says the ID is certainly absent. Files indexed before blooms existed are never dropped.
+  - Phase 4 imports the same module rather than calling the Lambda, to save a network hop.
 
-**Test on AWS**
-- Write a small Lambda that takes a time range and a service and returns file paths. Compare its result with a naive S3 listing of the same range: the counts should show real pruning.
-- Build a test file that crosses an hour boundary within its own hour (e.g. 10:40–10:59). Query from 10:50 and confirm the file is returned.
-- Look up a known trace_id and confirm the bloom filters rule out most files.
-- Watch consumed capacity in CloudWatch and confirm cost is near zero at idle.
+**Test on AWS** (`infra/phase3-test.sh`)
+- Seed 3 hours × 3 services of logs, each record with its own random trace and request ID, and compact them.
+- A time-range lookup for one service returns only the overlapping files, far fewer than an S3 listing of the same day.
+- A file that starts before the range is included; one that ends before it is excluded.
+- A trace ID or request ID lookup keeps about 1 of the 9 files, and it's the right one.
+- Athena confirms that file really holds the ID (no false negatives).
+- Report warm lookup latency and DynamoDB read units, and the table's consumed capacity at idle.
 
 ## Phase 4: Single-worker query path
 

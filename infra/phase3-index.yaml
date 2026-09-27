@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase 3 index lookup for the S3-native observability platform: a Lambda
+  that answers "which Parquet files could hold rows for these services, this
+  time range, and (optionally) this trace or request id?" from the obs-index
+  table, using each file's time range and bloom filter. Requires obs-phase2.
+  Deploy through infra/deploy-phase3.sh, which builds and uploads the code.
+
+Resources:
+  LookupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-index-lookup
+      RetentionInDays: 14
+
+  LookupFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LookupLogGroup
+    Properties:
+      FunctionName: obs-index-lookup
+      Description: Returns the Parquet files a query needs to read
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: lookup.handler
+      Code: ../services/compaction/build
+      # Created in phase 0: read-only on the data and the index.
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-query"
+      MemorySize: 512
+      Timeout: 30
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: obs-index
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "3" }
+
+Outputs:
+  LookupFunction:
+    Value: !Ref LookupFunction

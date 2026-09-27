@@ -68,3 +68,19 @@ infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInj
 ```
 
 Confirm the SNS subscription email so the stuck-compaction alarm can reach you.
+
+## Phase 3: index lookup
+
+Compaction now builds a bloom filter per Parquet file over `trace_id` and `request.id`
+(set `BloomAttributes` on the Phase 2 stack to change the attributes), and records every
+service seen. `phase3-index.yaml` adds `obs-index-lookup`, a Lambda that returns the files
+a query needs for given services, a time range and an optional trace or request ID. It
+shares the Lambda bundle in `services/compaction/`.
+
+```bash
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
+infra/deploy-phase3.sh
+infra/phase3-test.sh
+```
+
+Files compacted before this change have no bloom filter; lookups never skip them.

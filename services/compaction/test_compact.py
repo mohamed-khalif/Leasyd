@@ -5,6 +5,7 @@ import os
 import duckdb
 import pytest
 
+import bloom
 import compact
 
 H20 = 1790452800 * 10**9  # 2026-09-26T20:00:00Z in ns
@@ -98,7 +99,8 @@ def test_same_inputs_same_outputs(tmp_path):
     f = batch(tmp_path / "a.json.gz", "api", [rec(H20 + n) for n in range(100)])
     w1 = compact.compact_logs([f], str(tmp_path / "o1"), "b1", "2026-09-26", "20")
     w2 = compact.compact_logs([f], str(tmp_path / "o2"), "b1", "2026-09-26", "20")
-    strip = lambda ws: [{k: v for k, v in w.items() if k != "path"} for w in ws]
+    strip = lambda ws: [{**{k: v for k, v in w.items() if k not in ("path", "bloom")},
+                         "bloom": w["bloom"].to_bytes()} for w in ws]
     assert strip(w1) == strip(w2)
 
 
@@ -110,3 +112,27 @@ def test_large_group_split_into_time_ordered_parts(tmp_path):
         "part-b1-000.parquet", "part-b1-001.parquet", "part-b1-002.parquet"]
     for a, b in zip(written, written[1:]):
         assert a["max_ts"] <= b["min_ts"]  # consecutive, non-overlapping time slices
+
+
+def test_bloom_covers_trace_and_request_ids(tmp_path):
+    recs = [rec(H20 + n, attrs=[{"key": "request.id", "value": {"stringValue": f"REQ-{n}"}}]) for n in range(50)]
+    for n, r in enumerate(recs):
+        r["traceId"] = f"{n:032X}"
+    f = batch(tmp_path / "a.json.gz", "api", recs)
+    [w] = compact.compact_logs([f], str(tmp_path / "o"), "b1", "2026-09-26", "20")
+    b = w["bloom"]
+    assert b.n == 100
+    assert all(b.might_contain(bloom.term("trace_id", f"{n:032x}")) for n in range(50))
+    assert all(b.might_contain(bloom.term("request.id", f"req-{n}")) for n in range(50))
+    assert not b.might_contain(bloom.term("trace_id", "f" * 32))
+
+
+def test_bloom_per_part_only_holds_that_parts_ids(tmp_path):
+    recs = [rec(H20 + n * 10**6) for n in range(20)]
+    for n, r in enumerate(recs):
+        r["traceId"] = f"{n:032x}"
+    f = batch(tmp_path / "a.json.gz", "api", recs)
+    w0, w1 = compact.compact_logs([f], str(tmp_path / "o"), "b1", "2026-09-26", "20", max_rows_per_file=10)
+    assert w0["bloom"].might_contain(bloom.term("trace_id", f"{3:032x}"))
+    assert not w1["bloom"].might_contain(bloom.term("trace_id", f"{3:032x}"))
+    assert w1["bloom"].might_contain(bloom.term("trace_id", f"{13:032x}"))
