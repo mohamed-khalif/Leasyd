@@ -160,13 +160,14 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - An S3 event (via EventBridge) on each new raw file triggers `obs-recent-indexer`, which indexes it as `kind=raw` entries: one per (service, event hour), with time range, row count and bloom filter. It uses compaction's own parsing code, so both see the same rows.
   - Lookups return raw files alongside compacted Parquet, marked by `kind`, so the query engine (Phase 4) reads both.
   - Handover: each raw file belongs to its arrival hour's compaction plan. While the plan is `planned`, raw entries are visible and the new Parquet entries hidden; one write marks it `committed`, which flips both; cleanup then deletes the raw entries and files. A search never counts a record twice or misses it, whatever step a crash interrupts.
-- **T4. Traces and metrics compaction.** Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
+- **T4. Traces and metrics compaction.** ✅ Deployed and tested on AWS: 300 spans and 200 metric points (gauge, sum, histogram) sent through the endpoint; findable in 35 s (spans) and 64 s (metrics: Firehose delivered that file ~30 s later than the spans file sent at the same moment; the indexer itself takes ~1 s); trace ID lookups hit the right file before and after compaction; exact counts after compaction; Athena returns the values sent. Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
   - `obs.traces`: one row per span at its start time, events and links nested. `obs.metrics`: one row per data point; all five OTLP metric types in one table, `metric_type` saying which columns are set, sorted by metric then time.
   - Same fast lane, handover, chunking and crash safety as logs: one code path, parameterised by signal.
   - Not yet: metric exemplars (they would link metrics to traces); spans are placed by start time, so a lookup finds a long span by when it started.
 - **T5. Tenant operations.** Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
 - **T6. Scale, fault and soak tests** against the targets above.
   - Ramp load; inject faults under load (kill collector tasks, force S3 and DynamoDB throttling, lose an AZ); run for several days at steady load.
+  - Freshness under load: a new stream's Firehose delivery sometimes takes ~60 s (seen once in T4); measure the distribution across many streams.
   - Known issue to fix here: bloom filters stored inside index items make wide time-range lookups read ~48 KB per file. Move them out of the items, with a coarser per-day filter checked first.
   - The dispatcher lists every tenant's raw folders each run; check it stays within its timeout at 100+ tenants.
 - **Also:** configurable bloom attributes cover common request-ID names by default (`request.id`, `http.request_id`, `request_id`, `x-request-id`).

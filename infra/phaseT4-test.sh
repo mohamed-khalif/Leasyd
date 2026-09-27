@@ -99,7 +99,7 @@ for sig in traces metrics; do
 done
 
 START="$(date -u -d '-10 min' +%FT%TZ)"; END="$(date -u -d '+10 min' +%FT%TZ)"
-q() { echo "{\"tenant\":\"${T}\",\"signal\":\"$1\",\"services\":[\"t4-svc\"],\"start\":\"${START}\",\"end\":\"${END}\"$2}"; }
+q() { echo "{\"tenant\":\"${T}\",\"signal\":\"$1\",\"services\":[\"t4-svc\"],\"start\":\"${START}\",\"end\":\"${END}\"${2:-}}"; }
 rows_sum="sum(f['row_count'] for f in d['files'])"
 kinds="sorted({f['kind'] for f in d['files']})"
 declare -A WANT=([traces]=$SPANS [metrics]=$(( GAUGE + SUM + HIST ))) DT HR
