@@ -40,7 +40,7 @@ invoke() {  # invoke <function> <payload-json> -> sets RESULT
   RESULT="$(cat "$out" 2>/dev/null)"; rm -f "$out"
   (( rc == 0 )) && [[ "$err" == None || -z "$err" ]]
 }
-jq_py() { python3 -c "import json,sys; d=json.loads(sys.argv[1]); print($2)" "$RESULT"; }
+jq_py() { python3 -c "import json,sys; d=json.loads(sys.argv[1]); print($1)" "$RESULT"; }
 
 # ---- 1. Seed (skipped if the seed data is already compacted) ----
 have=$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix "data/tenant=${TENANT}/logs/dt=${DT}/" \
@@ -177,12 +177,12 @@ fi
 echo "INFO  for comparison, Athena scanning every file for that trace: ${ATH_BYTES} bytes, ${ATH_MS} ms"
 
 # ---- 5. Tenant isolation ----
-lookup "${RANGE}}" && {
+lookup "{${RANGE}}" && {
   foreign=$(jq_py "sum(1 for f in d['files'] if '/tenant=${TENANT}/' not in f['file_path'])")
   (( foreign == 0 )) && pass "${TENANT} lookup over every hour: $(n_files) files, none from another tenant" \
     || fail "${TENANT} lookup returned ${foreign} file(s) from another tenant"; }
 read -r osvc oh otid orid < "$WORK/other_sample.tsv"
-lookup "${RANGE},\"match\":{\"trace_id\":\"${otid}\"}}" && {
+lookup "{${RANGE},\"match\":{\"trace_id\":\"${otid}\"}}" && {
   foreign=$(jq_py "sum(1 for f in d['files'] if '/tenant=${TENANT}/' not in f['file_path'])")
   (( foreign == 0 )) && pass "${TENANT} searching ${OTHER}'s trace id: $(n_files) file(s), none of ${OTHER}'s" \
     || fail "${TENANT} searching ${OTHER}'s trace id returned ${OTHER}'s file"; }
