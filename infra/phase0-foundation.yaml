@@ -150,6 +150,8 @@ Resources:
               - s3:PutObject
               - s3:DeleteObject
               - s3:AbortMultipartUpload
+              - s3:GetBucketLocation            # Firehose delivery (T2)
+              - s3:ListBucketMultipartUploads   # Firehose delivery (T2)
             Resource:
               - !GetAtt DataBucket.Arn
               - !Sub "${DataBucket.Arn}/*"
@@ -174,6 +176,12 @@ Resources:
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-*"
               - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:obs-*"
               - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:obs-*"
+          - Sid: TenantIngestStreams
+            Effect: Allow
+            Action:
+              - firehose:PutRecord
+              - firehose:PutRecordBatch
+            Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
           - Sid: TenantScopedReads
             Effect: Allow
             Action:

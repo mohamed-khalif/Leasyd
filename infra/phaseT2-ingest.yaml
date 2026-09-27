@@ -1,11 +1,13 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Phase T2 authenticated ingest for the S3-native observability platform:
-  a public HTTPS OTLP/HTTP endpoint (API Gateway) where each request carries
-  a tenant API key. A Lambda authorizer maps the key to a tenant; the gateway
-  forwards the request through a VPC link to the internal collector load
-  balancer (obs-phase1) with the tenant in the x-obs-tenant header. Usage
-  plans rate-limit per key. Deploy with infra/deploy-phaseT2.sh.
+  Phase T2 authenticated, serverless ingest for the S3-native observability
+  platform: a public HTTPS OTLP/HTTP endpoint (API Gateway) where each
+  request carries a tenant API key. A Lambda authorizer maps the key to a
+  tenant; the ingest Lambda converts the OTLP request and puts it on that
+  tenant's own Firehose stream (obs-t-<tenant>-<signal>, created by
+  infra/tenant.sh), which batches it into s3://.../_incoming/tenant=<T>/.
+  Usage plans rate-limit per key. Nothing runs, or costs, while idle.
+  Deploy with infra/deploy-phaseT2.sh.
 
 Parameters:
   StageName:
@@ -82,7 +84,7 @@ Resources:
       Runtime: python3.12
       Architectures: [arm64]
       Handler: authorizer.handler
-      Code: ../services/ingest
+      Code: ../services/ingest/build
       Role: !GetAtt AuthorizerRole.Arn
       MemorySize: 256
       Timeout: 5
@@ -100,6 +102,96 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/authorizers/${Authorizer}"
+
+  # ---------- Ingest ----------
+
+  IngestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-ingest
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: put-tenant-streams
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [firehose:PutRecord, firehose:PutRecordBatch]
+                Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-ingest
+      RetentionInDays: 14
+
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: IngestLogGroup
+    Properties:
+      FunctionName: obs-ingest
+      Description: OTLP/HTTP -> the tenant's Firehose stream
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: ingest.handler
+      Code: ../services/ingest/build
+      Role: !GetAtt IngestRole.Arn
+      MemorySize: 1024
+      Timeout: 28   # just under API Gateway's 29 s integration limit
+      Environment:
+        Variables:
+          STREAM_PREFIX: obs-t-
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  IngestPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/v1/*"
+
+  # Assumed by each tenant's Firehose streams to write into _incoming/.
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-firehose
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: firehose.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "sts:ExternalId": !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: deliver-incoming
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket, s3:ListBucketMultipartUploads]
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload, s3:GetObject]
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
 
   # ---------- API ----------
 
@@ -125,12 +217,6 @@ Resources:
       IdentitySource: method.request.header.x-api-key
       AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations"
       AuthorizerResultTtlInSeconds: 300
-
-  VpcLink:
-    Type: AWS::ApiGateway::VpcLink
-    Properties:
-      Name: obs-collector
-      TargetArns: [!ImportValue obs-collector-nlb-arn]
 
   V1Resource:
     Type: AWS::ApiGateway::Resource
@@ -159,16 +245,11 @@ Resources:
       AuthorizerId: !Ref Authorizer
       ApiKeyRequired: true
       Integration:
-        Type: HTTP_PROXY
+        # The tenant reaches the Lambda in requestContext.authorizer, which
+        # only the authorizer can set.
+        Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        ConnectionType: VPC_LINK
-        ConnectionId: !Ref VpcLink
-        Uri: !Sub
-          - "http://${Nlb}:4318/v1/logs"
-          - Nlb: !ImportValue obs-collector-nlb-dns
-        # Set by the gateway from the authorizer, overwriting any client value.
-        RequestParameters:
-          integration.request.header.x-obs-tenant: context.authorizer.tenant
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
         TimeoutInMillis: 29000
 
   TracesMethod:
@@ -181,15 +262,11 @@ Resources:
       AuthorizerId: !Ref Authorizer
       ApiKeyRequired: true
       Integration:
-        Type: HTTP_PROXY
+        # The tenant reaches the Lambda in requestContext.authorizer, which
+        # only the authorizer can set.
+        Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        ConnectionType: VPC_LINK
-        ConnectionId: !Ref VpcLink
-        Uri: !Sub
-          - "http://${Nlb}:4318/v1/traces"
-          - Nlb: !ImportValue obs-collector-nlb-dns
-        RequestParameters:
-          integration.request.header.x-obs-tenant: context.authorizer.tenant
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
         TimeoutInMillis: 29000
 
   MetricsMethod:
@@ -202,20 +279,16 @@ Resources:
       AuthorizerId: !Ref Authorizer
       ApiKeyRequired: true
       Integration:
-        Type: HTTP_PROXY
+        # The tenant reaches the Lambda in requestContext.authorizer, which
+        # only the authorizer can set.
+        Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        ConnectionType: VPC_LINK
-        ConnectionId: !Ref VpcLink
-        Uri: !Sub
-          - "http://${Nlb}:4318/v1/metrics"
-          - Nlb: !ImportValue obs-collector-nlb-dns
-        RequestParameters:
-          integration.request.header.x-obs-tenant: context.authorizer.tenant
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
         TimeoutInMillis: 29000
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV1:
+  DeploymentV2:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod]
     Properties:
@@ -225,7 +298,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV1
+      DeploymentId: !Ref DeploymentV2
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"
@@ -275,3 +348,6 @@ Outputs:
     Value: !Ref TestTinyPlan
   TenantsTable:
     Value: !Ref TenantsTable
+  FirehoseRoleArn:
+    Description: Delivery role for tenant streams (used by infra/tenant.sh).
+    Value: !GetAtt FirehoseRole.Arn

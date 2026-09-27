@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Uploads the authorizer code and deploys obs-phaseT2 (needs obs-phase1's
-# collector load balancer). Extra arguments go to `cloudformation deploy`.
+# Builds and uploads the ingest + authorizer code and deploys obs-phaseT2.
+# Extra arguments go to `cloudformation deploy`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${AWS_DEFAULT_REGION:?set AWS_DEFAULT_REGION}"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 
+infra/build-ingest.sh
 aws cloudformation package \
   --template-file infra/phaseT2-ingest.yaml \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phaseT2 \

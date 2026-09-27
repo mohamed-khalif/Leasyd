@@ -208,6 +208,8 @@ def put_records(stream, records):
                                                  Records=[{"Data": r} for r in pending])
             except firehose.exceptions.ResourceNotFoundException:
                 raise HttpError(503, "tenant ingest stream not provisioned")
+            except firehose.exceptions.ResourceInUseException:
+                raise HttpError(503, "tenant ingest stream not ready yet; retry")
             except firehose.exceptions.ServiceUnavailableException:
                 resp = {"FailedPutCount": len(pending),
                         "RequestResponses": [{"ErrorCode": "ServiceUnavailable"}] * len(pending)}

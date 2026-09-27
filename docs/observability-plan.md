@@ -24,8 +24,8 @@ The platform separates two concerns that traditional observability tools bundle 
 
 | Component | AWS service |
 |---|---|
-| Agents/collectors | OpenTelemetry Collector on ECS Fargate. One agent for all three signal types. |
-| Cold-path writer | The collector's S3 exporter, writing OTLP JSON to `_incoming/` |
+| Agents/collectors | Customers' OpenTelemetry SDKs (or their own collectors) send OTLP/HTTP with an API key |
+| Cold-path writer | API Gateway → ingest Lambda → a Firehose stream per tenant and signal, writing OTLP JSON to `_incoming/tenant=<T>/` (Phase T2) |
 | Cold storage | S3 |
 | Compaction | Lambda: a dispatcher runs on an EventBridge schedule and starts one worker per partition |
 | Metadata index | DynamoDB (on-demand) |
@@ -149,11 +149,13 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - Raw: `_incoming/tenant=<T>/<signal>/dt=/hour=/`. Compacted: `data/tenant=<T>/<signal>/dt=/hour=/service=/`. Lifecycle tiering moves to the `data/` prefix.
   - Index keys become `<T>#<signal>#<service>`; every internal record carries the tenant.
   - Lookups require a tenant and read through a tenant-scoped role (`obs-tenant-reader`) that IAM restricts to `data/tenant=<T>/*` and index keys starting `<T>#`.
-- **T2. Authenticated, durable, autoscaling ingest.**
-  - API Gateway (TLS) → Lambda authorizer (API key → tenant, from an `obs-tenants` table) → VPC link → internal load balancer → collector tasks.
-  - The gateway passes the tenant ID as a header; the collector stamps it on every record, overriding anything the client sent, and batches per tenant.
+- **T2. Authenticated, serverless ingest.**
+  - API Gateway (TLS) → Lambda authorizer (API key → tenant, from an `obs-tenants` table) → ingest Lambda → the tenant's own Firehose stream per signal → `_incoming/tenant=<T>/<signal>/`.
+  - The tenant comes only from the authorizer; client-sent `obs.*` attributes are stripped.
+  - Durability: the client gets 200 only once Firehose has stored the records; otherwise 503 and the SDK retries.
   - Per-tenant throttling and quotas via API Gateway usage plans.
-  - Collector: at least 2 tasks across AZs, CPU-based autoscaling, batches bounded by bytes as well as records (so very large log lines can't create a batch too big to compact), and an on-disk queue so a crashed task's buffered data isn't lost.
+  - No servers: nothing runs or costs while idle. (A first version with an OpenTelemetry Collector fleet behind a load balancer was built and tested locally, then replaced before deployment: it cost ~$75/month idle, and every job it did has a serverless equivalent.)
+  - One Firehose stream per tenant per signal rather than one shared stream with dynamic partitioning: no partitioning fees ($0.020/GB, JQ hours, per-object charges), no shared 500-active-partition limit, per-tenant throughput limits, and a 30 s flush. Firehose bills each record as at least 5 KB, so tiny requests cost more per byte; T6 measures it.
 - **T3. Fast lane for recent data (freshness).**
   - The collector flushes every few seconds. An S3 event on each new raw file triggers a small Lambda that indexes it as a *recent* file (tenant, service, time range).
   - Lookups return recent raw files alongside compacted Parquet, so the query engine reads both.

@@ -2,10 +2,10 @@
 
 Customers' OpenTelemetry SDKs send `x-api-key: <key>`. The key's SHA-256 is
 looked up in the obs-tenants table (keys themselves are never stored). On a
-match the request is allowed, the tenant is passed to the backend as the
-x-obs-tenant header (the gateway sets it, overwriting anything the client
-sent), and the key is returned as usageIdentifierKey so API Gateway applies
-the tenant's usage plan (rate limits and quotas).
+match the request is allowed, the tenant is passed to the ingest Lambda in
+requestContext.authorizer (which only the authorizer can set), and the key is
+returned as usageIdentifierKey so API Gateway applies the tenant's usage plan
+(rate limits and quotas).
 
 API Gateway caches the answer per key for a few minutes, so a revoked key is
 refused within the cache TTL; disabling the key in API Gateway (infra/tenant.sh

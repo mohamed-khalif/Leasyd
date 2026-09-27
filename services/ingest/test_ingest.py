@@ -26,6 +26,7 @@ class FakeFirehose:
     class exceptions:
         class ResourceNotFoundException(Exception): pass
         class ServiceUnavailableException(Exception): pass
+        class ResourceInUseException(Exception): pass
 
     def __init__(self, fail_first=0, missing=False):
         self.puts, self.fail_first, self.missing, self.calls = [], fail_first, missing, 0
