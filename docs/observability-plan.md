@@ -137,19 +137,33 @@ The platform will serve many separate customers (tenants). This phase comes befo
 - **Ingest:** a public HTTPS endpoint. Each customer's OpenTelemetry SDK sends OTLP/HTTP with an API key header. The key maps to a tenant ID; requests without a valid key are rejected. (OTLP/HTTP rather than gRPC, since API Gateway doesn't proxy gRPC; every OpenTelemetry SDK supports both.)
 - **Scale:** elastic. The collector autoscales behind a load balancer, compaction and queries fan out across Lambdas, and DynamoDB is on-demand. Per-tenant rate limits and quotas stop one customer from starving the others.
 
+**Targets** (volumes are unknown and will grow, so the aim is proving the design keeps scaling out, and measuring cost as it does)
+- **Freshness:** a log line is searchable within **60 seconds** of arriving.
+- **Search speed:** 1 day of one tenant's logs in **under 5 seconds**; a trace or request ID lookup across 30 days in **under 3 seconds**.
+- **Tenants:** about 100, of mixed sizes.
+- **Durability:** no accepted data is lost when a collector task, Lambda or availability zone fails.
+- **Load test:** ramp 1 → 10 → 50 GB/hour across 100 tenants; at each step record throughput, freshness, search speed and cost per GB, and fix the first bottleneck before stepping up.
+
 **Build, in order**
-- **T1. Tenant-aware storage, compaction and lookups.**
+- **T1. Tenant-aware storage, compaction and lookups.** ✅ Deployed and tested on AWS.
   - Raw: `_incoming/tenant=<T>/<signal>/dt=/hour=/`. Compacted: `data/tenant=<T>/<signal>/dt=/hour=/service=/`. Lifecycle tiering moves to the `data/` prefix.
   - Index keys become `<T>#<signal>#<service>`; every internal record carries the tenant.
   - Lookups require a tenant and read through a tenant-scoped role (`obs-tenant-reader`) that IAM restricts to `data/tenant=<T>/*` and index keys starting `<T>#`.
-- **T2. Authenticated, autoscaling ingest.**
-  - API Gateway (TLS) → Lambda authorizer (API key → tenant, from a `obs-tenants` table) → VPC link → internal load balancer → collector tasks.
+- **T2. Authenticated, durable, autoscaling ingest.**
+  - API Gateway (TLS) → Lambda authorizer (API key → tenant, from an `obs-tenants` table) → VPC link → internal load balancer → collector tasks.
   - The gateway passes the tenant ID as a header; the collector stamps it on every record, overriding anything the client sent, and batches per tenant.
   - Per-tenant throttling and quotas via API Gateway usage plans.
-  - Collector: at least 2 tasks across AZs, CPU-based autoscaling, batches bounded by bytes as well as records, so very large log lines can't create a batch too big to compact.
-- **T3. Traces and metrics compaction.** Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
-- **T4. Tenant operations.** Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
-- **T5. Scale test.** Ramp load across many tenants, step by step, until something saturates. Record ingest throughput, compaction lag and cost at each step, and fix the first bottleneck found.
+  - Collector: at least 2 tasks across AZs, CPU-based autoscaling, batches bounded by bytes as well as records (so very large log lines can't create a batch too big to compact), and an on-disk queue so a crashed task's buffered data isn't lost.
+- **T3. Fast lane for recent data (freshness).**
+  - The collector flushes every few seconds. An S3 event on each new raw file triggers a small Lambda that indexes it as a *recent* file (tenant, service, time range).
+  - Lookups return recent raw files alongside compacted Parquet, so the query engine reads both.
+  - When compaction commits a chunk, the chunk's recent-file entries are retired in the same step, so a search never counts a record twice or misses it during the handover.
+- **T4. Traces and metrics compaction.** Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
+- **T5. Tenant operations.** Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
+- **T6. Scale, fault and soak tests** against the targets above.
+  - Ramp load; inject faults under load (kill collector tasks, force S3 and DynamoDB throttling, lose an AZ); run for several days at steady load.
+  - Known issue to fix here: bloom filters stored inside index items make wide time-range lookups read ~48 KB per file. Move them out of the items, with a coarser per-day filter checked first.
+  - The dispatcher lists every tenant's raw folders each run; check it stays within its timeout at 100+ tenants.
 - **Also:** configurable bloom attributes cover common request-ID names by default (`request.id`, `http.request_id`, `request_id`, `x-request-id`).
 
 ## Phase 4: Single-worker query path
