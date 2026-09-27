@@ -106,7 +106,9 @@ def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memor
                              nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0),
                              {fallback_us} * 1000) AS ts_unix_nano,
                     nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0) AS observed_unix_nano,
-                    {_ATTR_MAP.format(a='res_attrs')} AS resource_attributes,
+                    -- obs.* are the collector's own routing labels (tenant, S3 prefix);
+                    -- the tenant is already in the path, so they aren't stored.
+                    {_ATTR_MAP.format(a="list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))")} AS resource_attributes,
                     scope_name,
                     lr.severityNumber AS severity_number,
                     lr.severityText AS severity_text,

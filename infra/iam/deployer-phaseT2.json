@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "LoadBalancer", "Effect": "Allow",
+      "Action": ["elasticloadbalancing:*"],
+      "Resource": "*" },
+    { "Sid": "Autoscaling", "Effect": "Allow",
+      "Action": ["application-autoscaling:*", "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms",
+                 "cloudwatch:DescribeAlarms"],
+      "Resource": "*" },
+    { "Sid": "ServiceLinkedRoles", "Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*",
+      "Condition": { "StringEquals": { "iam:AWSServiceName": [
+        "ecs.application-autoscaling.amazonaws.com",
+        "elasticloadbalancing.amazonaws.com",
+        "ops.apigateway.amazonaws.com" ] } } },
+    { "Sid": "ApiGateway", "Effect": "Allow",
+      "Action": ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE",
+                 "apigateway:TagResource", "apigateway:UntagResource"],
+      "Resource": ["arn:aws:apigateway:*::/restapis", "arn:aws:apigateway:*::/restapis/*",
+                   "arn:aws:apigateway:*::/vpclinks", "arn:aws:apigateway:*::/vpclinks/*",
+                   "arn:aws:apigateway:*::/usageplans", "arn:aws:apigateway:*::/usageplans/*",
+                   "arn:aws:apigateway:*::/apikeys", "arn:aws:apigateway:*::/apikeys/*",
+                   "arn:aws:apigateway:*::/tags/*"] },
+    { "Sid": "TenantRegistry", "Effect": "Allow",
+      "Action": ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan", "dynamodb:GetItem",
+                 "dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups"],
+      "Resource": "arn:aws:dynamodb:*:*:table/obs-tenants" },
+    { "Sid": "ExportsForStacks", "Effect": "Allow",
+      "Action": ["cloudformation:ListExports", "cloudformation:ListImports"], "Resource": "*" }
+  ]
+}

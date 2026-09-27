@@ -19,7 +19,7 @@ MODE="${1:-}"
 : "${AWS_DEFAULT_REGION:?set AWS_DEFAULT_REGION}"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="obs-data-${ACCOUNT}-${AWS_DEFAULT_REGION}"
-TENANT="${TENANT:-default}"   # the collector files everything here until authenticated ingest (T2)
+TENANT="${TENANT:-default}"   # tenant under test (see infra/tenant.sh)
 WORKER=obs-compaction-worker
 TABLE=obs-index
 FAILED=0
@@ -66,20 +66,22 @@ invoke_worker() { invoke_lambda "$WORKER" "$1"; }
 
 # ------------------------------------------------------------------- load
 if [[ "$MODE" == load ]]; then
+  # Through the authenticated endpoint, as a real tenant would send.
+  # Needs API_KEY (from infra/tenant.sh create) and TENANT set to that key's tenant.
+  : "${API_KEY:?set API_KEY to a key from infra/tenant.sh create \$TENANT}"
   HOURS="${2:-3}"
-  CLUSTER="$(p1 ClusterName)"; SERVICE="$(p1 CollectorServiceName)"
-  TASK="$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" --desired-status RUNNING --query 'taskArns[0]' --output text)"
-  [[ -z "$TASK" || "$TASK" == None ]] && { echo "no running collector (CollectorDesiredCount=0?)"; exit 1; }
-  IP="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK" \
-    --query "tasks[0].attachments[0].details[?name=='privateIPv4Address'].value | [0]" --output text)"
+  CLUSTER="$(p1 ClusterName)"
+  ENDPOINT="$(aws cloudformation describe-stacks --stack-name obs-phaseT2 \
+    --query "Stacks[0].Outputs[?OutputKey=='IngestEndpoint'].OutputValue" --output text)"
+  HOST="${ENDPOINT#https://}"; HOST="${HOST%%/*}"; STAGE="/${ENDPOINT##*/}"
   RUN_ID="load-$(date -u +%Y%m%dT%H%M%S)"
   for svc in loadgen-a loadgen-b; do
     aws ecs run-task --cluster "$CLUSTER" --task-definition "$(p1 LoadgenTaskDefinition)" --launch-type FARGATE \
       --network-configuration "awsvpcConfiguration={subnets=[$(p1 SubnetIds)],securityGroups=[$(p1 LoadgenSecurityGroup)],assignPublicIp=ENABLED}" \
-      --overrides "{\"containerOverrides\":[{\"name\":\"loadgen\",\"command\":[\"logs\",\"--otlp-endpoint\",\"${IP}:4317\",\"--otlp-insecure\",\"--duration\",\"${HOURS}h\",\"--rate\",\"20\",\"--workers\",\"1\",\"--otlp-attributes\",\"service.name=\\\"${svc}\\\"\",\"--telemetry-attributes\",\"run.id=\\\"${RUN_ID}\\\"\"]}]}" \
+      --overrides "{\"containerOverrides\":[{\"name\":\"loadgen\",\"command\":[\"logs\",\"--otlp-http\",\"--otlp-endpoint\",\"${HOST}:443\",\"--otlp-http-url-path\",\"${STAGE}/v1/logs\",\"--otlp-header\",\"x-api-key=\\\"${API_KEY}\\\"\",\"--duration\",\"${HOURS}h\",\"--rate\",\"20\",\"--workers\",\"1\",\"--otlp-attributes\",\"service.name=\\\"${svc}\\\"\",\"--telemetry-attributes\",\"run.id=\\\"${RUN_ID}\\\"\"]}]}" \
       --query 'tasks[0].taskArn' --output text
   done
-  echo "Started ${HOURS}h of load, run id ${RUN_ID}. Run '$0 compare' once a full hour has closed (+10 min)."
+  echo "Started ${HOURS}h of load for tenant ${TENANT}, run id ${RUN_ID}. Run 'TENANT=${TENANT} $0 compare' once a full hour has closed (+10 min)."
   exit 0
 fi
 

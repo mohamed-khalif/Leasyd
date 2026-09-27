@@ -1,9 +1,12 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Phase 1 write path for the S3-native observability platform:
-  an OpenTelemetry Collector on ECS Fargate writing gzipped OTLP JSON to
-  s3://obs-data-.../_incoming/, a load generator task, and a Glue table +
-  Athena workgroup for checking the raw data. Requires the obs-phase0 stack.
+  Phase 1 write path for the S3-native observability platform (updated in
+  Phase T2): OpenTelemetry Collector tasks on ECS Fargate behind an internal
+  Network Load Balancer, autoscaling on CPU, writing gzipped OTLP JSON per
+  tenant to s3://obs-data-.../_incoming/tenant=<T>/. Traffic reaches them
+  only through the authenticated API (obs-phaseT2). Also a load generator
+  task, and a Glue table + Athena workgroup for checking raw data.
+  Requires the obs-phase0 stack.
   See docs/observability-plan.md.
 
 Parameters:
@@ -13,22 +16,24 @@ Parameters:
   LoadgenImage:
     Type: String
     Default: ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.161.0
-  CollectorDesiredCount:
+  CollectorMinTasks:
     Type: Number
-    Default: 1
-    AllowedValues: [0, 1]
-    Description: Set to 0 to stop paying for the collector between test runs.
-  BatchTimeout:
-    Type: String
-    Default: 60s
-    Description: How long the collector buffers before writing a file to S3.
-  DefaultTenant:
-    Type: String
-    Default: default
-    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$"
+    Default: 2
+    MinValue: 0
     Description: >
-      Tenant every record is filed under until authenticated ingest (Phase T2)
-      assigns a tenant per API key.
+      Minimum collector tasks (spread across two AZs). 0 stops the collector
+      between tests; 2+ for anything that must not lose availability.
+  CollectorMaxTasks:
+    Type: Number
+    Default: 20
+    Description: Autoscaling ceiling.
+  FlushTimeout:
+    Type: String
+    Default: 10s
+    Description: >
+      Longest the collector holds a tenant's data before writing it to S3.
+      Clients get their OK only after the write, so this is also the added
+      latency on each export.
 
 Mappings:
   Network:
@@ -131,10 +136,11 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: obs-collector
-      GroupDescription: OTLP from inside the VPC only
+      GroupDescription: OTLP/HTTP and health checks from the load balancer (inside the VPC) only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
-        - { IpProtocol: tcp, FromPort: 4317, ToPort: 4318, CidrIp: !FindInMap [Network, Vpc, Cidr], Description: OTLP gRPC and HTTP }
+        - { IpProtocol: tcp, FromPort: 4318, ToPort: 4318, CidrIp: !FindInMap [Network, Vpc, Cidr], Description: OTLP HTTP }
+        - { IpProtocol: tcp, FromPort: 13133, ToPort: 13133, CidrIp: !FindInMap [Network, Vpc, Cidr], Description: Health check }
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "1" }
@@ -197,8 +203,8 @@ Resources:
       Family: obs-collector
       RequiresCompatibilities: [FARGATE]
       NetworkMode: awsvpc
-      Cpu: "512"
-      Memory: "1024"
+      Cpu: "1024"
+      Memory: "2048"
       RuntimePlatform:
         CpuArchitecture: ARM64
         OperatingSystemFamily: LINUX
@@ -210,9 +216,12 @@ Resources:
           Image: !Ref CollectorImage
           Essential: true
           Command: ["--config=env:OTEL_CONFIG"]
+          # On scale-in or redeploy ECS sends SIGTERM; the collector flushes
+          # its batches (and answers the waiting clients) before exiting.
+          StopTimeout: 60
           PortMappings:
-            - { ContainerPort: 4317, Protocol: tcp }
             - { ContainerPort: 4318, Protocol: tcp }
+            - { ContainerPort: 13133, Protocol: tcp }
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -221,91 +230,200 @@ Resources:
               awslogs-stream-prefix: collector
           Environment:
             - Name: OTEL_CONFIG
-              # Raw files are partitioned by arrival time only. The S3 exporter
-              # takes its key from the first resource in a batch, so a
-              # service= partition here could file one service's data under
-              # another's name. Compaction splits by service and event time.
+              # Tested against the real collector binary and S3 by
+              # infra/test-collector-config.sh.
+              #
+              # - Tenant: the API gateway sets the x-obs-tenant header from the
+              #   caller's API key. Any obs.tenant the client sent is deleted
+              #   first, so a missing header can't let a client-chosen tenant
+              #   through; records without a tenant are dropped.
+              # - Durability: wait_for_result means a client's request is only
+              #   answered once its batch is in S3. If a task dies first, the
+              #   client sees an error and its SDK retries (via another task).
+              # - Batches are per tenant (partition on x-obs-tenant) and capped
+              #   by bytes, so one S3 object never mixes tenants and never
+              #   exceeds what compaction reads in one piece.
+              # - Raw files are partitioned by arrival time only; compaction
+              #   splits by service and event time.
               Value: !Sub
                 - |
+                  extensions:
+                    health_check:
+                      endpoint: 0.0.0.0:13133
                   receivers:
                     otlp:
                       protocols:
-                        grpc:
-                          endpoint: 0.0.0.0:4317
                         http:
                           endpoint: 0.0.0.0:4318
+                          include_metadata: true
                   processors:
                     memory_limiter:
                       check_interval: 1s
                       limit_percentage: 80
                       spike_limit_percentage: 20
-                    batch:
-                      timeout: ${BatchTimeout}
-                      send_batch_size: 20000
-                      send_batch_max_size: 40000
+                    resource/tenant:
+                      attributes:
+                        - key: obs.tenant
+                          action: delete
+                        - key: obs.tenant
+                          from_context: metadata.x-obs-tenant
+                          action: insert
+                    filter/no_tenant:
+                      error_mode: ignore
+                      logs:
+                        log_record:
+                          - resource.attributes["obs.tenant"] == nil
+                      traces:
+                        span:
+                          - resource.attributes["obs.tenant"] == nil
+                      metrics:
+                        metric:
+                          - resource.attributes["obs.tenant"] == nil
+                    transform/logs_prefix:
+                      error_mode: ignore
+                      log_statements:
+                        - context: resource
+                          statements:
+                            - set(attributes["obs.s3_prefix"], Concat(["_incoming/tenant=", attributes["obs.tenant"], "/logs"], ""))
+                    transform/traces_prefix:
+                      error_mode: ignore
+                      trace_statements:
+                        - context: resource
+                          statements:
+                            - set(attributes["obs.s3_prefix"], Concat(["_incoming/tenant=", attributes["obs.tenant"], "/traces"], ""))
+                    transform/metrics_prefix:
+                      error_mode: ignore
+                      metric_statements:
+                        - context: resource
+                          statements:
+                            - set(attributes["obs.s3_prefix"], Concat(["_incoming/tenant=", attributes["obs.tenant"], "/metrics"], ""))
                   exporters:
-                    awss3/logs:
+                    awss3/logs: &s3
                       marshaler: otlp_json
-                      s3uploader:
+                      s3uploader: &uploader
                         region: ${AWS::Region}
                         s3_bucket: ${Bucket}
-                        s3_prefix: _incoming/tenant=${Tenant}/logs
+                        # Only used if obs.s3_prefix is missing, which the
+                        # filter above prevents; nothing reads this prefix.
+                        s3_prefix: _incoming/_untenanted/logs
                         s3_partition_format: "dt=%Y-%m-%d/hour=%H"
                         compression: gzip
                         unique_key_func_name: uuidv7
+                      resource_attrs_to_s3:
+                        s3_prefix: obs.s3_prefix
+                      sending_queue:
+                        enabled: true
+                        wait_for_result: true
+                        block_on_overflow: true
+                        sizer: bytes
+                        queue_size: 536870912
+                        num_consumers: 32
+                        batch:
+                          flush_timeout: ${FlushTimeout}
+                          sizer: bytes
+                          min_size: 4194304
+                          max_size: 8388608
+                          partition:
+                            metadata_keys: [x-obs-tenant]
                     awss3/traces:
-                      marshaler: otlp_json
+                      <<: *s3
                       s3uploader:
-                        region: ${AWS::Region}
-                        s3_bucket: ${Bucket}
-                        s3_prefix: _incoming/tenant=${Tenant}/traces
-                        s3_partition_format: "dt=%Y-%m-%d/hour=%H"
-                        compression: gzip
-                        unique_key_func_name: uuidv7
+                        <<: *uploader
+                        s3_prefix: _incoming/_untenanted/traces
                     awss3/metrics:
-                      marshaler: otlp_json
+                      <<: *s3
                       s3uploader:
-                        region: ${AWS::Region}
-                        s3_bucket: ${Bucket}
-                        s3_prefix: _incoming/tenant=${Tenant}/metrics
-                        s3_partition_format: "dt=%Y-%m-%d/hour=%H"
-                        compression: gzip
-                        unique_key_func_name: uuidv7
+                        <<: *uploader
+                        s3_prefix: _incoming/_untenanted/metrics
                   service:
+                    extensions: [health_check]
                     pipelines:
                       logs:
                         receivers: [otlp]
-                        processors: [memory_limiter, batch]
+                        processors: [memory_limiter, resource/tenant, filter/no_tenant, transform/logs_prefix]
                         exporters: [awss3/logs]
                       traces:
                         receivers: [otlp]
-                        processors: [memory_limiter, batch]
+                        processors: [memory_limiter, resource/tenant, filter/no_tenant, transform/traces_prefix]
                         exporters: [awss3/traces]
                       metrics:
                         receivers: [otlp]
-                        processors: [memory_limiter, batch]
+                        processors: [memory_limiter, resource/tenant, filter/no_tenant, transform/metrics_prefix]
                         exporters: [awss3/metrics]
                 - Bucket: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
-                  Tenant: !Ref DefaultTenant
       Tags:
         - { Key: project, Value: obs }
-        - { Key: phase, Value: "1" }
+        - { Key: phase, Value: "T2" }
+
+  # Internal: reachable from inside the VPC only (API Gateway's VPC link
+  # lands here). No security group on the NLB itself; the collector's
+  # security group admits the VPC range.
+  CollectorNlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: obs-collector
+      Type: network
+      Scheme: internal
+      Subnets: [!Ref SubnetA, !Ref SubnetB]
+      LoadBalancerAttributes:
+        - { Key: load_balancing.cross_zone.enabled, Value: "true" }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  CollectorTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: obs-collector
+      TargetType: ip
+      Protocol: TCP
+      Port: 4318
+      VpcId: !Ref Vpc
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "13133"
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      TargetGroupAttributes:
+        # Longer than FlushTimeout, so requests on a draining task finish.
+        - { Key: deregistration_delay.timeout_seconds, Value: "45" }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  CollectorListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref CollectorNlb
+      Protocol: TCP
+      Port: 4318
+      DefaultActions:
+        - { Type: forward, TargetGroupArn: !Ref CollectorTargetGroup }
 
   CollectorService:
     Type: AWS::ECS::Service
-    DependsOn: DefaultRoute
+    DependsOn: [DefaultRoute, CollectorListener]
     Properties:
-      ServiceName: obs-collector
+      # New name for the load-balanced service (T2): attaching a load
+      # balancer replaces the service, and CloudFormation can only replace
+      # a named resource under a different name.
+      ServiceName: obs-collector-lb
       Cluster: !Ref Cluster
       TaskDefinition: !Ref CollectorTaskDefinition
       LaunchType: FARGATE
-      DesiredCount: !Ref CollectorDesiredCount
-      # Stop the old task before starting a new one, so a redeploy never has
-      # two collectors writing at once. Fine for a single-task test service.
+      DesiredCount: !Ref CollectorMinTasks
+      # Rolling: start new tasks before stopping old ones, never below the
+      # current count, so a redeploy doesn't drop capacity.
       DeploymentConfiguration:
-        MinimumHealthyPercent: 0
-        MaximumPercent: 100
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
         DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      HealthCheckGracePeriodSeconds: 30
+      LoadBalancers:
+        - ContainerName: collector
+          ContainerPort: 4318
+          TargetGroupArn: !Ref CollectorTargetGroup
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
@@ -314,7 +432,29 @@ Resources:
       PropagateTags: SERVICE
       Tags:
         - { Key: project, Value: obs }
-        - { Key: phase, Value: "1" }
+        - { Key: phase, Value: "T2" }
+
+  CollectorScaling:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub "service/${Cluster}/${CollectorService.Name}"
+      MinCapacity: !Ref CollectorMinTasks
+      MaxCapacity: !Ref CollectorMaxTasks
+
+  CollectorCpuScaling:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: obs-collector-cpu
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref CollectorScaling
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 60
+        ScaleOutCooldown: 60
+        ScaleInCooldown: 300
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
 
   # ---------- Load generator ----------
   # Run on demand with `aws ecs run-task` (see infra/phase1-test.sh);
@@ -444,6 +584,12 @@ Outputs:
     Value: !Ref Cluster
   CollectorServiceName:
     Value: !GetAtt CollectorService.Name
+  CollectorNlbArn:
+    Value: !Ref CollectorNlb
+    Export: { Name: obs-collector-nlb-arn }
+  CollectorNlbDns:
+    Value: !GetAtt CollectorNlb.DNSName
+    Export: { Name: obs-collector-nlb-dns }
   LoadgenTaskDefinition:
     Value: !Ref LoadgenTaskDefinition
   SubnetIds:

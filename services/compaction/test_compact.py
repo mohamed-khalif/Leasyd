@@ -136,3 +136,18 @@ def test_bloom_per_part_only_holds_that_parts_ids(tmp_path):
     assert w0["bloom"].might_contain(bloom.term("trace_id", f"{3:032x}"))
     assert not w1["bloom"].might_contain(bloom.term("trace_id", f"{3:032x}"))
     assert w1["bloom"].might_contain(bloom.term("trace_id", f"{13:032x}"))
+
+
+def test_collector_routing_labels_not_stored(tmp_path):
+    path = tmp_path / "a.json.gz"
+    doc = {"resourceLogs": [{"resource": {"attributes": [
+        {"key": "service.name", "value": {"stringValue": "api"}},
+        {"key": "obs.tenant", "value": {"stringValue": "acme"}},
+        {"key": "obs.s3_prefix", "value": {"stringValue": "_incoming/tenant=acme/logs"}},
+        {"key": "host.name", "value": {"stringValue": "h1"}}]},
+        "scopeLogs": [{"scope": {}, "logRecords": [rec(H20)]}]}]}
+    with gzip.open(path, "wt") as f:
+        f.write(json.dumps(doc))
+    [w], _ = run(tmp_path, [str(path)])
+    [(m,)] = read(w["path"], "SELECT resource_attributes FROM t")
+    assert m == {"service.name": "api", "host.name": "h1"}
