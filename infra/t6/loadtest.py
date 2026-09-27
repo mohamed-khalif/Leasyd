@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import boto3
+import botocore.config
 
 REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 KEYS_DEFAULT = os.path.expanduser("~/.obs-t6-keys.json")
@@ -42,7 +43,9 @@ PRICE = {
 MEMORY_MB = {"obs-ingest": 1024, "obs-ingest-authorizer": 256, "obs-recent-indexer": 2048,
              "obs-compaction-worker": 3008, "obs-compaction-dispatcher": 256, "obs-index-lookup": None}
 
-lam = boto3.client("lambda", region_name=REGION)
+# Tenant creation waits ~1 min for streams: don't time out (and silently retry) at 60 s.
+lam = boto3.client("lambda", region_name=REGION, config=botocore.config.Config(
+    read_timeout=900, retries={"max_attempts": 0, "mode": "standard"}))
 ddb = boto3.client("dynamodb", region_name=REGION)
 cw = boto3.client("cloudwatch", region_name=REGION)
 cfn = boto3.client("cloudformation", region_name=REGION)
@@ -102,7 +105,13 @@ def tenants_create(args):
         t = tenant_name(rank)
         if t in keys:
             return t, keys[t]
-        out = invoke("obs-tenant-admin", {"action": "create", "tenant": t})
+        try:
+            out = invoke("obs-tenant-admin", {"action": "create", "tenant": t})
+        except RuntimeError as e:
+            if "already exists" not in str(e):
+                raise
+            # Created by an earlier, interrupted run whose key was never saved: issue a new one.
+            out = invoke("obs-tenant-admin", {"action": "rotate", "tenant": t, "grace_hours": 0})
         n_services = max(2, round(20 * w[rank] / w[0]))  # biggest tenant 20 services, tail 2
         return t, {"key": out["api_key"], "rank": rank, "services": [f"svc-{i:02d}" for i in range(n_services)]}
 
