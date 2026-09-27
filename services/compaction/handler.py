@@ -44,6 +44,7 @@ import shutil
 import tempfile
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -65,12 +66,15 @@ MAX_INPUT_BYTES = int(os.environ.get("MAX_INPUT_BYTES", str(200 * 1024 * 1024)))
 MAX_ROWS_PER_FILE = int(os.environ.get("MAX_ROWS_PER_FILE", str(compact.DEFAULT_MAX_ROWS_PER_FILE)))
 BLOOM_ATTRIBUTES = tuple(a for a in os.environ.get(
     "BLOOM_ATTRIBUTES", ",".join(compact.DEFAULT_BLOOM_ATTRIBUTES)).split(",") if a)
-# Blooms up to this size go in the index item itself (DynamoDB items max out
-# at 400 KB); bigger ones go to S3 next to the data. 300 KB is ~250k IDs.
-BLOOM_INLINE_MAX_BYTES = int(os.environ.get("BLOOM_INLINE_MAX_BYTES", str(300 * 1024)))
+# Blooms up to this size go in the index item itself; bigger ones go to S3
+# next to the data. Kept small because a lookup reads whole index items
+# (DynamoDB bills and pages by item size), so large inline blooms would make
+# every time-range lookup slow and costly. 1 KB holds ~850 IDs.
+BLOOM_INLINE_MAX_BYTES = int(os.environ.get("BLOOM_INLINE_MAX_BYTES", "1024"))
 ALLOW_CRASH_INJECTION = os.environ.get("ALLOW_CRASH_INJECTION") == "true"
 WORKER_LEASE_SECONDS = 16 * 60      # longer than the worker's 15-minute maximum timeout
-DISPATCHER_LEASE_SECONDS = 3 * 60   # longer than the dispatcher's 2-minute timeout
+DISPATCHER_LEASE_SECONDS = 6 * 60   # longer than the dispatcher's 5-minute timeout
+LIST_THREADS = 16
 
 s3 = boto3.client("s3")
 ddb = boto3.client("dynamodb")
@@ -174,20 +178,30 @@ def _put_oldest_age_metric(signal, now, partitions):
 
 
 def _incoming_partitions(signal):
-    """(tenant, dt, hour, hour start) for every raw hour of every tenant."""
+    """(tenant, dt, hour, hour start) for every raw hour of every tenant.
+    Tenants are listed in parallel: each needs a few LIST calls, and there
+    may be hundreds of tenants."""
+    tenants = []
     for tenant_prefix in _common_prefixes("_incoming/"):
         tenant = tenant_prefix.rstrip("/").rsplit("tenant=", 1)[-1]
         try:
-            layout.check_tenant(tenant)
+            tenants.append(layout.check_tenant(tenant))
         except ValueError:
             print(json.dumps({"skipped_prefix": tenant_prefix}))  # not a tenant=<T>/ folder
-            continue
+
+    def hours_of(tenant):
+        out = []
         for dt_prefix in _common_prefixes(layout.incoming_prefix(tenant, signal)):
             dt = dt_prefix.rstrip("/").rsplit("dt=", 1)[1]
             for hour_prefix in _common_prefixes(dt_prefix):
                 hour = hour_prefix.rstrip("/").rsplit("hour=", 1)[1]
                 start = datetime.strptime(f"{dt} {hour}", "%Y-%m-%d %H").replace(tzinfo=timezone.utc)
-                yield tenant, dt, hour, start
+                out.append((tenant, dt, hour, start))
+        return out
+
+    with ThreadPoolExecutor(LIST_THREADS) as pool:
+        for hours in pool.map(hours_of, tenants):
+            yield from hours
 
 
 def _common_prefixes(prefix):
@@ -370,6 +384,8 @@ def recent_indexer(event, context):
     ddb.put_item(TableName=TABLE, Item={
         "pk": {"S": layout.raw_files_pk(tenant, signal, dt, hour)}, "sk": {"S": key},
         "entries": {"L": [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items]},
+        # bloom objects of those entries, deleted with them
+        "blooms": {"L": [{"S": it["bloom_s3_key"]["S"]} for it in items if "bloom_s3_key" in it]},
     })
     _batch_write(items)
     if items:
@@ -392,6 +408,7 @@ def _retire_raw_entries(tenant, signal, dt, hour, keys):
             for rec in resp.get("Responses", {}).get(TABLE, []):
                 entries = [e["M"] for e in rec.get("entries", {}).get("L", [])]
                 _batch_delete([{"pk": e["pk"], "sk": e["sk"]} for e in entries])
+                _delete_keys([b["S"] for b in rec.get("blooms", {}).get("L", [])])
                 ddb.delete_item(TableName=TABLE, Key={"pk": rec["pk"], "sk": rec["sk"]})
             req = resp.get("UnprocessedKeys") or None
 

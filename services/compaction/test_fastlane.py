@@ -190,3 +190,32 @@ def test_traces_and_metrics_fast_lane_then_compaction(aws, signal):
         assert visible(lookup, signal=signal, match={"trace_id": "f" * 32})[1] == 0
     items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
     assert not [i for i in items if "#_raw#" in i["pk"]["S"] or "#_plan#" in i["pk"]["S"]]
+
+
+def bloom_objects():
+    objs = boto3.client("s3").list_objects_v2(Bucket="obs-data-test").get("Contents", [])
+    return sorted(o["Key"] for o in objs if "/_bloom/" in o["Key"])
+
+
+def test_blooms_in_s3_still_prune_and_raw_ones_are_cleaned_up(aws, monkeypatch):
+    """Blooms bigger than the inline limit live in S3 (here: all of them)."""
+    handler, lookup = aws
+    monkeypatch.setattr(handler, "BLOOM_INLINE_MAX_BYTES", 0)
+    put_raw()
+    handler.recent_indexer(event(), None)
+    raw_blooms = bloom_objects()
+    assert len(raw_blooms) == 2 and all("/_bloom/raw-" in k for k in raw_blooms)
+    items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
+    assert not any("bloom" in i for i in items)  # nothing inline
+    web7 = {"trace_id": "web-7".encode().hex().ljust(32, "0")[:32]}
+    out = lookup.lookup(**RANGE, match=web7)
+    assert [f["service"] for f in out["files"]] == ["web"] and out["stats"]["bloom_fetches"] == 2
+
+    [b] = handler.dispatcher({"plan_only": HOUR}, ctx(0))["planned"]
+    handler.worker({**HOUR, "batch_id": b}, ctx(1))
+    after = bloom_objects()
+    assert not any("/_bloom/raw-" in k for k in after)       # retired with their entries
+    assert len(after) == 2                                    # the Parquet files' blooms
+    out = lookup.lookup(**RANGE, match=web7)
+    assert [(f["service"], f["kind"]) for f in out["files"]] == [("web", "parquet")]
+    assert lookup.lookup(**RANGE, match={"trace_id": "f" * 32})["files"] == []

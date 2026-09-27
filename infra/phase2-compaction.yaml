@@ -142,7 +142,7 @@ Resources:
       Code: ../services/compaction/build
       Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
       MemorySize: 256
-      Timeout: 120
+      Timeout: 300   # lists every tenant's raw folders; the lease is 6 min
       Environment:
         Variables:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"

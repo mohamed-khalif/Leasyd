@@ -324,6 +324,10 @@ Resources:
                   - dynamodb:UpdateItem  # mark a plan committed
                   - dynamodb:DeleteItem  # plans and leases
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
+              - Sid: RetireFastLaneBlooms   # bloom files of raw-file index entries, once compacted
+                Effect: Allow
+                Action: s3:DeleteObject
+                Resource: !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/raw-*"
               - Sid: MeterUsage       # one usage record per compacted chunk (T5)
                 Effect: Allow
                 Action: dynamodb:PutItem

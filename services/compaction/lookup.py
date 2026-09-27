@@ -33,6 +33,7 @@ ending before start.
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -47,6 +48,8 @@ MAX_FILE_SPAN = timedelta(hours=1)
 # Parquet entries older than this are from long-finished plans; skip checking
 # their plan (a plan stuck longer than this also trips the stuck alarm).
 PLAN_CHECK_WINDOW = timedelta(hours=6)
+QUERY_THREADS = 16   # index partitions (services) queried at once
+BLOOM_THREADS = 32   # bloom files fetched from S3 at once
 SESSION_SECONDS = 3600
 REFRESH_BEFORE_EXPIRY = 300
 
@@ -71,15 +74,28 @@ def lookup(tenant, start, end, signal="logs", services=None, match=None):
     lo = _iso(start_dt - MAX_FILE_SPAN)
     hi = _iso(end_dt) + "#￿"  # every sort key with min_ts <= end
     stats = {"services": len(services), "in_time_range": 0, "after_bloom": 0, "read_units": 0.0,
-             "hidden_by_handover": 0}
-    candidates = []
-    for service in services:
-        for item in _query(ddb, layout.index_pk(tenant, signal, service), lo, hi, _iso(start_dt), stats):
-            stats["in_time_range"] += 1
-            if terms and not _bloom_says_maybe(s3, item, terms):
-                continue
-            stats["after_bloom"] += 1
-            candidates.append((service, item))
+             "hidden_by_handover": 0, "bloom_fetches": 0}
+
+    # Services are separate index partitions: query them in parallel.
+    def per_service(service):
+        st = {"read_units": 0.0}
+        return [(service, it) for it in _query(ddb, layout.index_pk(tenant, signal, service), lo, hi,
+                                                _iso(start_dt), st)], st["read_units"]
+    in_range = []
+    with ThreadPoolExecutor(min(QUERY_THREADS, max(1, len(services)))) as pool:
+        for found, ru in pool.map(per_service, services):
+            in_range += found
+            stats["read_units"] += ru
+    stats["in_time_range"] = len(in_range)
+
+    candidates = in_range
+    if terms:
+        # Blooms too big for the index item are in S3: fetch those in parallel.
+        stats["bloom_fetches"] = sum(1 for _, it in in_range if "bloom_s3_key" in it and _checkable(it, terms))
+        with ThreadPoolExecutor(BLOOM_THREADS) as pool:
+            keep = list(pool.map(lambda c: _bloom_says_maybe(s3, c[1], terms), in_range))
+        candidates = [c for c, k in zip(in_range, keep) if k]
+    stats["after_bloom"] = len(candidates)
 
     visible = _visible(ddb, candidates, stats)
     files = []
@@ -181,11 +197,15 @@ def _query(ddb, pk, lo, hi, start_iso, stats):
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
+def _checkable(item, terms):
+    fields = {f["S"] for f in item.get("bloom_fields", {}).get("L", [])}
+    return [t for t in terms if t.split("=", 1)[0] in fields]
+
+
 def _bloom_says_maybe(s3, item, terms):
     """False only if the file certainly holds none of the terms. Files
     indexed before blooms existed, or indexing other fields, always pass."""
-    fields = {f["S"] for f in item.get("bloom_fields", {}).get("L", [])}
-    checkable = [t for t in terms if t.split("=", 1)[0] in fields]
+    checkable = _checkable(item, terms)
     if not checkable:
         return True
     if "bloom" in item:
