@@ -265,7 +265,9 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
                 s3.upload_file(w["path"], BUCKET, w["key"])
                 bits = w["bloom"].to_bytes()
                 if len(bits) > BLOOM_INLINE_MAX_BYTES:
-                    w["bloom_key"] = f"{prefix}_bloom/{batch_id}-{w['part']:03d}-{w['service']}.bloom"
+                    # Unique per output file: a chunk can write the same service
+                    # and part number for several event hours.
+                    w["bloom_key"] = f"{prefix}_bloom/{w['relpath'][:-len('.parquet')]}.bloom"
                     s3.put_object(Bucket=BUCKET, Key=w["bloom_key"], Body=bits)
             # ID digests for the day filters (same keys on a re-run).
             for day, groups in digests.items():

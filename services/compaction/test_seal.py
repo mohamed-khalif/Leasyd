@@ -127,3 +127,24 @@ def test_scheduled_sealer_waits_for_the_day_to_close(sealed, monkeypatch):
     put("23", "late", ["d" * 32])
     compact_hour(handler, "23")
     assert handler.sealer({}, None)["sealed"] == [f"acme/logs/{DAY}"]   # 2026-09-26 closed long ago
+
+
+def test_blooms_of_one_chunk_spanning_hours_do_not_collide(aws, monkeypatch):  # noqa: F811
+    """One chunk, one service, two event hours: each output file keeps its own bloom
+    (they used to share an S3 key, so one overwrote the other)."""
+    handler, lookup = aws
+    monkeypatch.setattr(handler, "BLOOM_INLINE_MAX_BYTES", 0)
+    early = [f"{i:032x}" for i in range(50)]
+    late = [f"{i:032x}" for i in range(1000, 1300)]           # a different size of bloom
+    recs = ([{"timeUnixNano": str(H10 + i), "body": {"stringValue": "m"}, "traceId": t} for i, t in enumerate(early)]
+            + [{"timeUnixNano": str(H10 + 3600 * 10**9 + i), "body": {"stringValue": "m"}, "traceId": t}
+               for i, t in enumerate(late)])
+    doc = {"resourceLogs": [{"resource": {"attributes": [
+        {"key": "service.name", "value": {"stringValue": "api"}}]}, "scopeLogs": [{"logRecords": recs}]}]}
+    boto3.client("s3").put_object(Bucket="obs-data-test", Key=f"_incoming/tenant=acme/logs/dt={DAY}/hour=11/x.json.gz",
+                                  Body=gzip.compress(json.dumps(doc).encode()))
+    compact_hour(handler, "11")
+    blooms = [k for k in keys("data/tenant=acme/logs/_bloom/") if "/day/" not in k]
+    assert len(blooms) == 2
+    for t in (early[7], late[7]):
+        assert len(lookup.lookup(**RANGE, match={"trace_id": t})["files"]) == 1

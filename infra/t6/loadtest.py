@@ -373,7 +373,7 @@ def compaction(args):
           f"p99 {w['p99_ms'] / 1000:.1f}s, max concurrency {w['max_concurrency']:.0f}, "
           f"${w['gb_s'] * PRICE['lambda_gb_s_arm']:.3f}")
     print(f"  dispatcher: {d['invocations']:.0f} runs, {d['errors']:.0f} errors, avg {d['avg_ms'] / 1000:.1f}s, "
-          f"max {metric('AWS/Lambda', 'Duration', {'FunctionName': 'obs-compaction-dispatcher'}, 'Maximum', start, end) / 1000:.1f}s (timeout 120s)")
+          f"max {metric('AWS/Lambda', 'Duration', {'FunctionName': 'obs-compaction-dispatcher'}, 'Maximum', start, end) / 1000:.1f}s (timeout 300s)")
     for sig in ("logs", "traces", "metrics"):
         age = metric("obs", "OldestIncomingAgeMinutes", {"signal": sig}, "Maximum", start, end, period=900)
         print(f"  oldest uncompacted {sig}: max {age:.0f} min (alarm at 180)")

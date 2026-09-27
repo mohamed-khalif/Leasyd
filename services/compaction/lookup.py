@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import boto3
+import botocore.config
 
 import bloom
 import dayfilter
@@ -50,7 +51,7 @@ MAX_FILE_SPAN = timedelta(hours=1)
 # their plan (a plan stuck longer than this also trips the stuck alarm).
 PLAN_CHECK_WINDOW = timedelta(hours=6)
 QUERY_THREADS = 16   # index partitions (services) queried at once
-BLOOM_THREADS = 32   # bloom files fetched from S3 at once
+BLOOM_THREADS = 64   # bloom files fetched from S3 at once
 SESSION_SECONDS = 3600
 REFRESH_BEFORE_EXPIRY = 300
 
@@ -181,7 +182,9 @@ def _clients_for(tenant):
         )
         expiry = creds["Expiration"].timestamp()
         _sessions[tenant] = (session, expiry)
-    return session.client("dynamodb"), session.client("s3")
+    # Enough connections for the parallel queries and bloom fetches (boto3's default is 10).
+    cfg = botocore.config.Config(max_pool_connections=BLOOM_THREADS + QUERY_THREADS)
+    return session.client("dynamodb", config=cfg), session.client("s3", config=cfg)
 
 
 def _query(ddb, pk, lo, hi, start_iso, stats):
@@ -259,7 +262,10 @@ def _bloom_says_maybe(s3, item, terms):
         bits = s3.get_object(Bucket=BUCKET, Key=item["bloom_s3_key"]["S"])["Body"].read()
     else:
         return True
-    b = bloom.Bloom(int(item["bloom_m"]["N"]), int(item["bloom_k"]["N"]), bits)
+    m = int(item["bloom_m"]["N"])
+    if len(bits) * 8 < m:
+        return True  # not this item's bloom (files written before a naming fix): can't rule the file out
+    b = bloom.Bloom(m, int(item["bloom_k"]["N"]), bits)
     return all(b.might_contain(t) for t in checkable)
 
 

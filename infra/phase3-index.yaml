@@ -25,7 +25,7 @@ Resources:
       Code: ../services/compaction/build
       # Created in phase 0: no direct data access; reads through obs-tenant-reader.
       Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-query"
-      MemorySize: 512
+      MemorySize: 1024   # more CPU and network for parallel bloom fetches and checks
       Timeout: 30
       Environment:
         Variables:
