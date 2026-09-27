@@ -303,8 +303,9 @@ def report(args):
         for k, v in json.loads(i["status"]["S"]).items():
             status[k] = status.get(k, 0) + v
     reqs = sum(_n(i, "requests") for i in sends)
-    print(f"sent: {sent / 1e9:.2f} GB protobuf = {sent / 1e9 / (minutes / 60):.2f} GB/h achieved, "
-          f"{reqs:.0f} requests ({reqs / minutes / 60:.1f}/s); gzip on the wire "
+    load_min = _n(meta, "minutes")   # the load itself; `minutes` adds 2 for stragglers
+    print(f"sent: {sent / 1e9:.2f} GB protobuf = {sent / 1e9 / (load_min / 60):.2f} GB/h achieved, "
+          f"{reqs:.0f} requests ({reqs / load_min / 60:.1f}/s); gzip on the wire "
           f"{sum(_n(i, 'gz_bytes') for i in sends) / 1e9:.2f} GB")
     print(f"  HTTP statuses {status}; retries {sum(_n(i, 'retries') for i in sends):.0f}; "
           f"dropped after retries {sum(_n(i, 'dropped') for i in sends):.0f}")

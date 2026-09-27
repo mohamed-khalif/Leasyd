@@ -259,7 +259,12 @@ def _bloom_says_maybe(s3, item, terms):
     if "bloom" in item:
         bits = item["bloom"]["B"]
     elif "bloom_s3_key" in item:
-        bits = s3.get_object(Bucket=BUCKET, Key=item["bloom_s3_key"]["S"])["Body"].read()
+        try:
+            bits = s3.get_object(Bucket=BUCKET, Key=item["bloom_s3_key"]["S"])["Body"].read()
+        except s3.exceptions.NoSuchKey:
+            # A raw entry whose file was just compacted: its bloom is deleted
+            # after the plan commits. Keep it; the handover check hides it.
+            return True
     else:
         return True
     m = int(item["bloom_m"]["N"])

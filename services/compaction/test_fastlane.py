@@ -219,3 +219,15 @@ def test_blooms_in_s3_still_prune_and_raw_ones_are_cleaned_up(aws, monkeypatch):
     out = lookup.lookup(**RANGE, match=web7)
     assert [(f["service"], f["kind"]) for f in out["files"]] == [("web", "parquet")]
     assert lookup.lookup(**RANGE, match={"trace_id": "f" * 32})["files"] == []
+
+
+def test_raw_bloom_deleted_mid_lookup_is_not_an_error(aws, monkeypatch):
+    """A lookup can read a raw entry, then compaction retires it and deletes its bloom."""
+    handler, lookup = aws
+    monkeypatch.setattr(handler, "BLOOM_INLINE_MAX_BYTES", 0)
+    put_raw()
+    handler.recent_indexer(event(), None)
+    for k in bloom_objects():
+        boto3.client("s3").delete_object(Bucket="obs-data-test", Key=k)
+    out = lookup.lookup(**RANGE, match={"trace_id": "f" * 32})
+    assert out["stats"]["after_bloom"] == 2   # kept (can't rule out), no exception
