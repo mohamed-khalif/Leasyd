@@ -6,3 +6,4 @@ services/ingest/.pytest_cache/
 services/ingest/__pycache__/
 services/ingest/build/
 services/tenants/build/
+services/loadgen/build/

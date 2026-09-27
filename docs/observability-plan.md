@@ -169,6 +169,7 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - Metering: each compacted chunk writes one usage record (records, raw bytes, stored bytes) before its commit, keyed by the chunk, so re-runs never double count. Bytes scanned come with the query engine (Phase 4).
   - Deletion: keys refused, streams deleted, then purge passes 20 minutes apart (longer than a worker lease) until one finds nothing, so in-flight compaction can't leave data behind. Usage records are kept.
 - **T6. Scale, fault and soak tests** against the targets above.
+  - Tooling (T6.1): serverless load generator (realistic OTLP protobuf through the public endpoint, 100 Zipf-sized tenants), a freshness prober, and a report with cost per GB. Steps run 45 min each; estimated platform cost ~$2 (1 GB/h), ~$3 (10 GB/h), ~$7 (50 GB/h), plus compaction.
   - Ramp load; inject faults under load (kill collector tasks, force S3 and DynamoDB throttling, lose an AZ); run for several days at steady load.
   - Freshness under load: a new stream's Firehose delivery sometimes takes ~60 s (seen once in T4); measure the distribution across many streams.
   - Known issue to fix here: bloom filters stored inside index items make wide time-range lookups read ~48 KB per file. Move them out of the items, with a coarser per-day filter checked first.

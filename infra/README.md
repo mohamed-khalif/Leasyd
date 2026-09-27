@@ -243,3 +243,28 @@ infra/deploy-phaseT2.sh
 infra/deploy-phaseT5.sh
 infra/phaseT5-test.sh      # ~30-45 min: waits for a deletion to finish (QUICK=1 skips that wait)
 ```
+
+## Phase T6: scale tests
+
+Test tooling only (`obs-phaseT6`: the `obs-loadgen` Lambda and `obs-loadtest` results table;
+delete the stack when T6 is done). `infra/t6/loadtest.py` drives it:
+
+- 100 tenants `t6-000..t6-099` with Zipf-distributed volumes (the largest sends 100x the smallest;
+  2-20 services each). Keys are kept in `~/.obs-t6-keys.json`, outside the repo.
+- Senders post realistic OTLP protobuf (gzip, 512-item batches, retries like an SDK) through the
+  public endpoint. A prober sends a marked log record per sampled tenant every minute and
+  times how long until a lookup finds it (freshness), and times 1 h / 24 h lookups.
+- The report covers achieved GB/h, HTTP statuses, retries, drops, freshness percentiles,
+  lookup speed, Lambda/API Gateway/Firehose/DynamoDB metrics and cost per GB at list prices.
+
+Attach `infra/iam/deployer-phaseT6.json` to `obs-deployer` (read-only limits and metrics), then:
+
+```bash
+infra/deploy-phaseT6.sh
+python3 infra/t6/loadtest.py preflight
+python3 infra/t6/loadtest.py tenants create --n 100
+python3 infra/t6/loadtest.py run --gbph 1 --minutes 45 --step s1 --yes
+python3 infra/t6/loadtest.py report --step s1
+python3 infra/t6/loadtest.py compaction --since-minutes 180   # after the hours close
+python3 infra/t6/loadtest.py tenants delete                   # at the end of T6
+```
