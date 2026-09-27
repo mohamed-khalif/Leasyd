@@ -37,12 +37,15 @@ ENDPOINT="$(aws cloudformation describe-stacks --stack-name obs-phaseT2 \
   --query "Stacks[0].Outputs[?OutputKey=='IngestEndpoint'].OutputValue" --output text)"
 KEY="$("$HERE/tenant.sh" create "$T" 2>/dev/null)" || { fail "could not create tenant"; exit 1; }
 info "tenant ${T}; waiting for its key to become active"
-for _ in $(seq 48); do
+# A new key flickers between 200 and 403 while API Gateway propagates it: wait for 5 in a row.
+ok=0
+for _ in $(seq 60); do
   code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${ENDPOINT}/v1/logs" -H "x-api-key: ${KEY}" \
     -H 'Content-Type: application/json' --data '{"resourceLogs":[]}')
-  [[ "$code" == 200 ]] && break; sleep 5
+  if [[ "$code" == 200 ]]; then (( ++ok >= 5 )) && break; else ok=0; fi
+  sleep 3
 done
-[[ "$code" == 200 ]] || { fail "key not active (HTTP ${code})"; exit 1; }
+(( ok >= 5 )) || { fail "key not active (HTTP ${code})"; exit 1; }
 
 # ---- 1. Send N records in one request ----
 TRACE="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
