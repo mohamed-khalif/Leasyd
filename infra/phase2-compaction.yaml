@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Phase 2 compaction for the S3-native observability platform: a scheduled
-  dispatcher and a per-hour worker Lambda that turn _incoming/ raw OTLP JSON
-  into sorted Parquet under logs/, the obs-index DynamoDB table they write,
-  an alarm on stuck compaction, and the obs.logs Athena table.
+  dispatcher and per-chunk worker Lambdas that turn _incoming/ raw OTLP JSON
+  (logs, traces, metrics) into sorted Parquet under data/, the obs-index
+  DynamoDB table they write, the fast-lane indexer, alarms on stuck
+  compaction, and the obs.logs / obs.traces / obs.metrics Athena tables.
   Requires obs-phase0 and obs-phase1. Deploy through infra/deploy-phase2.sh,
   which builds and uploads the Lambda code.
 
@@ -31,6 +32,10 @@ Parameters:
     Description: >
       Comma-separated log attributes whose values go into each file's bloom
       filter, alongside trace_id (Phase 3). Pick IDs people look up one at a time.
+  CompactSignals:
+    Type: String
+    Default: logs,traces,metrics
+    Description: Signals the dispatcher compacts (T4 added traces and metrics).
   AllowCrashInjection:
     Type: String
     Default: "true"
@@ -122,7 +127,7 @@ Resources:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
           INDEX_TABLE: !Ref IndexTable
           WORKER_FUNCTION: !Ref WorkerFunction
-          COMPACT_SIGNALS: logs
+          COMPACT_SIGNALS: !Ref CompactSignals
           GRACE_MINUTES: !Ref GraceMinutes
       Tags:
         - { Key: project, Value: obs }
@@ -240,7 +245,43 @@ Resources:
       AlarmActions: [!Ref AlertTopic]
       OKActions: [!Ref AlertTopic]
 
-  # ---------- Athena table over compacted logs ----------
+  StuckCompactionTracesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-stuck-traces
+      AlarmDescription: Raw _incoming/ traces data (any tenant) older than 3 hours, or the dispatcher is not running.
+      Namespace: obs
+      MetricName: OldestIncomingAgeMinutes
+      Dimensions:
+        - { Name: signal, Value: traces }
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 2
+      Threshold: 180
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  StuckCompactionMetricsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-stuck-metrics
+      AlarmDescription: Raw _incoming/ metrics data (any tenant) older than 3 hours, or the dispatcher is not running.
+      Namespace: obs
+      MetricName: OldestIncomingAgeMinutes
+      Dimensions:
+        - { Name: signal, Value: metrics }
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 2
+      Threshold: 180
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  # ---------- Athena tables over compacted data ----------
 
   LogsTable:
     Type: AWS::Glue::Table
@@ -285,6 +326,122 @@ Resources:
             - { Name: body, Type: string }
             - { Name: trace_id, Type: string }
             - { Name: span_id, Type: string }
+            - { Name: scope_name, Type: string }
+            - { Name: attributes, Type: "map<string,string>" }
+            - { Name: resource_attributes, Type: "map<string,string>" }
+
+  TracesTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: obs
+      TableInput:
+        Name: traces
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy-MM-dd
+          projection.dt.range: "2026-09-01,NOW"
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          projection.hour.type: integer
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          # Queries must name a tenant: WHERE tenant = '...'. service=...
+          # subfolders are read recursively; service is also a column.
+          projection.tenant.type: injected
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=${!tenant}/traces/dt=${!dt}/hour=${!hour}/"
+        PartitionKeys:
+          - { Name: tenant, Type: string }
+          - { Name: dt, Type: string }
+          - { Name: hour, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: ts, Type: timestamp }
+            - { Name: ts_unix_nano, Type: bigint }
+            - { Name: end_ts, Type: timestamp }
+            - { Name: duration_ns, Type: bigint }
+            - { Name: service, Type: string }
+            - { Name: name, Type: string }
+            - { Name: kind, Type: int }
+            - { Name: status_code, Type: int }
+            - { Name: status_message, Type: string }
+            - { Name: trace_id, Type: string }
+            - { Name: span_id, Type: string }
+            - { Name: parent_span_id, Type: string }
+            - { Name: trace_state, Type: string }
+            - { Name: scope_name, Type: string }
+            - { Name: attributes, Type: "map<string,string>" }
+            - { Name: resource_attributes, Type: "map<string,string>" }
+            - { Name: events, Type: "array<struct<ts:timestamp,name:string,attributes:map<string,string>>>" }
+            - { Name: links, Type: "array<struct<trace_id:string,span_id:string,trace_state:string,attributes:map<string,string>>>" }
+
+  MetricsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: obs
+      TableInput:
+        Name: metrics
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy-MM-dd
+          projection.dt.range: "2026-09-01,NOW"
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          projection.hour.type: integer
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          # Queries must name a tenant: WHERE tenant = '...'. service=...
+          # subfolders are read recursively; service is also a column.
+          projection.tenant.type: injected
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=${!tenant}/metrics/dt=${!dt}/hour=${!hour}/"
+        PartitionKeys:
+          - { Name: tenant, Type: string }
+          - { Name: dt, Type: string }
+          - { Name: hour, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: ts, Type: timestamp }
+            - { Name: ts_unix_nano, Type: bigint }
+            - { Name: start_ts, Type: timestamp }
+            - { Name: service, Type: string }
+            - { Name: metric_name, Type: string }
+            - { Name: metric_type, Type: string }
+            - { Name: unit, Type: string }
+            - { Name: description, Type: string }
+            - { Name: temporality, Type: int }
+            - { Name: is_monotonic, Type: boolean }
+            - { Name: value, Type: double }
+            - { Name: count, Type: bigint }
+            - { Name: sum, Type: double }
+            - { Name: min, Type: double }
+            - { Name: max, Type: double }
+            - { Name: bucket_counts, Type: "array<bigint>" }
+            - { Name: explicit_bounds, Type: "array<double>" }
+            - { Name: exp_scale, Type: int }
+            - { Name: exp_zero_count, Type: bigint }
+            - { Name: exp_positive_offset, Type: int }
+            - { Name: exp_positive_bucket_counts, Type: "array<bigint>" }
+            - { Name: exp_negative_offset, Type: int }
+            - { Name: exp_negative_bucket_counts, Type: "array<bigint>" }
+            - { Name: quantiles, Type: "array<struct<quantile:double,value:double>>" }
+            - { Name: flags, Type: int }
             - { Name: scope_name, Type: string }
             - { Name: attributes, Type: "map<string,string>" }
             - { Name: resource_attributes, Type: "map<string,string>" }

@@ -161,6 +161,9 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - Lookups return raw files alongside compacted Parquet, marked by `kind`, so the query engine (Phase 4) reads both.
   - Handover: each raw file belongs to its arrival hour's compaction plan. While the plan is `planned`, raw entries are visible and the new Parquet entries hidden; one write marks it `committed`, which flips both; cleanup then deletes the raw entries and files. A search never counts a record twice or misses it, whatever step a crash interrupts.
 - **T4. Traces and metrics compaction.** Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
+  - `obs.traces`: one row per span at its start time, events and links nested. `obs.metrics`: one row per data point; all five OTLP metric types in one table, `metric_type` saying which columns are set, sorted by metric then time.
+  - Same fast lane, handover, chunking and crash safety as logs: one code path, parameterised by signal.
+  - Not yet: metric exemplars (they would link metrics to traces); spans are placed by start time, so a lookup finds a long span by when it started.
 - **T5. Tenant operations.** Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
 - **T6. Scale, fault and soak tests** against the targets above.
   - Ramp load; inject faults under load (kill collector tasks, force S3 and DynamoDB throttling, lose an AZ); run for several days at steady load.

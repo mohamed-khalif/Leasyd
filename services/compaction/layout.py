@@ -2,7 +2,7 @@
 formats are spelled out, so compaction, lookups and queries can't drift.
 
 S3
-  _incoming/tenant=<T>/<signal>/dt=<D>/hour=<H>/...            raw, from the collector
+  _incoming/tenant=<T>/<signal>/dt=<D>/hour=<H>/...            raw, from Firehose
   data/tenant=<T>/<signal>/dt=<D>/hour=<H>/service=<S>/...     compacted Parquet
   data/tenant=<T>/<signal>/_bloom/...                          bloom filters too big for the index
 

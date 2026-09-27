@@ -136,7 +136,7 @@ def test_file_arriving_after_planning_stays_raw_until_its_own_plan(aws):
 def test_indexer_skips_non_raw_and_missing_objects(aws):
     handler, lookup = aws
     assert "skipped" in handler.recent_indexer(event("_incoming/_errors/tenant=acme/logs/x/dt=2026-09-26/f.gz"), None)
-    assert "skipped" in handler.recent_indexer(event(RAW.replace("/logs/", "/traces/")), None)
+    assert "skipped" in handler.recent_indexer(event(RAW.replace("/logs/", "/profiles/")), None)
     assert "skipped" in handler.recent_indexer(event(RAW), None)  # never written / already compacted
     assert visible(lookup)[1] == 0
 
@@ -146,3 +146,46 @@ def test_unencoded_key_also_works(aws):
     put_raw()
     handler.recent_indexer(event(encode=False), None)
     assert visible(lookup)[1] == 100
+
+
+def put_signal_raw(signal):
+    key = RAW.replace("/logs/", f"/{signal}/").replace("-logs-", f"-{signal}-")
+    res = {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]}}
+    if signal == "traces":
+        items = [{"traceId": f"{i:032x}", "spanId": f"{i:016x}", "name": "op", "kind": 2,
+                  "startTimeUnixNano": str(H10 + i * 10**9), "endTimeUnixNano": str(H10 + i * 10**9 + 5000)}
+                 for i in range(40)]
+        doc = {"resourceSpans": [{**res, "scopeSpans": [{"spans": items}]}]}
+    else:
+        pts = [{"timeUnixNano": str(H10 + i * 10**9), "asDouble": i} for i in range(40)]
+        doc = {"resourceMetrics": [{**res, "scopeMetrics": [{"metrics": [
+            {"name": "cpu", "gauge": {"dataPoints": pts[:30]}},
+            {"name": "reqs", "sum": {"aggregationTemporality": 2, "isMonotonic": True, "dataPoints": pts[30:]}}]}]}]}
+    boto3.client("s3").put_object(Bucket="obs-data-test", Key=key, Body=gzip.compress(json.dumps(doc).encode()))
+    return key
+
+
+@pytest.mark.parametrize("signal", ["traces", "metrics"])
+def test_traces_and_metrics_fast_lane_then_compaction(aws, signal):
+    """Same path as logs: searchable on arrival, then handed over to Parquet."""
+    handler, lookup = aws
+    key = put_signal_raw(signal)
+    assert handler.recent_indexer(event(key), None)["rows"] == 40
+    trace = {"trace_id": f"{7:032x}"}
+    assert visible(lookup, signal=signal)[1:] == (40, ["raw"])
+    assert visible(lookup, signal="logs")[1] == 0  # signals don't mix
+    # Spans are bloom-checked on trace id; metric files have no ids, so always pass.
+    assert visible(lookup, signal=signal, match={"trace_id": "f" * 32})[1] == (0 if signal == "traces" else 40)
+    assert visible(lookup, signal=signal, match=trace)[1] == 40
+
+    hour = {**HOUR, "signal": signal}
+    [b] = handler.dispatcher({"plan_only": hour}, ctx(0))["planned"]
+    out = handler.worker({**hour, "batch_id": b}, ctx(1))
+    assert [o["key"] for o in out["outputs"]] == [
+        f"data/tenant=acme/{signal}/dt=2026-09-26/hour=10/service=api/part-{b}-000.parquet"]
+    assert visible(lookup, signal=signal)[1:] == (40, ["parquet"])
+    assert visible(lookup, signal=signal, match=trace)[1] == 40
+    if signal == "traces":
+        assert visible(lookup, signal=signal, match={"trace_id": "f" * 32})[1] == 0
+    items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
+    assert not [i for i in items if "#_raw#" in i["pk"]["S"] or "#_plan#" in i["pk"]["S"]]

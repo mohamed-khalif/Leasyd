@@ -181,3 +181,26 @@ infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInj
 infra/deploy-phase3.sh
 infra/phaseT3-test.sh
 ```
+
+## Phase T4: traces and metrics
+
+Compaction, the fast lane and lookups now cover all three signals (`COMPACT_SIGNALS`,
+default `logs,traces,metrics`). Each becomes Parquet under `data/tenant=<T>/<signal>/`, with
+one Athena table per signal (`WHERE tenant = '...'` as for logs):
+
+- `obs.traces`: one row per span, at its start time: name, kind, status, ids, duration,
+  attributes, and nested `events` and `links`. Bloom filters hold trace IDs (and the
+  `BloomAttributes` IDs), so a trace ID lookup opens only the files holding that trace.
+- `obs.metrics`: one row per data point. Gauge, sum, histogram, exponential histogram and
+  summary points share the table; `metric_type` says which columns are set (`value` for
+  gauge and sum; `count`, `sum`, buckets or quantiles for the rest). Rows are sorted by
+  metric, then time. Metric points carry no IDs, so they have no bloom filter (exemplars are
+  not stored yet).
+
+Lookups take `"signal": "traces"` or `"metrics"`. Each signal has its own stuck-compaction
+alarm (`obs-compaction-stuck`, `-traces`, `-metrics`).
+
+```bash
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
+infra/phaseT4-test.sh
+```

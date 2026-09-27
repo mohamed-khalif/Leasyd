@@ -6,7 +6,8 @@ dispatcher: on a schedule, splits each tenant's closed _incoming/ hours into chu
             records a plan per chunk, and invokes one worker per plan, so a
             busy hour is compacted by many workers in parallel.
 worker:     compacts one planned chunk into Parquet, indexes it, then deletes
-            the chunk's raw files.
+            the chunk's raw files. Logs, traces and metrics alike
+            (COMPACT_SIGNALS); see compact.py for each one's rows.
 
 A plan fixes a chunk's input keys up front, and its batch_id is a hash of
 them, so every retry of a chunk works on exactly the same inputs and writes
@@ -202,8 +203,8 @@ def _invoke_worker(payload):
 def worker(event, context):
     tenant = layout.check_tenant(event["tenant"])
     signal, dt, hour, batch_id = event["signal"], event["dt"], event["hour"], event["batch_id"]
-    if signal != "logs":
-        raise ValueError(f"no compactor for signal {signal!r} yet")
+    if signal not in compact.SIGNALS:
+        raise ValueError(f"no compactor for signal {signal!r}")
     crash_after = event.get("crash_after") if ALLOW_CRASH_INJECTION else None
     lease = _acquire_lease(layout.worker_lease_pk(tenant, signal, dt, hour, batch_id), context,
                            WORKER_LEASE_SECONDS)
@@ -235,8 +236,8 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
                 s3.download_file(BUCKET, k, p)
                 local.append(p)
             mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "3008"))
-            written = compact.compact_logs(
-                local, os.path.join(work, "out"), batch_id, dt, hour,
+            written = compact.compact(
+                signal, local, os.path.join(work, "out"), batch_id, dt, hour,
                 memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
                 bloom_attributes=BLOOM_ATTRIBUTES,
             )
@@ -302,8 +303,8 @@ def recent_indexer(event, context):
     if parsed is None:
         return _done(None, skipped=f"not a raw file: {key}")
     tenant, signal, dt, hour = parsed
-    if signal != "logs":
-        return _done(None, skipped=f"no fast lane for {signal} yet")
+    if signal not in compact.SIGNALS:
+        return _done(None, skipped=f"unknown signal {signal!r}: {key}")
 
     work = tempfile.mkdtemp(dir="/tmp")
     try:
@@ -316,8 +317,8 @@ def recent_indexer(event, context):
             raise
         size = os.path.getsize(local)
         mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048"))
-        groups = compact.summarize_logs([local], work, dt, hour, memory_limit=f"{int(mem_mb * 0.6)}MB",
-                                        bloom_attributes=BLOOM_ATTRIBUTES)
+        groups = compact.summarize(signal, [local], work, dt, hour, memory_limit=f"{int(mem_mb * 0.6)}MB",
+                                   bloom_attributes=BLOOM_ATTRIBUTES)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -341,7 +342,7 @@ def recent_indexer(event, context):
             "bloom_m": {"N": str(g["bloom"].m)},
             "bloom_k": {"N": str(g["bloom"].k)},
             "bloom_n": {"N": str(g["bloom"].n)},
-            "bloom_fields": {"L": [{"S": f} for f in ("trace_id", *BLOOM_ATTRIBUTES)]},
+            "bloom_fields": {"L": [{"S": f} for f in compact.bloom_fields(signal, BLOOM_ATTRIBUTES)]},
         }
         bits = g["bloom"].to_bytes()
         if len(bits) > BLOOM_INLINE_MAX_BYTES:
@@ -416,7 +417,7 @@ def _index_item(tenant, signal, batch_id, w, now, plan_pk):
         "bloom_m": {"N": str(b.m)},
         "bloom_k": {"N": str(b.k)},
         "bloom_n": {"N": str(b.n)},
-        "bloom_fields": {"L": [{"S": f} for f in ("trace_id", *BLOOM_ATTRIBUTES)]},
+        "bloom_fields": {"L": [{"S": f} for f in compact.bloom_fields(signal, BLOOM_ATTRIBUTES)]},
     }
     if "bloom_key" in w:
         item["bloom_s3_key"] = {"S": w["bloom_key"]}

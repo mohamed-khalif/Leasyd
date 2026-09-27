@@ -1,6 +1,14 @@
 """Turn raw OTLP JSON batch files into sorted Parquet, one file per
 (service, event hour). Pure local-file logic, no AWS calls, so it can be
-tested without S3."""
+tested without S3.
+
+One row per item, by signal:
+  logs     one per log record, at its timestamp
+  traces   one per span, at its start time; events and links nested
+  metrics  one per data point, at its timestamp; gauge, sum, histogram,
+           exponential histogram and summary points share one table,
+           with metric_type saying which columns are set
+"""
 
 import os
 import re
@@ -23,6 +31,49 @@ LOGS_JSON_TYPE = (
     "timeUnixNano VARCHAR, observedTimeUnixNano VARCHAR, "
     "severityNumber INTEGER, severityText VARCHAR, body JSON, "
     f"attributes {_ATTR}, traceId VARCHAR, spanId VARCHAR"
+    ")[]"
+    ")[]"
+    ")[]"
+)
+
+SPANS_JSON_TYPE = (
+    "STRUCT("
+    f"resource STRUCT(attributes {_ATTR}), "
+    "scopeSpans STRUCT("
+    "scope STRUCT(name VARCHAR, version VARCHAR), "
+    "spans STRUCT("
+    "traceId VARCHAR, spanId VARCHAR, parentSpanId VARCHAR, traceState VARCHAR, "
+    "name VARCHAR, kind VARCHAR, startTimeUnixNano VARCHAR, endTimeUnixNano VARCHAR, "
+    f"attributes {_ATTR}, "
+    f"events STRUCT(timeUnixNano VARCHAR, name VARCHAR, attributes {_ATTR})[], "
+    f"links STRUCT(traceId VARCHAR, spanId VARCHAR, traceState VARCHAR, attributes {_ATTR})[], "
+    "status STRUCT(message VARCHAR, code VARCHAR)"
+    ")[]"
+    ")[]"
+    ")[]"
+)
+
+# Numbers are read as VARCHAR (int64s arrive as JSON strings) or JSON
+# (doubles may be numbers or "NaN" / "Infinity" strings), then cast.
+_DP = f"attributes {_ATTR}, startTimeUnixNano VARCHAR, timeUnixNano VARCHAR, flags VARCHAR"
+_STATS = '"count" VARCHAR, "sum" JSON, "min" JSON, "max" JSON'  # quoted: SQL keywords
+_NUMBER_DP = f"STRUCT({_DP}, asDouble JSON, asInt VARCHAR)[]"
+_HIST_DP = f"STRUCT({_DP}, {_STATS}, bucketCounts VARCHAR[], explicitBounds JSON[])[]"
+_BUCKETS = 'STRUCT("offset" INTEGER, bucketCounts VARCHAR[])'
+_EXP_DP = f"STRUCT({_DP}, {_STATS}, scale INTEGER, zeroCount VARCHAR, positive {_BUCKETS}, negative {_BUCKETS})[]"
+_SUMMARY_DP = f'STRUCT({_DP}, "count" VARCHAR, "sum" JSON, quantileValues STRUCT(quantile JSON, value JSON)[])[]'
+METRICS_JSON_TYPE = (
+    "STRUCT("
+    f"resource STRUCT(attributes {_ATTR}), "
+    "scopeMetrics STRUCT("
+    "scope STRUCT(name VARCHAR, version VARCHAR), "
+    "metrics STRUCT("
+    "name VARCHAR, description VARCHAR, unit VARCHAR, "
+    f"gauge STRUCT(dataPoints {_NUMBER_DP}), "
+    f'"sum" STRUCT(dataPoints {_NUMBER_DP}, aggregationTemporality VARCHAR, isMonotonic BOOLEAN), '
+    f"histogram STRUCT(dataPoints {_HIST_DP}, aggregationTemporality VARCHAR), "
+    f"exponentialHistogram STRUCT(dataPoints {_EXP_DP}, aggregationTemporality VARCHAR), "
+    f'"summary" STRUCT(dataPoints {_SUMMARY_DP})'
     ")[]"
     ")[]"
     ")[]"
@@ -61,27 +112,38 @@ DEFAULT_MAX_ROWS_PER_FILE = 4_000_000
 DEFAULT_BLOOM_ATTRIBUTES = ("request.id",)
 
 
-def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB",
-                 max_rows_per_file=DEFAULT_MAX_ROWS_PER_FILE, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES,
-                 bloom_fpp=bloom.DEFAULT_FPP):
-    """Compact gzipped OTLP-JSON log batches into Parquet.
+SIGNALS = ("logs", "traces", "metrics")
+
+
+def bloom_fields(signal, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES):
+    """Fields in a signal's bloom filters: trace_id plus the ID attributes for
+    log records and spans. Metric points have none, so ID lookups never skip
+    a metrics file."""
+    return () if signal == "metrics" else ("trace_id", *bloom_attributes)
+
+
+def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB",
+            max_rows_per_file=DEFAULT_MAX_ROWS_PER_FILE, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES,
+            bloom_fpp=bloom.DEFAULT_FPP):
+    """Compact gzipped OTLP-JSON batches of one signal into Parquet.
 
     Rows are split by service and by the hour of their own timestamp, so no
-    output file spans more than one hour. Records with no timestamp fall back
+    output file spans more than one hour. Rows with no timestamp fall back
     to the arrival hour of the raw partition. A group with more than
-    max_rows_per_file rows is split into consecutive time slices,
+    max_rows_per_file rows is split into consecutive slices in sort order,
     part-<batch_id>-000.parquet, -001, ... The split depends only on the row
     count, so the same inputs always produce the same file names.
 
     Returns one dict per written file: service, dt, hour, part, path, rows,
     min_ts / max_ts (ISO-8601, UTC, microseconds), size_bytes, and a bloom
-    filter over the file's trace_id and bloom_attributes values.
+    filter over the file's bloom_fields(signal) values.
     """
+    fields = bloom_fields(signal, bloom_attributes)
     con = _connect(out_dir, memory_limit)
     try:
         written = []
-        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour):
-            n_rows = _select_group(con, service, dt, hour)
+        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour, signal):
+            n_rows = _select_group(con, service, dt, hour, signal)
             for part in range(-(-n_rows // max_rows_per_file)):
                 rel = (f"dt={dt}/hour={hour}/service={safe_service(service)}/"
                        f"part-{batch_id}-{part:03d}.parquet")
@@ -104,33 +166,42 @@ def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memor
                     "service": service, "dt": dt, "hour": hour, "part": part, "relpath": rel,
                     "path": path, "rows": n, "min_ts": lo, "max_ts": hi,
                     "size_bytes": os.path.getsize(path),
-                    "bloom": _bloom_for(con, lo_rn, lo_rn + max_rows_per_file, bloom_attributes, bloom_fpp),
+                    "bloom": _bloom_for(con, lo_rn, lo_rn + max_rows_per_file, fields, bloom_fpp),
                 })
         return written
     finally:
         con.close()
 
 
-def summarize_logs(input_paths, work_dir, arrival_dt, arrival_hour, memory_limit="1GB",
-                   bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES, bloom_fpp=bloom.DEFAULT_FPP):
+def summarize(signal, input_paths, work_dir, arrival_dt, arrival_hour, memory_limit="1GB",
+              bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES, bloom_fpp=bloom.DEFAULT_FPP):
     """What compaction would index for these raw files, without writing any:
     one dict per (service, event hour) with rows, min_ts / max_ts and a bloom
     filter. Used to index raw files as they arrive (the fast lane), with the
     same parsing rules as compaction so both see the same rows."""
+    fields = bloom_fields(signal, bloom_attributes)
     con = _connect(work_dir, memory_limit)
     try:
         out = []
-        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour):
-            n_rows = _select_group(con, service, dt, hour)
+        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour, signal):
+            n_rows = _select_group(con, service, dt, hour, signal)
             lo, hi = con.execute(
                 "SELECT strftime(min(ts), '%Y-%m-%dT%H:%M:%S.%fZ'), "
                 "strftime(max(ts), '%Y-%m-%dT%H:%M:%S.%fZ') FROM grp"
             ).fetchone()
             out.append({"service": service, "dt": dt, "hour": hour, "rows": n_rows, "min_ts": lo, "max_ts": hi,
-                        "bloom": _bloom_for(con, 0, n_rows, bloom_attributes, bloom_fpp)})
+                        "bloom": _bloom_for(con, 0, n_rows, fields, bloom_fpp)})
         return out
     finally:
         con.close()
+
+
+def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, **kw):
+    return compact("logs", input_paths, out_dir, batch_id, arrival_dt, arrival_hour, **kw)
+
+
+def summarize_logs(input_paths, work_dir, arrival_dt, arrival_hour, **kw):
+    return summarize("logs", input_paths, work_dir, arrival_dt, arrival_hour, **kw)
 
 
 def _connect(work_dir, memory_limit):
@@ -141,35 +212,66 @@ def _connect(work_dir, memory_limit):
     return con
 
 
-def load_rows(con, input_paths, arrival_dt, arrival_hour):
-    """Parse raw OTLP-JSON log files into the temp table `rows` (one row per
-    log record, the Parquet schema) and return its (service, dt, hour)
-    groups in order."""
-    fallback_us = _hour_start_us(con, arrival_dt, arrival_hour)
-    con.execute(
-        f"""
-        CREATE OR REPLACE TEMP TABLE rows AS
-        WITH rl AS (
-            SELECT unnest(resourceLogs) AS rl
-            FROM read_json(?, columns={{'resourceLogs': '{LOGS_JSON_TYPE}'}},
-                           format='newline_delimited', compression='gzip',
-                           maximum_object_size={MAX_JSON_OBJECT_BYTES})
-        ),
-        sl AS (
-            SELECT rl.resource.attributes AS res_attrs, unnest(rl.scopeLogs) AS sl FROM rl
-        ),
-        lr AS (
-            SELECT res_attrs, sl.scope.name AS scope_name, unnest(sl.logRecords) AS lr FROM sl
-        ),
+def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs"):
+    """Parse raw OTLP-JSON files of one signal into the temp table `rows`
+    (the Parquet schema) and return its (service, dt, hour) groups in order."""
+    if signal not in _ROWS_SQL:
+        raise ValueError(f"unknown signal {signal!r}")
+    fallback_ns = f"{_hour_start_us(con, arrival_dt, arrival_hour)} * 1000"
+    con.execute(f"CREATE OR REPLACE TEMP TABLE rows AS {_ROWS_SQL[signal](fallback_ns)}", [input_paths])
+    return con.execute(
+        """
+        SELECT service, strftime(ts, '%Y-%m-%d') AS dt, strftime(ts, '%H') AS hour
+        FROM rows GROUP BY ALL ORDER BY ALL
+        """
+    ).fetchall()
+
+
+def _read(top, json_type):
+    return (f"SELECT unnest({top}) AS r FROM read_json(?, columns={{'{top}': '{json_type}'}}, "
+            f"format='newline_delimited', compression='gzip', maximum_object_size={MAX_JSON_OBJECT_BYTES})")
+
+
+def _ns(v):
+    return f"nullif(TRY_CAST({v} AS BIGINT), 0)"
+
+
+def _ts(ns):
+    return f"make_timestamp(({ns}) // 1000)"
+
+
+def _num(v):
+    """JSON number, or a numeric string such as "NaN", -> DOUBLE."""
+    return f"TRY_CAST(({v})->>'$' AS DOUBLE)"
+
+
+def _enum(v, names):
+    """OTLP JSON enums are integers; accept their names too."""
+    cases = " ".join(f"WHEN '{n}' THEN {i}" for i, n in enumerate(names))
+    return f"coalesce(TRY_CAST({v} AS INTEGER), CASE {v} {cases} END)"
+
+
+# obs.* are the platform's own routing labels; the tenant is already in the
+# path, so they aren't stored.
+_RES_ATTRS = _ATTR_MAP.format(a="list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))")
+_SERVICE = "coalesce(resource_attributes['service.name'], 'unknown') AS service"
+_SPAN_KINDS = ("SPAN_KIND_UNSPECIFIED", "SPAN_KIND_INTERNAL", "SPAN_KIND_SERVER", "SPAN_KIND_CLIENT",
+               "SPAN_KIND_PRODUCER", "SPAN_KIND_CONSUMER")
+_STATUS_CODES = ("STATUS_CODE_UNSET", "STATUS_CODE_OK", "STATUS_CODE_ERROR")
+_TEMPORALITIES = ("AGGREGATION_TEMPORALITY_UNSPECIFIED", "AGGREGATION_TEMPORALITY_DELTA",
+                  "AGGREGATION_TEMPORALITY_CUMULATIVE")
+
+
+def _logs_sql(fallback_ns):
+    return f"""
+        WITH rl AS ({_read('resourceLogs', LOGS_JSON_TYPE)}),
+        sl AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeLogs) AS sl FROM rl),
+        lr AS (SELECT res_attrs, sl.scope.name AS scope_name, unnest(sl.logRecords) AS lr FROM sl),
         flat AS (
             SELECT
-                coalesce(nullif(TRY_CAST(lr.timeUnixNano AS BIGINT), 0),
-                         nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0),
-                         {fallback_us} * 1000) AS ts_unix_nano,
-                nullif(TRY_CAST(lr.observedTimeUnixNano AS BIGINT), 0) AS observed_unix_nano,
-                -- obs.* are the platform's own routing labels; the tenant is
-                -- already in the path, so they aren't stored.
-                {_ATTR_MAP.format(a="list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))")} AS resource_attributes,
+                coalesce({_ns('lr.timeUnixNano')}, {_ns('lr.observedTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano,
+                {_ns('lr.observedTimeUnixNano')} AS observed_unix_nano,
+                {_RES_ATTRS} AS resource_attributes,
                 scope_name,
                 lr.severityNumber AS severity_number,
                 lr.severityText AS severity_text,
@@ -180,30 +282,146 @@ def load_rows(con, input_paths, arrival_dt, arrival_hour):
             FROM lr
         )
         SELECT
-            make_timestamp(ts_unix_nano // 1000) AS ts,
+            {_ts('ts_unix_nano')} AS ts,
             ts_unix_nano,
-            make_timestamp(observed_unix_nano // 1000) AS observed_ts,
-            coalesce(resource_attributes['service.name'], 'unknown') AS service,
+            {_ts('observed_unix_nano')} AS observed_ts,
+            {_SERVICE},
             severity_number, severity_text, body, trace_id, span_id, scope_name,
             attributes, resource_attributes
         FROM flat
-        """,
-        [input_paths],
-    )
-    return con.execute(
-        """
-        SELECT service, strftime(ts, '%Y-%m-%d') AS dt, strftime(ts, '%H') AS hour
-        FROM rows GROUP BY ALL ORDER BY ALL
-        """
-    ).fetchall()
+    """
 
 
-def _select_group(con, service, dt, hour):
-    """Temp table `grp`: one (service, event hour) group, numbered in time order."""
+def _traces_sql(fallback_ns):
+    return f"""
+        WITH rs AS ({_read('resourceSpans', SPANS_JSON_TYPE)}),
+        ss AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeSpans) AS ss FROM rs),
+        sp AS (SELECT res_attrs, ss.scope.name AS scope_name, unnest(ss.spans) AS sp FROM ss),
+        flat AS (
+            SELECT
+                coalesce({_ns('sp.startTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano,
+                {_ns('sp.endTimeUnixNano')} AS end_unix_nano,
+                {_RES_ATTRS} AS resource_attributes,
+                scope_name,
+                sp.name AS name,
+                {_enum('sp.kind', _SPAN_KINDS)} AS kind,
+                coalesce({_enum('sp.status.code', _STATUS_CODES)}, 0) AS status_code,
+                nullif(sp.status.message, '') AS status_message,
+                nullif(sp.traceId, '') AS trace_id,
+                nullif(sp.spanId, '') AS span_id,
+                nullif(sp.parentSpanId, '') AS parent_span_id,
+                nullif(sp.traceState, '') AS trace_state,
+                {_ATTR_MAP.format(a='sp.attributes')} AS attributes,
+                list_transform(coalesce(sp.events, []), ev -> {{
+                    'ts': {_ts(_ns('ev.timeUnixNano'))}, 'name': ev.name,
+                    'attributes': {_ATTR_MAP.format(a='ev.attributes')}}}) AS events,
+                list_transform(coalesce(sp.links, []), lk -> {{
+                    'trace_id': lk.traceId, 'span_id': lk.spanId, 'trace_state': nullif(lk.traceState, ''),
+                    'attributes': {_ATTR_MAP.format(a='lk.attributes')}}}) AS links
+            FROM sp
+        )
+        SELECT
+            {_ts('ts_unix_nano')} AS ts,
+            ts_unix_nano,
+            {_ts('end_unix_nano')} AS end_ts,
+            end_unix_nano - ts_unix_nano AS duration_ns,
+            {_SERVICE},
+            name, kind, status_code, status_message, trace_id, span_id, parent_span_id, trace_state,
+            scope_name, attributes, resource_attributes, events, links
+        FROM flat
+    """
+
+
+def _metrics_sql(fallback_ns):
+    base = "res_attrs, scope_name, m.name AS metric_name, m.unit AS unit, m.description AS description"
+    counts = "list_transform(coalesce({b}, []), c -> TRY_CAST(c AS BIGINT))"
+    stats = (f"TRY_CAST(p.count AS BIGINT) AS count, {_num('p.sum')} AS sum, "
+             f"{_num('p.min')} AS min, {_num('p.max')} AS max")
+    temporality = "{_t} AS temporality".replace("{_t}", _enum("m.{t}.aggregationTemporality", _TEMPORALITIES))
+    return f"""
+        WITH rm AS ({_read('resourceMetrics', METRICS_JSON_TYPE)}),
+        sm AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeMetrics) AS sm FROM rm),
+        m AS (SELECT res_attrs, sm.scope.name AS scope_name, unnest(sm.metrics) AS m FROM sm),
+        g AS (SELECT {base}, 'gauge' AS metric_type, unnest(m.gauge.dataPoints) AS p FROM m),
+        s AS (SELECT {base}, 'sum' AS metric_type, {temporality.format(t='sum')},
+                     m.sum.isMonotonic AS is_monotonic, unnest(m.sum.dataPoints) AS p FROM m),
+        h AS (SELECT {base}, 'histogram' AS metric_type, {temporality.format(t='histogram')},
+                     unnest(m.histogram.dataPoints) AS p FROM m),
+        e AS (SELECT {base}, 'exponential_histogram' AS metric_type,
+                     {temporality.format(t='exponentialHistogram')},
+                     unnest(m.exponentialHistogram.dataPoints) AS p FROM m),
+        q AS (SELECT {base}, 'summary' AS metric_type, unnest(m.summary.dataPoints) AS p FROM m),
+        points AS (
+            SELECT * EXCLUDE (p), p.attributes AS attrs, p.startTimeUnixNano AS start_ns,
+                   p.timeUnixNano AS time_ns, p.flags AS flags,
+                   coalesce({_num('p.asDouble')}, TRY_CAST(p.asInt AS DOUBLE)) AS value
+            FROM (SELECT * FROM g UNION ALL BY NAME SELECT * FROM s)
+            UNION ALL BY NAME
+            SELECT * EXCLUDE (p), p.attributes AS attrs, p.startTimeUnixNano AS start_ns,
+                   p.timeUnixNano AS time_ns, p.flags AS flags, {stats},
+                   {counts.format(b='p.bucketCounts')} AS bucket_counts,
+                   list_transform(coalesce(p.explicitBounds, []), b -> {_num('b')}) AS explicit_bounds
+            FROM h
+            UNION ALL BY NAME
+            SELECT * EXCLUDE (p), p.attributes AS attrs, p.startTimeUnixNano AS start_ns,
+                   p.timeUnixNano AS time_ns, p.flags AS flags, {stats},
+                   p.scale AS exp_scale, TRY_CAST(p.zeroCount AS BIGINT) AS exp_zero_count,
+                   p.positive.offset AS exp_positive_offset,
+                   {counts.format(b='p.positive.bucketCounts')} AS exp_positive_bucket_counts,
+                   p.negative.offset AS exp_negative_offset,
+                   {counts.format(b='p.negative.bucketCounts')} AS exp_negative_bucket_counts
+            FROM e
+            UNION ALL BY NAME
+            SELECT * EXCLUDE (p), p.attributes AS attrs, p.startTimeUnixNano AS start_ns,
+                   p.timeUnixNano AS time_ns, p.flags AS flags,
+                   TRY_CAST(p.count AS BIGINT) AS count, {_num('p.sum')} AS sum,
+                   list_transform(coalesce(p.quantileValues, []), v -> {{
+                       'quantile': {_num('v.quantile')}, 'value': {_num('v.value')}}}) AS quantiles
+            FROM q
+        ),
+        flat AS (
+            SELECT *,
+                coalesce({_ns('time_ns')}, {fallback_ns}) AS ts_unix_nano,
+                {_RES_ATTRS} AS resource_attributes,
+                {_ATTR_MAP.format(a='attrs')} AS attributes
+            FROM points
+        )
+        SELECT
+            {_ts('ts_unix_nano')} AS ts,
+            ts_unix_nano,
+            {_ts(_ns('start_ns'))} AS start_ts,
+            {_SERVICE},
+            metric_name, metric_type, unit, description,
+            temporality::INTEGER AS temporality, is_monotonic::BOOLEAN AS is_monotonic,
+            value::DOUBLE AS value, count::BIGINT AS count, sum::DOUBLE AS sum,
+            min::DOUBLE AS min, max::DOUBLE AS max,
+            bucket_counts::BIGINT[] AS bucket_counts, explicit_bounds::DOUBLE[] AS explicit_bounds,
+            exp_scale::INTEGER AS exp_scale, exp_zero_count::BIGINT AS exp_zero_count,
+            exp_positive_offset::INTEGER AS exp_positive_offset,
+            exp_positive_bucket_counts::BIGINT[] AS exp_positive_bucket_counts,
+            exp_negative_offset::INTEGER AS exp_negative_offset,
+            exp_negative_bucket_counts::BIGINT[] AS exp_negative_bucket_counts,
+            quantiles::STRUCT(quantile DOUBLE, value DOUBLE)[] AS quantiles,
+            TRY_CAST(flags AS INTEGER) AS flags,
+            scope_name, attributes, resource_attributes
+        FROM flat
+    """
+
+
+_ROWS_SQL = {"logs": _logs_sql, "traces": _traces_sql, "metrics": _metrics_sql}
+
+# Row order within a file: by time; metric points by metric first, so each
+# metric's points sit together (better compression, and row-group stats
+# can skip other metrics).
+_ORDER = {"logs": "ts_unix_nano", "traces": "ts_unix_nano", "metrics": "metric_name, ts_unix_nano"}
+
+
+def _select_group(con, service, dt, hour, signal="logs"):
+    """Temp table `grp`: one (service, event hour) group, numbered in sort order."""
     con.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP TABLE grp AS
-        SELECT *, row_number() OVER (ORDER BY ts_unix_nano) - 1 AS rn FROM rows
+        SELECT *, row_number() OVER (ORDER BY {_ORDER[signal]}) - 1 AS rn FROM rows
         WHERE service = ? AND strftime(ts, '%Y-%m-%d') = ? AND strftime(ts, '%H') = ?
         """,
         [service, dt, hour],
@@ -211,15 +429,22 @@ def _select_group(con, service, dt, hour):
     return con.execute("SELECT count(*) FROM grp").fetchone()[0]
 
 
-def _bloom_for(con, lo_rn, hi_rn, attributes, fpp):
-    """Bloom filter of the distinct indexed values in rows [lo_rn, hi_rn) of grp."""
-    parts = [f"SELECT 'trace_id=' || lower(trim(trace_id)) AS t FROM grp "
-             f"WHERE rn >= {lo_rn} AND rn < {hi_rn} AND trace_id IS NOT NULL"]
-    params = []
-    for key in attributes:
-        parts.append(f"SELECT ? || '=' || lower(trim(attributes[?])) FROM grp "
-                     f"WHERE rn >= {lo_rn} AND rn < {hi_rn} AND attributes[?] IS NOT NULL")
-        params += [key, key, key]
+def _bloom_for(con, lo_rn, hi_rn, fields, fpp):
+    """Bloom filter of the distinct values of `fields` (trace_id, or an
+    attribute key) in rows [lo_rn, hi_rn) of grp."""
+    parts, params = [], []
+    for field in fields:
+        if field == "trace_id":
+            parts.append(f"SELECT 'trace_id=' || lower(trim(trace_id)) AS t FROM grp "
+                         f"WHERE rn >= {lo_rn} AND rn < {hi_rn} AND trace_id IS NOT NULL")
+        else:
+            parts.append(f"SELECT ? || '=' || lower(trim(attributes[?])) FROM grp "
+                         f"WHERE rn >= {lo_rn} AND rn < {hi_rn} AND attributes[?] IS NOT NULL")
+            params += [field, field, field]
+    if not parts:
+        b = bloom.Bloom.for_capacity(0, fpp)
+        b.n = 0
+        return b
     sql = "SELECT DISTINCT t FROM (" + " UNION ALL ".join(parts) + ")"
     n = con.execute(f"SELECT count(*) FROM ({sql})", params).fetchone()[0]
     b = bloom.Bloom.for_capacity(n, fpp)

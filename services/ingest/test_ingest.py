@@ -193,3 +193,56 @@ def test_compaction_reads_what_ingest_writes(fh, tmp_path):
     written = compact.compact_logs([str(obj)], str(tmp_path / "out"), "b1", "2026-09-26", "20")
     assert sorted((w["service"], w["rows"]) for w in written) == [("api", 5), ("big", 2500), ("web", 7)]
     assert written[0]["bloom"].might_contain(compact.bloom.term("trace_id", TRACE.hex()))
+
+
+def test_compaction_reads_traces_and_metrics_from_protobuf(fh, tmp_path):
+    """Protobuf spans and metric points survive ingest's JSON conversion
+    (hex ids, integer enums, int64s as strings) and compact to Parquet."""
+    import compact
+    import duckdb
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+    from opentelemetry.proto.metrics.v1.metrics_pb2 import (
+        AggregationTemporality, Gauge, Histogram, HistogramDataPoint, Metric, NumberDataPoint,
+        ResourceMetrics, ScopeMetrics, Sum)
+    from opentelemetry.proto.trace.v1.trace_pb2 import Status
+
+    spans = ExportTraceServiceRequest(resource_spans=[ResourceSpans(
+        resource=Resource(attributes=[kv("service.name", "api")]),
+        scope_spans=[ScopeSpans(spans=[
+            Span(trace_id=TRACE, span_id=bytes(range(8)), parent_span_id=bytes(range(1, 9)), name="GET /x",
+                 kind=Span.SPAN_KIND_SERVER, start_time_unix_nano=H20 + i, end_time_unix_nano=H20 + i + 1500,
+                 status=Status(code=Status.STATUS_CODE_ERROR, message="bad"),
+                 events=[Span.Event(time_unix_nano=H20 + i + 10, name="e")])
+            for i in range(4)])])])
+    metrics = ExportMetricsServiceRequest(resource_metrics=[ResourceMetrics(
+        resource=Resource(attributes=[kv("service.name", "api")]),
+        scope_metrics=[ScopeMetrics(metrics=[
+            Metric(name="cpu", gauge=Gauge(data_points=[NumberDataPoint(time_unix_nano=H20 + 1, as_double=0.25)])),
+            Metric(name="reqs", sum=Sum(aggregation_temporality=AggregationTemporality.AGGREGATION_TEMPORALITY_CUMULATIVE,
+                                        is_monotonic=True,
+                                        data_points=[NumberDataPoint(time_unix_nano=H20 + 2, as_int=2**40)])),
+            Metric(name="lat", histogram=Histogram(
+                aggregation_temporality=AggregationTemporality.AGGREGATION_TEMPORALITY_DELTA,
+                data_points=[HistogramDataPoint(time_unix_nano=H20 + 3, count=3, sum=7.5,
+                                                bucket_counts=[1, 2], explicit_bounds=[5.0])])),
+        ])])])
+    for body, path in ((spans, "/v1/traces"), (metrics, "/v1/metrics")):
+        assert ingest.handler(event(body.SerializeToString(), path=path), None)["statusCode"] == 200
+    for signal in ("traces", "metrics"):
+        obj = tmp_path / f"{signal}.json.gz"
+        obj.write_bytes(gzip.compress(b"".join(d for s, d in fh.puts if s.endswith(signal))))
+        [w] = compact.compact(signal, [str(obj)], str(tmp_path / signal), "b1", "2026-09-26", "20")
+        con = duckdb.connect()
+        con.execute(f"CREATE VIEW t AS SELECT * FROM read_parquet('{w['path']}')")
+        if signal == "traces":
+            assert w["rows"] == 4
+            assert w["bloom"].might_contain(compact.bloom.term("trace_id", TRACE.hex()))
+            assert con.execute("SELECT DISTINCT trace_id, span_id, parent_span_id, kind, status_code, "
+                               "duration_ns, len(events) FROM t").fetchall() == [
+                (TRACE.hex(), bytes(range(8)).hex(), bytes(range(1, 9)).hex(), 2, 2, 1500, 1)]
+        else:
+            got = con.execute("SELECT metric_name, metric_type, value, temporality, is_monotonic, count, sum, "
+                              "bucket_counts, explicit_bounds FROM t ORDER BY metric_name").fetchall()
+            assert got == [("cpu", "gauge", 0.25, None, None, None, None, None, None),
+                           ("lat", "histogram", None, 1, None, 3, 7.5, [1, 2], [5.0]),
+                           ("reqs", "sum", float(2**40), 2, True, None, None, None, None)]
