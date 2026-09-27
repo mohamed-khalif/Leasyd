@@ -36,7 +36,7 @@ invoke() {  # invoke <function> <payload-json> -> sets RESULT
   RESULT="$(cat "$out" 2>/dev/null)"; rm -f "$out"
   (( rc == 0 )) && [[ "$err" == None || -z "$err" ]]
 }
-py() { python3 -c "import json,sys; d=json.loads(sys.argv[1]); print($1)" "$RESULT"; }
+py() { python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(($1))" "$RESULT"; }  # "a, b" prints as a tuple
 admin() { invoke obs-tenant-admin "$1"; }
 ENDPOINT="$(aws cloudformation describe-stacks --stack-name obs-phaseT2 \
   --query "Stacks[0].Outputs[?OutputKey=='IngestEndpoint'].OutputValue" --output text)"
