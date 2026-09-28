@@ -217,3 +217,22 @@ def test_api_answers_for_the_keys_tenant_only(data, monkeypatch):
 def test_api_rejects_bad_requests(data, tenant, body, status, msg):
     got, out = http(tenant, body)
     assert got == status and msg in out["error"]
+
+
+def http_user(claims, body, resource="/v1/app/query"):
+    event = {"resource": resource, "requestContext": {"authorizer": {"claims": claims}},
+             "body": json.dumps(body), "isBase64Encoded": False}
+    out = query.api(event, None)
+    return out["statusCode"], json.loads(out["body"])
+
+
+def test_signed_in_users_query_their_tenant_only(data, monkeypatch):
+    monkeypatch.setattr(query, "_invoke_worker", query.run_worker)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    ana = {"custom:tenant": "acme", "email": "ana@example.com"}
+    status, out = http_user(ana, {**q, "tenant": "globex"})
+    assert status == 200 and out["rows"] == [[len(data)]]
+    assert http_user({"custom:tenant": "globex"}, q)[1]["rows"] == [[50]]
+    assert http_user(ana, None, resource="/v1/app/me") == (200, {"tenant": "acme", "email": "ana@example.com"})
+    for bad in ({}, {"email": "x@example.com"}, {"custom:tenant": "Acme#x"}):
+        assert http_user(bad, q)[0] == 401

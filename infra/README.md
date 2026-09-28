@@ -409,3 +409,34 @@ infra/deploy-phaseT5.sh     # tenant admin: read-key, scope-aware rotate
 infra/deploy-phaseT7.sh     # alarm obs-query-api-errors
 python3 infra/query-api-test.py
 ```
+
+## Phase U1: customer logins
+
+People sign in to the product with a login (Cognito user pool `obs-users`, stack `obs-phaseU1`);
+machines keep using API keys. Each user belongs to exactly one tenant, in the immutable attribute
+`custom:tenant` that only the tenant admin sets. There is no self sign-up.
+
+```bash
+infra/tenant.sh invite-user <tenant> <email>   # emailed a temporary password (Cognito's sender: ~50/day; SES later)
+infra/tenant.sh users <tenant>
+infra/tenant.sh remove-user <tenant> <email>   # signs them out everywhere, deletes the login
+```
+
+Deleting a tenant removes its logins too. The web app signs users in with the `obs-app` client
+(SRP or password; ID token valid 1 h, refresh token 30 days) and calls, with header
+`Authorization: <ID token>`:
+
+- `GET /v1/app/me`: `{"tenant": ..., "email": ...}`
+- `POST /v1/app/query`: the same query body as `/v1/query`; the tenant is the token's `custom:tenant`.
+
+These routes take no API key, so users are limited by the stage throttle, not a usage plan.
+
+Deploy: attach `infra/iam/deployer-phaseU1.json` to `obs-deployer`; Phase 0 with admin credentials
+(the boundary gains `cognito-idp:AdminCreateUser/AdminDeleteUser/AdminUserGlobalSignOut`); then
+
+```bash
+infra/deploy-phaseU1.sh
+infra/deploy-phaseT2.sh      # adds /v1/app/* (reads the pool from obs-phaseU1)
+infra/deploy-phaseT5.sh      # tenant admin: invite-user / remove-user / users
+python3 infra/login-test.py
+```

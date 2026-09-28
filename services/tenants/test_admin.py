@@ -45,6 +45,10 @@ def adm(monkeypatch):
                                       {"AttributeName": r, "AttributeType": "S"}],
                 KeySchema=[{"AttributeName": h, "KeyType": "HASH"}, {"AttributeName": r, "KeyType": "RANGE"}])
         boto3.client("s3").create_bucket(Bucket="obs-data-test")
+        pool = boto3.client("cognito-idp").create_user_pool(
+            PoolName="obs-users", UsernameAttributes=["email"],
+            Schema=[{"Name": "tenant", "AttributeDataType": "String", "Mutable": False}])["UserPool"]["Id"]
+        monkeypatch.setenv("USER_POOL_ID", pool)
         import importlib
         import admin
         importlib.reload(admin)
@@ -253,3 +257,43 @@ def test_list(adm):
     call(adm, "create", tenant="beta")
     call(adm, "create", tenant="acme")
     assert [t["tenant"] for t in call(adm, "list")["tenants"]] == ["acme", "beta"]
+
+
+def login(email):
+    try:
+        u = boto3.client("cognito-idp").admin_get_user(UserPoolId=os.environ["USER_POOL_ID"], Username=email)
+    except boto3.client("cognito-idp").exceptions.UserNotFoundException:
+        return None
+    return {a["Name"]: a["Value"] for a in u["UserAttributes"]}
+
+
+def test_invite_list_remove_users(adm):
+    call(adm, "create", tenant="acme")
+    call(adm, "create", tenant="beta")
+    out = call(adm, "invite-user", tenant="acme", email=" Ana@Example.com ", send_email=False)
+    assert out == {"tenant": "acme", "email": "ana@example.com", "status": "invited", "email_sent": False}
+    assert login("ana@example.com")["custom:tenant"] == "acme"
+    # one login per email, and only for an active tenant
+    assert "already a user of this tenant" in call(adm, "invite-user", tenant="acme", email="ana@example.com")["error"]
+    assert "another tenant" in call(adm, "invite-user", tenant="beta", email="ana@example.com")["error"]
+    assert "not an email" in call(adm, "invite-user", tenant="acme", email="nope")["error"]
+    assert "not an active tenant" in call(adm, "invite-user", tenant="gone", email="x@example.com")["error"]
+    assert [u["email"] for u in call(adm, "users", tenant="acme")["users"]] == ["ana@example.com"]
+    assert call(adm, "users", tenant="beta")["users"] == []
+    # another tenant can't remove acme's user
+    assert "not a user of beta" in call(adm, "remove-user", tenant="beta", email="ana@example.com")["error"]
+    assert call(adm, "remove-user", tenant="acme", email="ana@example.com")["status"] == "removed"
+    assert login("ana@example.com") is None
+    assert call(adm, "users", tenant="acme")["users"][0]["status"] == "removed"
+    # removed users can be invited again (e.g. to another tenant)
+    assert call(adm, "invite-user", tenant="beta", email="ana@example.com", send_email=False)["status"] == "invited"
+    assert login("ana@example.com")["custom:tenant"] == "beta"
+
+
+def test_deleting_a_tenant_removes_its_logins(adm):
+    call(adm, "create", tenant="acme")
+    call(adm, "invite-user", tenant="acme", email="a@example.com", send_email=False)
+    call(adm, "invite-user", tenant="acme", email="b@example.com", send_email=False)
+    call(adm, "delete", tenant="acme")
+    assert login("a@example.com") is None and login("b@example.com") is None
+    assert {u["status"] for u in call(adm, "users", tenant="acme")["users"]} == {"removed"}

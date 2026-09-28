@@ -336,13 +336,22 @@ MAX_RESPONSE_BYTES = 5_500_000   # Lambda's response limit is 6 MB
 
 
 def api(event, context):
-    """POST /v1/query through API Gateway. The tenant comes only from the
-    authorizer (the caller's read key); a tenant or any other field in the
-    body outside API_FIELDS is ignored. Unexpected errors raise, so they
-    count as Lambda errors (alarmed) and the caller gets a 5xx."""
-    tenant = ((event.get("requestContext") or {}).get("authorizer") or {}).get("tenant")
-    if not tenant:
-        return _http(401, {"error": "no tenant for this key"})
+    """Queries through API Gateway:
+      POST /v1/query      read key (API key authorizer)
+      POST /v1/app/query  signed-in user (Cognito authorizer, ID token)
+      GET  /v1/app/me     who the signed-in user is
+    The tenant comes only from the authorizer: the key's tenant, or the
+    user's custom:tenant claim (set by the tenant admin, not changeable by
+    the user). A tenant or any other field in the body outside API_FIELDS is
+    ignored. Unexpected errors raise, so they count as Lambda errors
+    (alarmed) and the caller gets a 5xx."""
+    auth = (event.get("requestContext") or {}).get("authorizer") or {}
+    claims = auth.get("claims") or {}
+    tenant = auth.get("tenant") or claims.get("custom:tenant")
+    if not tenant or not layout._TENANT.match(tenant):
+        return _http(401, {"error": "no tenant for this key or user"})
+    if event.get("resource") == "/v1/app/me":
+        return _http(200, {"tenant": tenant, "email": claims.get("email")})
     body = event.get("body") or ""
     if event.get("isBase64Encoded"):
         body = base64.b64decode(body)

@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Customer login (U1): a Cognito user pool for people using the product (the UI), separate from
+  API keys (which machines use). Each user belongs to one tenant, held in the immutable attribute
+  custom:tenant that only the tenant admin sets. No self sign-up: tenants' users are invited with
+  obs-tenant-admin invite-user. obs-phaseT2 routes /v1/app/* with a Cognito authorizer on this pool.
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: obs-users
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true          # invitations only
+        InviteMessageTemplate:
+          EmailSubject: Your observability account
+          EmailMessage: "You have been invited. Username: {username} Temporary password: {####} (you will choose a new one when you first sign in)."
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
+      MfaConfiguration: "OFF"                  # optional per user later (TOTP)
+      Schema:
+        - Name: tenant
+          AttributeDataType: String
+          Mutable: false                       # set once, at invitation
+          StringAttributeConstraints: { MinLength: "3", MaxLength: "40" }
+      UserPoolTags:
+        project: obs
+        phase: U1
+
+  # The web app: a public client (no secret). Users can read custom:tenant
+  # but never write it.
+  AppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: obs-app
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      IdTokenValidity: 60
+      AccessTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits: { IdToken: minutes, AccessToken: minutes, RefreshToken: days }
+      ReadAttributes: [email, email_verified, custom:tenant]
+      WriteAttributes: [email]
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolArn:
+    Value: !GetAtt UserPool.Arn
+  AppClientId:
+    Value: !Ref AppClient

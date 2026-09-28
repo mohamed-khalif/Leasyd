@@ -8,6 +8,11 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
                                  (default 24), then are refused
   read-key {tenant}              an extra key that may only query (POST /v1/query), never send;
                                  revoke it with revoke {tenant, key_id}
+  invite-user {tenant, email, send_email?}  a person who signs in to the product (Cognito
+                                 user pool, U1) as a member of the tenant; they get an email
+                                 with a temporary password (send_email=false: none, for tests)
+  remove-user {tenant, email}    sign them out everywhere and delete the login
+  users   {tenant}               the tenant's users
   revoke  {tenant, key_id?}      refuse one key, or all of the tenant's keys
   delete  {tenant}               refuse all keys, remove the streams, then purge every
                                  object and index entry of the tenant (see below)
@@ -35,7 +40,10 @@ every obs-index item whose key starts "<T>#" or "_lease#<T>#". A compaction
 worker or fast-lane indexer already running for the tenant can still write
 after that pass, so passes repeat SETTLE_MINUTES apart (longer than a
 worker's lease) until one finds nothing; then the tenant is "deleted".
-Usage records are the platform's billing records and are kept.
+Usage records are the platform's billing records and are kept. The tenant's
+users are signed out and their logins deleted (an ID token already issued
+stays valid until it expires, at most an hour, and can only reach the
+tenant's purged data).
 """
 
 import decimal
@@ -61,6 +69,8 @@ BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
 SETTLE = timedelta(minutes=int(os.environ.get("SETTLE_MINUTES", "20")))
 SIGNALS = ("logs", "traces", "metrics")
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+USER_POOL = os.environ.get("USER_POOL_ID", "")   # Cognito user pool of obs-phaseU1 (empty: no logins)
+_EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
 SCOPES = {"ingest", "read"}   # see the authorizer: ingest sends, read queries
 _KEY_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -68,6 +78,7 @@ ddb = boto3.resource("dynamodb")
 tenants = ddb.Table(TENANTS)
 index = ddb.Table(INDEX)
 usage_t = ddb.Table(USAGE)
+cognito = boto3.client("cognito-idp")
 s3 = boto3.client("s3")
 apigw = boto3.client("apigateway")
 firehose = boto3.client("firehose")
@@ -130,8 +141,16 @@ def _record(tenant):
 
 
 def _keys(tenant):
+    return _items(tenant, "key#")
+
+
+def _users(tenant):
+    return _items(tenant, "user#")
+
+
+def _items(tenant, prefix):
     items, kw = [], dict(IndexName="by-tenant", KeyConditionExpression=Key("tenant").eq(tenant)
-                         & Key("pk").begins_with("key#"))
+                         & Key("pk").begins_with(prefix))
     while True:
         page = tenants.query(**kw)
         items += page["Items"]
@@ -208,10 +227,69 @@ def delete(tenant, context=None):
             firehose.delete_delivery_stream(DeliveryStreamName=f"obs-t-{tenant}-{sig}")
         except firehose.exceptions.ResourceNotFoundException:
             pass
+    for u in _users(tenant):
+        if u["status"] == "active":
+            _remove_login(u)
     _invoke_self({"action": "purge", "tenant": tenant})
     return {"tenant": tenant, "status": "deleting", "revoked": revoked,
             "note": f"data purge started; passes repeat every {int(SETTLE.total_seconds() // 60)} min "
                     "until one finds nothing"}
+
+
+def invite_user(tenant, email, send_email=True, context=None):
+    if not USER_POOL:
+        raise Refused("logins are not set up (no USER_POOL_ID; deploy obs-phaseU1, then obs-phaseT5)")
+    _active(tenant)
+    email = _email(email)
+    rec = tenants.get_item(Key={"pk": f"user#{email}"}, ConsistentRead=True).get("Item")
+    if rec and rec["status"] == "active":
+        # A login belongs to exactly one tenant (its username is the email).
+        raise Refused(f"{email} is already a user of {'this tenant' if rec['tenant'] == tenant else 'another tenant'}")
+    kw = {} if send_email else {"MessageAction": "SUPPRESS"}
+    try:
+        cognito.admin_create_user(
+            UserPoolId=USER_POOL, Username=email, DesiredDeliveryMediums=["EMAIL"],
+            UserAttributes=[{"Name": "email", "Value": email}, {"Name": "email_verified", "Value": "true"},
+                            {"Name": "custom:tenant", "Value": tenant}], **kw)
+    except cognito.exceptions.UsernameExistsException:
+        raise Refused(f"{email} already has a login")
+    tenants.put_item(Item={"pk": f"user#{email}", "tenant": tenant, "status": "active", "email": email,
+                           "created_at": _iso(_now())})
+    return {"tenant": tenant, "email": email, "status": "invited", "email_sent": bool(send_email)}
+
+
+def remove_user(tenant, email, context=None):
+    email = _email(email)
+    rec = tenants.get_item(Key={"pk": f"user#{email}"}, ConsistentRead=True).get("Item")
+    if not rec or rec["tenant"] != tenant or rec["status"] != "active":
+        raise Refused(f"{email} is not a user of {tenant}")
+    _remove_login(rec)
+    return {"tenant": tenant, "email": email, "status": "removed"}
+
+
+def users(tenant, context=None):
+    return {"tenant": tenant, "users": sorted(({"email": u["email"], "status": u["status"],
+                                                "created_at": u.get("created_at")} for u in _users(tenant)),
+                                              key=lambda u: u["email"])}
+
+
+def _remove_login(rec):
+    """Sign the user out everywhere (refresh tokens stop working) and delete the login."""
+    for call in (cognito.admin_user_global_sign_out, cognito.admin_delete_user):
+        try:
+            call(UserPoolId=USER_POOL, Username=rec["email"])
+        except cognito.exceptions.UserNotFoundException:
+            pass
+    tenants.update_item(Key={"pk": rec["pk"]}, UpdateExpression="SET #s = :r, removed_at = :n",
+                        ExpressionAttributeNames={"#s": "status"},
+                        ExpressionAttributeValues={":r": "removed", ":n": _iso(_now())})
+
+
+def _email(email):
+    email = str(email).strip().lower()
+    if not _EMAIL.match(email):
+        raise Refused(f"not an email address: {email!r}")
+    return email
 
 
 def tune(tenant, buffer_seconds, context=None):
@@ -341,7 +419,8 @@ def purge(tenant, deleted=0, context=None):
     return {"tenant": tenant, "deleted": deleted, "pass_complete": True}
 
 
-ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
+ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key,
+           "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
            "usage": usage, "list": list_tenants, "sweep": sweep, "purge": purge}
 
 
