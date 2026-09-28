@@ -59,9 +59,10 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
   Kept on purpose: `t6-000`..`t6-099` and the `obs-phaseT6` stack (load tests; idle cost ~0),
   `canary` (freshness canary), `seed-acme` / `seed-globex` (T1 isolation test data),
   `_bench/chunk-2m/` (the 2M-record benchmark chunk).
-- Lock down Phase 0: redeploy with `AllowTestAssume=false EnableLifecycleTest=false` (admin
-  credentials). After that the Phase 0 / T1 deny tests need the flags back on temporarily.
-- Merge pull request #1 (branch `claude/code-identification-1dxuoa`) into `main`.
+- Phase 0 locked down (2026-09-28): `AllowTestAssume=false EnableLifecycleTest=false`. Platform
+  roles are assumable only by their AWS services (tenant reader: only `obs-query`). The Phase 0 / T1
+  deny tests need `AllowTestAssume=true` temporarily to run again.
+- Pull request #1 merged into `main` (d832b05). New work: same branch, new pull request.
 
 ## Findings worth remembering
 
