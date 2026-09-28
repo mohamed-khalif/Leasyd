@@ -22,7 +22,8 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Query engine with fan-out (`obs-query`), column-only reads | 4-5 | live, tested |
 | Firehose cost cut (compress before Firehose) | T6 | live, tested: $0.143 -> $0.077/GB at 10 GB/h |
 | Fast lane writes Parquet; per-tenant Firehose buffer (`tune`) | T6 | live, tested at 50 GB/h: freshness p99 38 s, queries pass |
-| Faults, soak | T6 | not started |
+| Failure visibility: fast-lane dead-letter queue + redrive, compaction/ingest/query alarms, freshness canary | T7 | live, each alarm proven by an injected failure |
+| Faults, soak | T6 | crash safety covered by tests and a real stuck-chunk recovery; soak not run |
 | UI, alerting on customer data | 6+ | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
@@ -46,9 +47,8 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 
 1. Freshness at 50 GB/h fixed: p99 38 s (was 74 s) with the fast parse in the fast lane and 15 s
    Firehose buffers for the 10 largest tenants (`infra/tenant.sh tune <tenant> 15`). Details and
-   all benchmarks: `docs/REPORT-2026-09-28.md`. Hardening still to do: SQS + dead-letter queue for
-   the fast lane, a permanent freshness canary, Lambda memory above 3008 MB (ask AWS), compaction
-   chunks capped by record count before testing 100 GB/h.
+   all benchmarks: `docs/REPORT-2026-09-28.md`. Still to do: Lambda memory above 3008 MB (ask AWS), compaction chunks capped by record count
+   before testing 100 GB/h.
 2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 

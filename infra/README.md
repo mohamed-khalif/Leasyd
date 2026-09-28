@@ -369,3 +369,9 @@ infra/deploy-phaseT7.sh          # first run creates the canary tenant and store
 ```
 
 Failed fast-lane files: `python3 infra/redrive-fastlane.py` lists them, `--apply` replays them.
+
+Proven on AWS (2026-09-28 21:02, one injected failure each): an invalid compaction job ->
+`obs-compaction-worker-errors` in ~1.5 min; the canary tenant's Firehose buffer set to 900 s ->
+`obs-canary-logs/traces` in ~4.5 min; a corrupt raw file -> 3 failed fast-lane attempts -> queue ->
+`obs-fastlane-failed` in ~5.5 min, then listed and replayed with the redrive script (file removed:
+skipped, message deleted). All alarms back to OK after the fixes.

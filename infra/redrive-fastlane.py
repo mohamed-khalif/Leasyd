@@ -26,14 +26,16 @@ def main():
     a = p.parse_args()
     sqs, lam = boto3.client("sqs"), boto3.client("lambda")
     url = sqs.get_queue_url(QueueName=QUEUE)["QueueUrl"]
-    seen = ok = failed = 0
+    seen, ok, failed = set(), 0, 0
     while True:
+        # Listing peeks (visibility 0, so nothing is hidden) and stops at the first repeat.
         msgs = sqs.receive_message(QueueUrl=url, MaxNumberOfMessages=10, WaitTimeSeconds=1,
-                                   VisibilityTimeout=300 if a.apply else 30).get("Messages", [])
+                                   VisibilityTimeout=300 if a.apply else 0).get("Messages", [])
+        msgs = [m for m in msgs if m["MessageId"] not in seen]
         if not msgs:
             break
         for m in msgs:
-            seen += 1
+            seen.add(m["MessageId"])
             body = json.loads(m["Body"])
             event = body.get("requestPayload", body)
             key = ((event.get("detail") or {}).get("object") or {}).get("key", "?")
@@ -50,8 +52,8 @@ def main():
                 ok += 1
                 sqs.delete_message(QueueUrl=url, ReceiptHandle=m["ReceiptHandle"])
                 print(f"replayed: {key}: {out[:200]}")
-    print(f"{seen} message(s); replayed {ok}, still failing {failed}" if a.apply else
-          f"{seen} message(s) queued (they stay, hidden for 30 s; run with --apply to replay)")
+    print(f"{len(seen)} message(s); replayed {ok}, still failing {failed}" if a.apply else
+          f"{len(seen)} message(s) queued (run with --apply to replay)")
 
 
 if __name__ == "__main__":
