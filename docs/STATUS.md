@@ -1,7 +1,7 @@
 # Status
 
 Where the project stands, what is running on AWS, and how to pick it up.
-Last updated: 2026-09-27. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+Last updated: 2026-09-28. Detail: `docs/observability-plan.md` (the plan, with results per phase)
 and `infra/README.md` (deploy and test commands per phase).
 
 ## What exists
@@ -15,57 +15,53 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Index lookups with bloom filters | 3 | live, tested |
 | Tenant-aware storage and IAM isolation | T1 | live, tested |
 | Authenticated ingest: API Gateway + API keys + per-tenant Firehose | T2 | live, tested |
-| Fast lane: data searchable in ~35 s | T3 | live, tested |
+| Fast lane: data searchable in ~30 s | T3 | live, tested |
 | Traces and metrics | T4 | live, tested |
 | Tenant operations: create, rotate, revoke, usage, delete | T5 | live, tested |
-| Scale fixes: blooms out of the index, parallel lookups, day filters | T6 | live, tested |
-| Load tests 1 -> 10 -> 50 GB/h, faults, soak | T6 | **waiting**: see below |
-| Query engine, fan-out, UI, alerting | 4+ | not started |
+| Scale: day + hour ID filters, faster fast lane, fixes found under load | T6 | live, tested at 1, 10, 50 GB/h |
+| Query engine with fan-out (`obs-query`) | 4-5 | live, tested; column-only reads built, **to deploy and measure** |
+| Faults, soak, Firehose cost cut | T6 | not started |
+| UI, alerting on customer data | 6+ | not started |
 
-Code: `services/` (compaction, ingest, tenants, loadgen), each with `pytest` tests.
-Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.sh`.
+Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
+Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.*`.
 
 ## Stacks on AWS
 
-`obs-phase0`, `obs-phase1`, `obs-phase2`, `obs-phase3`, `obs-phaseT2`, `obs-phaseT5`, `obs-phaseT6`
-(test tooling only; delete after T6). Deploys run as the `obs-deployer` IAM user; Phase 0 needs
-admin credentials only when the `obs-boundary` policy changes.
+`obs-phase0`, `obs-phase1`, `obs-phase2`, `obs-phase3`, `obs-phase4`, `obs-phaseT2`, `obs-phaseT5`,
+`obs-phaseT6` (test tooling only; delete after T6). Deploys run as the `obs-deployer` IAM user; Phase 0
+needs admin credentials only when the `obs-boundary` policy changes. Lambda concurrency limit: 1000.
 
-## Blocked on
+## Key results (details in the plan)
 
-**Lambda concurrency limit is 10** (new-account default). Every function shares it, so the load
-steps can't run and production traffic would be throttled. An increase to 1000 was requested in
-Service Quotas (Lambda > Concurrent executions, us-east-1). Check with
-`python3 infra/t6/loadtest.py preflight`.
+- 50 GB/h across 100 tenants: every request accepted, freshness p99 44 s (target 60 s),
+  ingest + fast lane $0.117/GB (Firehose ~half of that).
+- Query, largest tenant (1.26 GB/day): 1 day in 4.9 s with 5 workers (target < 5 s);
+  trace ID across 30 days in 1.5 s (target < 3 s); results identical to Athena.
 
-## To resume T6 once the limit is raised
+## Next
 
-```bash
-python3 infra/t6/loadtest.py preflight
-python3 infra/t6/loadtest.py tenants create --n 100      # keys go to ~/.obs-t6-keys.json (not in git)
-python3 infra/t6/loadtest.py run --gbph 1 --minutes 45 --step s1 --yes
-python3 infra/t6/loadtest.py report --step s1
-python3 infra/t6/loadtest.py compaction --since-minutes 180
-# fix the first bottleneck found, then --gbph 10 (step s2) and --gbph 50 (step s3)
-python3 infra/t6/loadtest.py tenants delete
-```
-
-Then: fault injection under load, a soak run, and delete `obs-phaseT6`.
+1. Deploy `infra/deploy-phase4.sh` (column-only reads, 64 MB per worker) and run
+   `python3 infra/phase4-test.py` to measure the speedup.
+2. Compress records before Firehose (cost ~$0.12 -> ~$0.07/GB).
+3. Vectorise compaction's per-ID loops (biggest chunks took up to ~7 min at 50 GB/h).
+4. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
+   (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 
 ## Loose ends
 
-- Test tenants `t6-000`..`t6-004` exist (from the smoke runs). Their keys were kept only in the
-  session's `~/.obs-t6-keys.json`; if that file is gone, delete them with
-  `infra/tenant.sh delete t6-000` (etc.) and recreate with `tenants create`.
-- Older test tenants from T2/T3 (`t2a-*`, `t2b-*`, `t2tiny-*`, `probe-*`, `t3-*`) can be removed
-  with `infra/tenant.sh delete <tenant>`.
-- Lock down Phase 0 after the lifecycle check (~2026-09-28): redeploy with
+- The `t6-*` tenant keys are only in the working session's `~/.obs-t6-keys.json`. If that file is
+  gone, delete the tenants with `infra/tenant.sh delete t6-000` .. `t6-099`.
+- Older test tenants (`t2a-*`, `t2b-*`, `t2tiny-*`, `probe-*`, `t3-*`, `t5-*`) can be removed with
+  `infra/tenant.sh delete <tenant>`.
+- Lock down Phase 0 (lifecycle check was due ~2026-09-28): redeploy with
   `AllowTestAssume=false EnableLifecycleTest=false`.
 - Merge the pull request from branch `claude/code-identification-1dxuoa` into `main`.
 
 ## Findings worth remembering
 
+- New AWS accounts start with a Lambda concurrency limit of 10; raise it before any real traffic.
 - New API keys take ~1 minute to work everywhere (they flicker 200/403 meanwhile); revocation ~1 minute.
 - API Gateway may decompress gzip bodies but keep `Content-Encoding: gzip`; ingest checks the gzip magic bytes.
-- Firehose occasionally delivers a file ~30 s later than usual (metrics once took 64 s to be searchable).
-- At trickle volume, cost is ~$0.22/GB (per-request and per-file charges dominate); measure at volume.
+- Load testing found and fixed: colliding bloom file names, a race deleting fast-lane blooms mid-lookup,
+  compaction failing whenever DuckDB spilled to disk, and slow fast-lane indexing of big files.
