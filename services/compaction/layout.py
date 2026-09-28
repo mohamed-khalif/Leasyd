@@ -54,6 +54,11 @@ def data_prefix(tenant, signal):
     return f"data/tenant={tenant}/{signal}/"
 
 
+def fast_prefix(tenant, signal):
+    """Fast-lane Parquet: one set per raw file, deleted when it is compacted."""
+    return f"{data_prefix(tenant, signal)}_fast/"
+
+
 def index_pk(tenant, signal, service):
     return f"{tenant}#{signal}#{service}"
 

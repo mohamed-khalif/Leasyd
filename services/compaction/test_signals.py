@@ -111,14 +111,6 @@ def test_span_without_start_falls_back_to_arrival_hour(tmp_path):
     assert r["ts_unix_nano"] == H20 and r["duration_ns"] is None and r["kind"] is None
 
 
-def test_traces_summary_matches_compaction(tmp_path):
-    f = write(tmp_path / "a.json.gz", spans_doc("api", [span(H20 + n * MS, trace=f"{n:032x}") for n in range(30)]))
-    summary = compact.summarize("traces", [f], str(tmp_path / "s"), "2026-09-26", "20")
-    written = compact.compact("traces", [f], str(tmp_path / "o"), "b1", "2026-09-26", "20")
-    key = lambda d: (d["service"], d["hour"], d["rows"], d["min_ts"], d["max_ts"], d["bloom"].to_bytes())
-    assert [key(d) for d in summary] == [key(w) for w in written]
-
-
 # ----------------------------------------------------------------- metrics
 
 def pt(ts, **kw):
@@ -208,17 +200,9 @@ def test_unknown_signal_rejected(tmp_path):
         raise AssertionError("expected ValueError")
 
 
-# ---- the fast lane's summary rows agree with compaction's full rows ----
+# ---- blooms over ID attributes ----
 
-def _same(signal, files, tmp_path, attrs=("request.id",)):
-    summary = compact.summarize(signal, files, str(tmp_path / "s"), "2026-09-26", "20", bloom_attributes=attrs)
-    written = compact.compact(signal, files, str(tmp_path / "o"), "b1", "2026-09-26", "20", bloom_attributes=attrs)
-    key = lambda d: (d["service"], d["dt"], d["hour"], d["rows"], d["min_ts"], d["max_ts"], d["bloom"].to_bytes())
-    assert [key(d) for d in summary] == [key(w) for w in written]
-    return summary
-
-
-def test_summary_matches_compaction_logs_with_id_attributes(tmp_path):
+def test_bloom_over_id_attributes(tmp_path):
     def rec(i, **kw):
         r = {"timeUnixNano": str(H20 + i * MS), "body": {"stringValue": "m"}, "traceId": f"{i:032x}",
              "attributes": [attr("request.id", f"R{i}"), attr("request.id", "dup"), attr("other", "x")]}
@@ -229,13 +213,8 @@ def test_summary_matches_compaction_logs_with_id_attributes(tmp_path):
          "scopeLogs": [{"logRecords": [rec(i) for i in range(30)] + [rec(99, timeUnixNano="0")]}]},
         {"resource": {"attributes": [attr("host", "h")]},             # no service.name
          "scopeLogs": [{"logRecords": [rec(i, traceId="") for i in range(40, 45)]}]}]}
-    [a, u] = _same("logs", [write(tmp_path / "a.json.gz", doc)], tmp_path)
+    [a, u] = compact.compact("logs", [write(tmp_path / "a.json.gz", doc)], str(tmp_path / "o"), "b1",
+                             "2026-09-26", "20", bloom_attributes=("request.id",))
     assert (a["service"], u["service"]) == ("api", "unknown")
     assert a["bloom"].might_contain(bloom.term("request.id", "r7"))
     assert not a["bloom"].might_contain(bloom.term("request.id", "dup"))   # first occurrence wins, as in the map
-
-
-def test_summary_matches_compaction_traces_and_metrics(tmp_path):
-    spans = [span(H20 + i * MS, trace=f"{i:032x}", attributes=[attr("request.id", f"q{i}")]) for i in range(20)]
-    _same("traces", [write(tmp_path / "t.json.gz", spans_doc("api", spans))], tmp_path)
-    _same("metrics", [write(tmp_path / "m.json.gz", metrics_doc("api", ALL_TYPES))], tmp_path)

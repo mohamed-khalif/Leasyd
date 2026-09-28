@@ -21,6 +21,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Scale: day + hour ID filters, faster fast lane, fixes found under load | T6 | live, tested at 1, 10, 50 GB/h |
 | Query engine with fan-out (`obs-query`), column-only reads | 4-5 | live, tested |
 | Firehose cost cut (compress before Firehose) | T6 | live, tested: $0.143 -> $0.077/GB at 10 GB/h |
+| Fast lane writes Parquet (queries read only Parquet) | T6 | built, not yet deployed |
 | Faults, soak | T6 | not started |
 | UI, alerting on customer data | 6+ | not started |
 
@@ -43,8 +44,9 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 
 ## Next
 
-1. Queries over the current hour are slower (its raw files are parsed in full: 5 s instead of 1.2 s
-   for 1 day of the largest tenant). Fix: the fast lane also writes a small Parquet file per raw file.
+1. Fast lane writes Parquet (built, to deploy and measure): queries over the current hour read
+   Parquet like everything else (was 4.5 s for 1 day, 10.3 s for an ID lookup with live ingest).
+   Check on AWS: query times, and freshness at 10 and 50 GB/h (the fast lane now does a full parse).
 2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 

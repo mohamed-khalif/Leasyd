@@ -259,16 +259,7 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
                 memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
                 bloom_attributes=BLOOM_ATTRIBUTES, id_digests=digests,
             )
-            prefix = layout.data_prefix(tenant, signal)
-            for w in written:
-                w["key"] = prefix + w["relpath"]
-                s3.upload_file(w["path"], BUCKET, w["key"])
-                bits = w["bloom"].to_bytes()
-                if len(bits) > BLOOM_INLINE_MAX_BYTES:
-                    # Unique per output file: a chunk can write the same service
-                    # and part number for several event hours.
-                    w["bloom_key"] = f"{prefix}_bloom/{w['relpath'][:-len('.parquet')]}.bloom"
-                    s3.put_object(Bucket=BUCKET, Key=w["bloom_key"], Body=bits)
+            _upload(_name(written, layout.data_prefix(tenant, signal)))
             # ID digests for the day and hour filters (same keys on a re-run).
             for (day, ev_hour), groups in digests.items():
                 for g, buf in groups.items():
@@ -337,11 +328,14 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
 # ---------------------------------------------------------------- fast lane
 
 def recent_indexer(event, context):
-    """Index a new raw file (EventBridge "Object Created") as kind=raw entries.
+    """Make a new raw file (EventBridge "Object Created") queryable at once:
+    compact it on its own into fast-lane Parquet, and index those files as
+    kind=raw entries (visible until the file's compaction plan commits).
 
-    Writes the raw-file record (listing the entries) before the entries, so
-    compaction can always find and retire them. Idempotent: the same file
-    always produces the same keys."""
+    Writes the raw-file record (listing the entries and objects) before
+    uploading or indexing anything, so compaction can always find and retire
+    them. Idempotent: the
+    same file always produces the same keys."""
     detail = event.get("detail") or {}
     key = urllib.parse.unquote_plus((detail.get("object") or {}).get("key", ""))
     parsed = layout.parse_incoming_key(key)
@@ -351,6 +345,9 @@ def recent_indexer(event, context):
     if signal not in compact.SIGNALS:
         return _done(None, skipped=f"unknown signal {signal!r}: {key}")
 
+    # Distinct from compaction batch IDs (a hash of the inputs: the same hash
+    # for a one-file batch), so the two copies never share an index key.
+    fid = "fast-" + hashlib.sha256(key.encode()).hexdigest()[:16]
     work = tempfile.mkdtemp(dir="/tmp")
     try:
         local = os.path.join(work, "raw.json.gz")
@@ -360,58 +357,32 @@ def recent_indexer(event, context):
             if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
                 return _done(None, skipped=f"already compacted: {key}")
             raise
-        size = os.path.getsize(local)
         mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048"))
-        groups = compact.summarize(signal, [local], work, dt, hour, memory_limit=f"{int(mem_mb * 0.6)}MB",
-                                   bloom_attributes=BLOOM_ATTRIBUTES)
+        written = compact.compact(signal, [local], os.path.join(work, "out"), fid, dt, hour,
+                                  memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
+                                  bloom_attributes=BLOOM_ATTRIBUTES)
+        _name(written, layout.fast_prefix(tenant, signal))
+        now = datetime.now(timezone.utc).isoformat()
+        plan_pk = layout.plan_pk(tenant, signal, dt, hour)
+        items = [_index_item(tenant, signal, fid, w, now, plan_pk, raw_key=key) for w in written]
+        ddb.put_item(TableName=TABLE, Item={
+            "pk": {"S": layout.raw_files_pk(tenant, signal, dt, hour)}, "sk": {"S": key},
+            "entries": {"L": [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items]},
+            # S3 objects of those entries (Parquet and blooms), deleted with them
+            "objects": {"L": [{"S": k} for w in written for k in (w["key"], w.get("bloom_key")) if k]},
+        })
+        _upload(written)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-    fid = hashlib.sha256(key.encode()).hexdigest()[:16]
-    plan_pk = layout.plan_pk(tenant, signal, dt, hour)
-    items = []
-    for i, g in enumerate(groups):
-        item = {
-            "pk": {"S": layout.index_pk(tenant, signal, g["service"])},
-            "sk": {"S": f"{g['min_ts']}#raw#{fid}-{i:03d}"},
-            "kind": {"S": "raw"},
-            "plan_pk": {"S": plan_pk},
-            "raw_key": {"S": key},
-            "min_ts": {"S": g["min_ts"]},
-            "max_ts": {"S": g["max_ts"]},
-            "file_path": {"S": f"s3://{BUCKET}/{key}"},
-            "row_count": {"N": str(g["rows"])},
-            "size_bytes": {"N": str(size)},  # of the whole raw file, which may hold several groups
-            "storage_class": {"S": "STANDARD"},
-            "indexed_at": {"S": datetime.now(timezone.utc).isoformat()},
-            "bloom_m": {"N": str(g["bloom"].m)},
-            "bloom_k": {"N": str(g["bloom"].k)},
-            "bloom_n": {"N": str(g["bloom"].n)},
-            "bloom_fields": {"L": [{"S": f} for f in compact.bloom_fields(signal, BLOOM_ATTRIBUTES)]},
-        }
-        bits = g["bloom"].to_bytes()
-        if len(bits) > BLOOM_INLINE_MAX_BYTES:
-            bkey = f"{layout.data_prefix(tenant, signal)}_bloom/raw-{fid}-{i:03d}.bloom"
-            s3.put_object(Bucket=BUCKET, Key=bkey, Body=bits)
-            item["bloom_s3_key"] = {"S": bkey}
-        else:
-            item["bloom"] = {"B": bits}
-        items.append(item)
-
-    ddb.put_item(TableName=TABLE, Item={
-        "pk": {"S": layout.raw_files_pk(tenant, signal, dt, hour)}, "sk": {"S": key},
-        "entries": {"L": [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items]},
-        # bloom objects of those entries, deleted with them
-        "blooms": {"L": [{"S": it["bloom_s3_key"]["S"]} for it in items if "bloom_s3_key" in it]},
-    })
     _batch_write(items)
     if items:
         ddb.update_item(
             TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}},
             UpdateExpression="ADD services :s",
-            ExpressionAttributeValues={":s": {"SS": sorted({g["service"] for g in groups})}},
+            ExpressionAttributeValues={":s": {"SS": sorted({w["service"] for w in written})}},
         )
-    return _done(None, tenant=tenant, key=key, entries=len(items), rows=sum(g["rows"] for g in groups))
+    return _done(None, tenant=tenant, key=key, entries=len(items), rows=sum(w["rows"] for w in written))
 
 
 # -------------------------------------------------------------- day filters
@@ -567,7 +538,8 @@ def _seal_day(tenant, signal, day, now, context, force=False):
 
 
 def _retire_raw_entries(tenant, signal, dt, hour, keys):
-    """Delete the fast-lane entries (and raw-file records) of these raw files."""
+    """Delete the fast-lane entries, their S3 objects and the raw-file records
+    of these raw files."""
     pk = layout.raw_files_pk(tenant, signal, dt, hour)
     for i in range(0, len(keys), 100):
         req = {TABLE: {"Keys": [{"pk": {"S": pk}, "sk": {"S": k}} for k in keys[i:i + 100]],
@@ -577,7 +549,8 @@ def _retire_raw_entries(tenant, signal, dt, hour, keys):
             for rec in resp.get("Responses", {}).get(TABLE, []):
                 entries = [e["M"] for e in rec.get("entries", {}).get("L", [])]
                 _batch_delete([{"pk": e["pk"], "sk": e["sk"]} for e in entries])
-                _delete_keys([b["S"] for b in rec.get("blooms", {}).get("L", [])])
+                # "blooms": records written before the fast lane wrote Parquet
+                _delete_keys([o["S"] for o in (rec.get("objects") or rec.get("blooms") or {}).get("L", [])])
                 ddb.delete_item(TableName=TABLE, Key={"pk": rec["pk"], "sk": rec["sk"]})
             req = resp.get("UnprocessedKeys") or None
 
@@ -597,14 +570,35 @@ def _batch_delete(keys):
 
 # ------------------------------------------------------------------- helpers
 
-def _index_item(tenant, signal, batch_id, w, now, plan_pk):
+def _name(written, prefix):
+    """S3 keys for written Parquet files under prefix: w["key"], and
+    w["bloom_key"] for blooms too big to keep in the index entry."""
+    for w in written:
+        w["key"] = prefix + w["relpath"]
+        if len(w["bloom"].to_bytes()) > BLOOM_INLINE_MAX_BYTES:
+            # Unique per output file: a chunk can write the same service
+            # and part number for several event hours.
+            w["bloom_key"] = f"{prefix}_bloom/{w['relpath'][:-len('.parquet')]}.bloom"
+    return written
+
+
+def _upload(written):
+    for w in written:
+        s3.upload_file(w["path"], BUCKET, w["key"])
+        if "bloom_key" in w:
+            s3.put_object(Bucket=BUCKET, Key=w["bloom_key"], Body=w["bloom"].to_bytes())
+
+
+def _index_item(tenant, signal, batch_id, w, now, plan_pk, raw_key=None):
+    """Index entry of a written Parquet file: compacted (kind=parquet), or the
+    fast-lane copy of one raw file (kind=raw, visible until it is compacted)."""
     b = w["bloom"]
     item = {
         "pk": {"S": layout.index_pk(tenant, signal, w["service"])},
         "sk": {"S": f"{w['min_ts']}#{batch_id}-{w['part']:03d}"},
-        "kind": {"S": "parquet"},
-        # Lookups hide this entry while its plan is still "planned" (the
-        # raw files it replaces are still the visible copy).
+        "kind": {"S": "raw" if raw_key else "parquet"},
+        # Handover (see lookup): a compacted entry is hidden while its plan is
+        # "planned", a fast-lane entry once the plan is "committed".
         "plan_pk": {"S": plan_pk},
         "min_ts": {"S": w["min_ts"]},
         "max_ts": {"S": w["max_ts"]},
@@ -612,13 +606,15 @@ def _index_item(tenant, signal, batch_id, w, now, plan_pk):
         "row_count": {"N": str(w["rows"])},
         "size_bytes": {"N": str(w["size_bytes"])},
         "storage_class": {"S": "STANDARD"},
-        "batch_id": {"S": batch_id},
-        "compacted_at": {"S": now},
         "bloom_m": {"N": str(b.m)},
         "bloom_k": {"N": str(b.k)},
         "bloom_n": {"N": str(b.n)},
         "bloom_fields": {"L": [{"S": f} for f in compact.bloom_fields(signal, BLOOM_ATTRIBUTES)]},
     }
+    if raw_key:
+        item.update(raw_key={"S": raw_key}, indexed_at={"S": now})
+    else:
+        item.update(batch_id={"S": batch_id}, compacted_at={"S": now})
     if "bloom_key" in w:
         item["bloom_s3_key"] = {"S": w["bloom_key"]}
     else:

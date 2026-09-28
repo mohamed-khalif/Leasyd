@@ -24,7 +24,7 @@ The query is never SQL from the caller: fields are checked against the
 signal's columns and every value is a bound parameter.
 
 coordinator: runs the index lookup (the files that can hold matching rows,
-raw and Parquet), splits them into balanced chunks, runs one worker per
+compacted and fast lane), splits them into balanced chunks, runs one worker per
 chunk in parallel, and merges their partial results.
 worker: downloads its files with the tenant-scoped credentials (IAM refuses
 anything outside the tenant), loads them into DuckDB, runs the compiled
@@ -58,7 +58,6 @@ TARGET_BYTES_PER_WORKER = int(os.environ.get("QUERY_BYTES_PER_WORKER", str(256 *
 DOWNLOAD_THREADS = 32
 READ_MODE = os.environ.get("QUERY_READ_MODE", "ranges")   # or "download"
 RANGE_THREADS = int(os.environ.get("QUERY_RANGE_THREADS", "8"))
-RAW_WORK_FACTOR = int(os.environ.get("QUERY_RAW_WORK_FACTOR", "8"))  # raw JSON vs Parquet, per byte
 RANGE_BLOCK_BYTES = 256 * 1024   # read-ahead per S3 range request (small: column chunks can be tiny)
 MAX_ROWS = 10_000          # search results and aggregate groups returned
 HIST_BASE = 1.05           # percentile buckets: relative error <= 2.5%
@@ -198,7 +197,8 @@ def run_worker(event):
     Parquet is read in place ("ranges", the default): DuckDB asks for the
     footer and just the column chunks the query needs, fetched as S3 range
     requests. "download" fetches whole files first (the Phase 4 baseline).
-    Raw files are always downloaded: gzipped JSON has to be read in full."""
+    Fast-lane entries are Parquet too; only entries indexed before the fast
+    lane wrote Parquet point at raw JSON, which is downloaded and parsed."""
     t0 = time.perf_counter()
     q = event["query"]
     tenant = layout.check_tenant(q["tenant"])
@@ -210,11 +210,11 @@ def run_worker(event):
     try:
         files = sorted({f["file_path"]: f for f in event["files"]}.values(), key=lambda f: f["file_path"])
         prefix = f"s3://{lookup.BUCKET}/"
-        in_place = [f for f in files if f["kind"] == "parquet" and mode == "ranges"]
+        in_place = [f for f in files if _is_parquet(f) and mode == "ranges"]
 
         def fetch(i_f):
             i, f = i_f
-            ext = ".parquet" if f["kind"] == "parquet" else ".json.gz"
+            ext = ".parquet" if _is_parquet(f) else ".json.gz"
             local = os.path.join(work, f"{i:05d}{ext}")
             s3.download_file(lookup.BUCKET, f["file_path"][len(prefix):], local)
             return f, local
@@ -225,7 +225,7 @@ def run_worker(event):
         ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for f in in_place})
         try:
             parts = []
-            pq = [p for f, p in local if f["kind"] == "parquet"]
+            pq = [p for f, p in local if _is_parquet(f)]
             if in_place:
                 con.register_filesystem(ranges)
                 # Reading in place mostly waits on S3: more threads keep more
@@ -240,17 +240,11 @@ def run_worker(event):
                 con.execute(f"CREATE TEMP VIEW pq AS SELECT * FROM read_parquet([{paths}], union_by_name = true, "
                             "hive_partitioning = false)")
                 parts.append("SELECT * FROM pq")
-            # Raw (not yet compacted) files: parsed exactly as compaction would,
-            # all of one arrival hour in one pass, building only the attribute
-            # keys the query uses (all of them for search).
-            attr_keys, res_keys = needed_keys(q)
-            by_hour = {}
-            for f, p in local:
-                if f["kind"] == "raw":
-                    parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
-                    by_hour.setdefault((parsed[2], parsed[3]), []).append(p)
-            for i, ((dt, hr), paths) in enumerate(sorted(by_hour.items())):
-                compact.load_rows(con, paths, dt, hr, signal, attr_keys=attr_keys, res_keys=res_keys)
+            raw = [(f, p) for f, p in local if not _is_parquet(f)]
+            for i, (f, p) in enumerate(raw):
+                # Raw (not yet compacted) files: parsed exactly as compaction would.
+                parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
+                compact.load_rows(con, [p], parsed[2], parsed[3], signal)
                 con.execute(f"CREATE TEMP TABLE raw{i} AS SELECT * FROM rows")
                 parts.append(f"SELECT * FROM raw{i}")
             if not parts:
@@ -271,6 +265,10 @@ def run_worker(event):
                           "rows_scanned": scanned}}
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _is_parquet(f):
+    return f["file_path"].endswith(".parquet")
 
 
 class _RangeFile(AbstractBufferedFile):
@@ -357,42 +355,19 @@ def run(q, invoke_worker=None):
     return result
 
 
-def _work(f):
-    """Bytes of work a file represents: a raw file (gzipped JSON, parsed in
-    full) costs several times what the same bytes of Parquet do."""
-    return f["size_bytes"] * (RAW_WORK_FACTOR if f.get("kind") == "raw" else 1)
-
-
 def plan_chunks(files, max_workers):
-    """Split files into <= max_workers chunks of similar work (largest first)."""
-    files = sorted({f["file_path"]: f for f in files}.values(), key=lambda f: -_work(f))
+    """Split files into <= max_workers chunks of similar total size (largest first)."""
+    files = sorted({f["file_path"]: f for f in files}.values(), key=lambda f: -f["size_bytes"])
     if not files:
         return []
-    total = sum(_work(f) for f in files)
+    total = sum(f["size_bytes"] for f in files)
     n = max(1, min(max_workers, MAX_WORKERS, len(files), math.ceil(total / TARGET_BYTES_PER_WORKER)))
     bins = [[0, []] for _ in range(n)]
     for f in files:
         b = min(bins, key=lambda x: x[0])
-        b[0] += _work(f)
+        b[0] += f["size_bytes"]
         b[1].append(f)
     return [b[1] for b in bins if b[1]]
-
-
-def needed_keys(q):
-    """(attribute keys, resource attribute keys) a query uses; (None, None)
-    for search, which returns whole rows."""
-    if q.get("search") is not None:
-        return None, None
-    attrs, res = set(), set()
-    fields = ([c.get("field") for c in q.get("where") or []] + list(q.get("group_by") or [])
-              + [a.get("field") for a in q.get("aggs") or []]
-              + [f if f == "trace_id" else "attributes." + f for f in (q.get("match") or {})])
-    for f in fields:
-        if isinstance(f, str) and f.startswith("attributes."):
-            attrs.add(f[len("attributes."):])
-        elif isinstance(f, str) and f.startswith("resource."):
-            res.add(f[len("resource."):])
-    return attrs, res
 
 
 def _invoke_worker(payload):

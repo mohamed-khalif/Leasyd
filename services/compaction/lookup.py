@@ -8,7 +8,7 @@
      "match": {"trace_id": "4bf9..."}}      # optional; ANDed, bloom-checked
 
 Returns the files with their kind ("parquet", compacted; or "raw", the fast
-lane: gzipped OTLP JSON not yet compacted), time range, row count and size,
+lane's Parquet copy of one raw file not yet compacted), time range, row count and size,
 plus how many candidates each stage kept, so callers can see the pruning.
 
 Fast lane handover: each raw file belongs to a compaction plan for its

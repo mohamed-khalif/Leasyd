@@ -73,7 +73,8 @@ def test_raw_file_searchable_on_arrival(aws):
     out, rows, kinds = visible(lookup)
     assert rows == 100 and kinds == ["raw"]
     assert {f["service"] for f in out["files"]} == {"api", "web"}
-    assert all(f["file_path"] == f"s3://obs-data-test/{RAW}" for f in out["files"])
+    assert all(f["file_path"].startswith("s3://obs-data-test/data/tenant=acme/logs/_fast/")
+               and f["file_path"].endswith(".parquet") for f in out["files"])
     # bloom filters work on raw entries too
     out, _, _ = visible(lookup, match={"trace_id": "web-7".encode().hex().ljust(32, "0")[:32]})
     assert [f["service"] for f in out["files"]] == ["web"]
@@ -116,6 +117,8 @@ def test_handover_never_double_counts_or_loses(aws, crash_after, want_kinds):
     items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
     assert not [i for i in items if "#_raw#" in i["pk"]["S"] or "#_plan#" in i["pk"]["S"]
                 or i.get("kind", {}).get("S") == "raw"], "fast-lane leftovers"
+    objs = boto3.client("s3").list_objects_v2(Bucket="obs-data-test").get("Contents", [])
+    assert not [o["Key"] for o in objs if "/_fast/" in o["Key"]], "fast-lane files left behind"
 
 
 def test_file_arriving_after_planning_stays_raw_until_its_own_plan(aws):
@@ -204,7 +207,7 @@ def test_blooms_in_s3_still_prune_and_raw_ones_are_cleaned_up(aws, monkeypatch):
     put_raw()
     handler.recent_indexer(event(), None)
     raw_blooms = bloom_objects()
-    assert len(raw_blooms) == 2 and all("/_bloom/raw-" in k for k in raw_blooms)
+    assert len(raw_blooms) == 2 and all("/_fast/_bloom/" in k for k in raw_blooms)
     items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
     assert not any("bloom" in i for i in items)  # nothing inline
     web7 = {"trace_id": "web-7".encode().hex().ljust(32, "0")[:32]}
@@ -214,7 +217,7 @@ def test_blooms_in_s3_still_prune_and_raw_ones_are_cleaned_up(aws, monkeypatch):
     [b] = handler.dispatcher({"plan_only": HOUR}, ctx(0))["planned"]
     handler.worker({**HOUR, "batch_id": b}, ctx(1))
     after = bloom_objects()
-    assert not any("/_bloom/raw-" in k for k in after)       # retired with their entries
+    assert not any("/_fast/_bloom/" in k for k in after)       # retired with their entries
     assert len(after) == 2                                    # the Parquet files' blooms
     out = lookup.lookup(**RANGE, match=web7)
     assert [(f["service"], f["kind"]) for f in out["files"]] == [("web", "parquet")]
@@ -231,3 +234,30 @@ def test_raw_bloom_deleted_mid_lookup_is_not_an_error(aws, monkeypatch):
         boto3.client("s3").delete_object(Bucket="obs-data-test", Key=k)
     out = lookup.lookup(**RANGE, match={"trace_id": "f" * 32})
     assert out["stats"]["after_bloom"] == 2   # kept (can't rule out), no exception
+
+
+def test_entries_indexed_before_the_fast_lane_wrote_parquet_still_work(aws, monkeypatch):
+    """Entries written by the previous fast lane point at the raw JSON file and
+    list their blooms as "blooms". During a deploy both kinds exist: queries
+    read them, and compaction retires them."""
+    import query
+    handler, lookup = aws
+    put_raw()
+    handler.recent_indexer(event(), None)
+    ddb = boto3.client("dynamodb")
+    for i in ddb.scan(TableName="obs-index")["Items"]:
+        if i.get("kind", {}).get("S") == "raw":        # rewrite as the old fast lane did
+            i["file_path"] = {"S": f"s3://obs-data-test/{RAW}"}
+            ddb.put_item(TableName="obs-index", Item=i)
+        if "#_raw#" in i["pk"]["S"]:
+            i["blooms"] = i.pop("objects")
+            ddb.put_item(TableName="obs-index", Item=i)
+    q = {"tenant": "acme", "signal": "logs", "start": RANGE["start"], "end": RANGE["end"],
+         "group_by": ["service"], "aggs": [{"fn": "count"}]}
+    monkeypatch.setattr(query, "lookup", lookup)
+    assert sorted(query.run(q, invoke_worker=query.run_worker)["rows"]) == [["api", 50], ["web", 50]]
+    [b] = handler.dispatcher({"plan_only": HOUR}, ctx(0))["planned"]
+    handler.worker({**HOUR, "batch_id": b}, ctx(1))
+    assert sorted(query.run(q, invoke_worker=query.run_worker)["rows"]) == [["api", 50], ["web", 50]]
+    objs = boto3.client("s3").list_objects_v2(Bucket="obs-data-test").get("Contents", [])
+    assert not [o["Key"] for o in objs if "/_fast/" in o["Key"]]

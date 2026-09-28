@@ -187,36 +187,8 @@ def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, me
         con.close()
 
 
-def summarize(signal, input_paths, work_dir, arrival_dt, arrival_hour, memory_limit="1GB",
-              bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES, bloom_fpp=bloom.DEFAULT_FPP):
-    """What compaction would index for these raw files, without writing any:
-    one dict per (service, event hour) with rows, min_ts / max_ts and a bloom
-    filter. Used to index raw files as they arrive (the fast lane), with the
-    same parsing rules as compaction so both see the same rows."""
-    fields = bloom_fields(signal, bloom_attributes)
-    con = _connect(work_dir, memory_limit)
-    try:
-        out = []
-        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour, signal,
-                                           summary_of=[f for f in fields if f != "trace_id"]):
-            n_rows = _select_group(con, service, dt, hour, signal)
-            lo, hi = con.execute(
-                "SELECT strftime(min(ts), '%Y-%m-%dT%H:%M:%S.%fZ'), "
-                "strftime(max(ts), '%Y-%m-%dT%H:%M:%S.%fZ') FROM grp"
-            ).fetchone()
-            out.append({"service": service, "dt": dt, "hour": hour, "rows": n_rows, "min_ts": lo, "max_ts": hi,
-                        "bloom": _bloom_for(con, 0, n_rows, fields, bloom_fpp)})
-        return out
-    finally:
-        con.close()
-
-
 def compact_logs(input_paths, out_dir, batch_id, arrival_dt, arrival_hour, **kw):
     return compact("logs", input_paths, out_dir, batch_id, arrival_dt, arrival_hour, **kw)
-
-
-def summarize_logs(input_paths, work_dir, arrival_dt, arrival_hour, **kw):
-    return summarize("logs", input_paths, work_dir, arrival_dt, arrival_hour, **kw)
 
 
 def _connect(work_dir, memory_limit):
@@ -230,25 +202,14 @@ def _connect(work_dir, memory_limit):
     return con
 
 
-def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs", summary_of=None,
-              attr_keys=None, res_keys=None):
+def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs"):
     """Parse raw OTLP-JSON files of one signal into the temp table `rows`
-    (the Parquet schema) and return its (service, dt, hour) groups in order.
-
-    summary_of: a list of attribute keys to load only what the fast lane
-    indexes (ts, service, trace_id, and those attributes), ~3x faster. It
-    uses the same rules as the full rows, so both see the same groups, times
-    and IDs (tested in test_signals.py and test_compact.py).
-
-    attr_keys / res_keys: build the attributes / resource_attributes maps
-    with only these keys (queries that use a few); None keeps every key."""
+    (the Parquet schema) and return its (service, dt, hour) groups in order."""
     if signal not in _ROWS_SQL:
         raise ValueError(f"unknown signal {signal!r}")
     input_paths = [plain_json(p) for p in input_paths]
     fallback_ns = f"{_hour_start_us(con, arrival_dt, arrival_hour)} * 1000"
-    sql = (_ROWS_SQL[signal](fallback_ns, attr_keys, res_keys) if summary_of is None
-           else _SUMMARY_SQL[signal](fallback_ns, summary_of))
-    con.execute(f"CREATE OR REPLACE TEMP TABLE rows AS {sql}", [input_paths])
+    con.execute(f"CREATE OR REPLACE TEMP TABLE rows AS {_ROWS_SQL[signal](fallback_ns)}", [input_paths])
     return con.execute(
         """
         SELECT service, strftime(ts, '%Y-%m-%d') AS dt, strftime(ts, '%H') AS hour
@@ -314,27 +275,6 @@ def _enum(v, names):
 # obs.* are the platform's own routing labels; the tenant is already in the
 # path, so they aren't stored.
 _RES_ATTRS = _ATTR_MAP.format(a="list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))")
-
-
-def _keys_sql(keys):
-    return ", ".join("'" + k.replace("'", "''") + "'" for k in sorted(keys))
-
-
-def _attrs(a, keys):
-    """Attribute map of list `a`: every key (keys=None), or only `keys`, which is
-    much cheaper to build when a query needs just a few."""
-    if keys is None:
-        return _ATTR_MAP.format(a=a)
-    if not keys:
-        return "MAP {}::MAP(VARCHAR, VARCHAR)"
-    return _ATTR_MAP.format(a=f"list_filter({a}, x -> x.key IN ({_keys_sql(keys)}))")
-
-
-def _res_attrs(keys):
-    if keys is None:
-        return _RES_ATTRS
-    keys = set(keys) | {"service.name"}   # the service column comes from it
-    return _ATTR_MAP.format(a=f"list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.') AND z.key IN ({_keys_sql(keys)}))")
 _SERVICE = "coalesce(resource_attributes['service.name'], 'unknown') AS service"
 _SPAN_KINDS = ("SPAN_KIND_UNSPECIFIED", "SPAN_KIND_INTERNAL", "SPAN_KIND_SERVER", "SPAN_KIND_CLIENT",
                "SPAN_KIND_PRODUCER", "SPAN_KIND_CONSUMER")
@@ -343,7 +283,7 @@ _TEMPORALITIES = ("AGGREGATION_TEMPORALITY_UNSPECIFIED", "AGGREGATION_TEMPORALIT
                   "AGGREGATION_TEMPORALITY_CUMULATIVE")
 
 
-def _logs_sql(fallback_ns, attr_keys=None, res_keys=None):
+def _logs_sql(fallback_ns):
     return f"""
         WITH rl AS ({_read('resourceLogs', LOGS_JSON_TYPE)}),
         sl AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeLogs) AS sl FROM rl),
@@ -352,14 +292,14 @@ def _logs_sql(fallback_ns, attr_keys=None, res_keys=None):
             SELECT
                 coalesce({_ns('lr.timeUnixNano')}, {_ns('lr.observedTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano,
                 {_ns('lr.observedTimeUnixNano')} AS observed_unix_nano,
-                {_res_attrs(res_keys)} AS resource_attributes,
+                {_RES_ATTRS} AS resource_attributes,
                 scope_name,
                 lr.severityNumber AS severity_number,
                 lr.severityText AS severity_text,
                 {_ANYVALUE.format(v='lr.body')} AS body,
                 nullif(lr.traceId, '') AS trace_id,
                 nullif(lr.spanId, '') AS span_id,
-                {_attrs('lr.attributes', attr_keys)} AS attributes
+                {_ATTR_MAP.format(a='lr.attributes')} AS attributes
             FROM lr
         )
         SELECT
@@ -373,7 +313,7 @@ def _logs_sql(fallback_ns, attr_keys=None, res_keys=None):
     """
 
 
-def _traces_sql(fallback_ns, attr_keys=None, res_keys=None):
+def _traces_sql(fallback_ns):
     return f"""
         WITH rs AS ({_read('resourceSpans', SPANS_JSON_TYPE)}),
         ss AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeSpans) AS ss FROM rs),
@@ -382,7 +322,7 @@ def _traces_sql(fallback_ns, attr_keys=None, res_keys=None):
             SELECT
                 coalesce({_ns('sp.startTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano,
                 {_ns('sp.endTimeUnixNano')} AS end_unix_nano,
-                {_res_attrs(res_keys)} AS resource_attributes,
+                {_RES_ATTRS} AS resource_attributes,
                 scope_name,
                 sp.name AS name,
                 {_enum('sp.kind', _SPAN_KINDS)} AS kind,
@@ -392,7 +332,7 @@ def _traces_sql(fallback_ns, attr_keys=None, res_keys=None):
                 nullif(sp.spanId, '') AS span_id,
                 nullif(sp.parentSpanId, '') AS parent_span_id,
                 nullif(sp.traceState, '') AS trace_state,
-                {_attrs('sp.attributes', attr_keys)} AS attributes,
+                {_ATTR_MAP.format(a='sp.attributes')} AS attributes,
                 list_transform(coalesce(sp.events, []), ev -> {{
                     'ts': {_ts(_ns('ev.timeUnixNano'))}, 'name': ev.name,
                     'attributes': {_ATTR_MAP.format(a='ev.attributes')}}}) AS events,
@@ -413,7 +353,7 @@ def _traces_sql(fallback_ns, attr_keys=None, res_keys=None):
     """
 
 
-def _metrics_sql(fallback_ns, attr_keys=None, res_keys=None):
+def _metrics_sql(fallback_ns):
     base = "res_attrs, scope_name, m.name AS metric_name, m.unit AS unit, m.description AS description"
     counts = "list_transform(coalesce({b}, []), c -> TRY_CAST(c AS BIGINT))"
     stats = (f"TRY_CAST(p.count AS BIGINT) AS count, {_num('p.sum')} AS sum, "
@@ -463,8 +403,8 @@ def _metrics_sql(fallback_ns, attr_keys=None, res_keys=None):
         flat AS (
             SELECT *,
                 coalesce({_ns('time_ns')}, {fallback_ns}) AS ts_unix_nano,
-                {_res_attrs(res_keys)} AS resource_attributes,
-                {_attrs('attrs', attr_keys)} AS attributes
+                {_RES_ATTRS} AS resource_attributes,
+                {_ATTR_MAP.format(a='attrs')} AS attributes
             FROM points
         )
         SELECT
@@ -491,66 +431,6 @@ def _metrics_sql(fallback_ns, attr_keys=None, res_keys=None):
 
 _ROWS_SQL = {"logs": _logs_sql, "traces": _traces_sql, "metrics": _metrics_sql}
 
-
-# ---- summary rows (fast lane): only what the index needs ----
-# service.name is the first such resource attribute, as in the full rows' map.
-_SUMMARY_SERVICE = ("coalesce(" + _ANYVALUE.format(v="list_filter(res_attrs, z -> z.key = 'service.name')[1].value")
-                    + ", 'unknown') AS service")
-
-
-def _id_attrs(attrs, keys):
-    if not keys:
-        return "MAP {}::MAP(VARCHAR, VARCHAR)"
-    quoted = ", ".join("'" + k.replace("'", "''") + "'" for k in keys)
-    return _ATTR_MAP.format(a=f"list_filter({attrs}, x -> x.key IN ({quoted}))")
-
-
-def _logs_summary_sql(fallback_ns, keys):
-    return f"""
-        WITH rl AS ({_read('resourceLogs', LOGS_JSON_TYPE)}),
-        sl AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeLogs) AS sl FROM rl),
-        lr AS (SELECT res_attrs, unnest(sl.logRecords) AS lr FROM sl),
-        flat AS (SELECT *, coalesce({_ns('lr.timeUnixNano')}, {_ns('lr.observedTimeUnixNano')}, {fallback_ns})
-                           AS ts_unix_nano FROM lr)
-        SELECT {_ts('ts_unix_nano')} AS ts, ts_unix_nano, {_SUMMARY_SERVICE},
-               nullif(lr.traceId, '') AS trace_id, {_id_attrs('lr.attributes', keys)} AS attributes
-        FROM flat
-    """
-
-
-def _traces_summary_sql(fallback_ns, keys):
-    return f"""
-        WITH rs AS ({_read('resourceSpans', SPANS_JSON_TYPE)}),
-        ss AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeSpans) AS ss FROM rs),
-        sp AS (SELECT res_attrs, unnest(ss.spans) AS sp FROM ss),
-        flat AS (SELECT *, coalesce({_ns('sp.startTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano FROM sp)
-        SELECT {_ts('ts_unix_nano')} AS ts, ts_unix_nano, {_SUMMARY_SERVICE},
-               nullif(sp.traceId, '') AS trace_id, {_id_attrs('sp.attributes', keys)} AS attributes
-        FROM flat
-    """
-
-
-def _metrics_summary_sql(fallback_ns, keys):
-    # Metric points carry no IDs: only time, service and metric name.
-    return f"""
-        WITH rm AS ({_read('resourceMetrics', METRICS_JSON_TYPE)}),
-        sm AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeMetrics) AS sm FROM rm),
-        m AS (SELECT res_attrs, unnest(sm.metrics) AS m FROM sm),
-        pts AS (
-            SELECT res_attrs, m.name AS metric_name, unnest(m.gauge.dataPoints).timeUnixNano AS t FROM m
-            UNION ALL SELECT res_attrs, m.name, unnest(m.sum.dataPoints).timeUnixNano FROM m
-            UNION ALL SELECT res_attrs, m.name, unnest(m.histogram.dataPoints).timeUnixNano FROM m
-            UNION ALL SELECT res_attrs, m.name, unnest(m.exponentialHistogram.dataPoints).timeUnixNano FROM m
-            UNION ALL SELECT res_attrs, m.name, unnest(m.summary.dataPoints).timeUnixNano FROM m
-        ),
-        flat AS (SELECT *, coalesce({_ns('t')}, {fallback_ns}) AS ts_unix_nano FROM pts)
-        SELECT {_ts('ts_unix_nano')} AS ts, ts_unix_nano, {_SUMMARY_SERVICE}, metric_name,
-               NULL::VARCHAR AS trace_id, MAP {{}}::MAP(VARCHAR, VARCHAR) AS attributes
-        FROM flat
-    """
-
-
-_SUMMARY_SQL = {"logs": _logs_summary_sql, "traces": _traces_summary_sql, "metrics": _metrics_summary_sql}
 
 # Row order within a file: by time; metric points by metric first, so each
 # metric's points sit together (better compression, and row-group stats

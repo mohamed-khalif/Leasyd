@@ -72,7 +72,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--tenant", default="t6-000")
     a = p.parse_args()
-    now = datetime.now(timezone.utc)
+    # A few minutes back: with ingest running, every record up to "now" has
+    # arrived (freshness < 1 min), so repeated queries see the same data.
+    # The window still covers the current, not yet compacted hour.
+    now = datetime.now(timezone.utc) - timedelta(minutes=5)
     base = {"tenant": a.tenant, "signal": "logs"}
     day = dict(base, start=iso(now - timedelta(hours=24)), end=iso(now))
 
