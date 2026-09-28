@@ -74,8 +74,8 @@ def main():
         q = {"signal": "logs", "start": iso(now - timedelta(hours=24)), "end": iso(now),
              "group_by": ["service"], "aggs": [{"fn": "count"}]}
 
-        # New keys take a minute or two to reach every API Gateway node.
-        ok_in_a_row, deadline = 0, time.time() + 300
+        # New keys take 1-6 minutes to reach every API Gateway node (6 measured on 2026-09-28).
+        ok_in_a_row, deadline = 0, time.time() + 600
         while ok_in_a_row < 5 and time.time() < deadline:
             status, _, _ = post(endpoint, "/v1/query", key, {**q, "start": iso(now - timedelta(minutes=1))})
             ok_in_a_row = ok_in_a_row + 1 if status == 200 else 0
