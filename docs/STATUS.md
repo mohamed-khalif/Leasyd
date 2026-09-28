@@ -38,11 +38,13 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 - 50 GB/h across 100 tenants: every request accepted, freshness p99 44 s (target 60 s),
   ingest + fast lane $0.117/GB then; after compressing before Firehose, $0.077/GB at 10 GB/h.
 - Query, largest tenant (1.26 GB/day): 1 day in 1.3 s with 19 workers reading only the needed
-  columns (target < 5 s); trace ID across 30 days in 1.6 s (target < 3 s); results identical to Athena.
+  columns (target < 5 s); trace ID across 30 days in 1.0 s (target < 3 s); results identical to Athena.
+- Compaction 1.7x faster (profiled: JSON parsing, not the ID loops), identical output.
 
 ## Next
 
-1. Vectorise compaction's per-ID loops (biggest chunks took up to ~7 min at 50 GB/h).
+1. Queries over the current hour are slower (its raw files are parsed in full: 5 s instead of 1.2 s
+   for 1 day of the largest tenant). Fix: the fast lane also writes a small Parquet file per raw file.
 2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 
