@@ -53,6 +53,24 @@ class Bloom:
         for p in self._positions(item):
             self.bits[p >> 3] |= 1 << (p & 7)
 
+    def add_many(self, items):
+        """add() for many items at once: the same hashes and bit positions
+        (bit-identical filters), with the per-position work done in numpy."""
+        import numpy as np
+        if not items:
+            return
+        d = np.frombuffer(b"".join(hashlib.blake2b(t.encode(), digest_size=16).digest() for t in items),
+                          dtype="<u8").reshape(-1, 2)
+        m = np.uint64(self.m)
+        # (h1 + i*h2) % m, computed without overflowing 64 bits: m < 2^32, so
+        # every intermediate below stays under 2^36.
+        h1, h2 = d[:, 0] % m, (d[:, 1] | np.uint64(1)) % m
+        pos = np.concatenate([(h1 + (np.uint64(i) * h2) % m) % m for i in range(self.k)])
+        bits = np.frombuffer(self.bits, dtype=np.uint8).copy()
+        np.bitwise_or.at(bits, (pos >> np.uint64(3)).astype(np.int64),
+                         (np.uint8(1) << (pos & np.uint64(7)).astype(np.uint8)))
+        self.bits = bytearray(bits.tobytes())
+
     def might_contain(self, item):
         return all(self.bits[p >> 3] & (1 << (p & 7)) for p in self._positions(item))
 

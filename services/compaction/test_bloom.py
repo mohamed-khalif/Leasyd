@@ -33,3 +33,16 @@ def test_size_is_about_ten_bits_per_value():
 def test_empty_filter_matches_nothing():
     b = Bloom.build([])
     assert not b.might_contain(term("trace_id", "x"))
+
+
+def test_add_many_is_bit_identical_to_add():
+    import random
+    terms = [f"trace_id={random.getrandbits(128):032x}" for _ in range(20_000)] + ["request.id=x", ""]
+    for m_items in (1, 500, 20_000):
+        one, many = Bloom.for_capacity(m_items), Bloom.for_capacity(m_items)
+        for t in terms:
+            one.add(t)
+        many.add_many(terms[:7000])
+        many.add_many(terms[7000:])
+        many.add_many([])
+        assert one.to_bytes() == many.to_bytes()

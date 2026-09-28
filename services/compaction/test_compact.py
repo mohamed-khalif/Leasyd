@@ -219,3 +219,41 @@ def test_raw_file_encodings_from_the_compression_changeover(tmp_path):
         content, blooms = _compact_encoded(tmp_path, encoding)
         assert content == base, encoding
         assert blooms == base_blooms, encoding
+
+
+def test_batched_id_digests_match_one_at_a_time(tmp_path):
+    """The day/hour filter digests from the batched code equal a plain per-ID loop."""
+    import dayfilter
+    recs = [rec(H20 + n * 60 * 10**9, attrs=[{"key": "request.id", "value": {"stringValue": f"R{n % 97}"}}])
+            for n in range(150)]                      # spans hours 20-22, repeats request ids
+    for n, r in enumerate(recs):
+        r["traceId"] = f"{n:032x}"
+    f = batch(tmp_path / "a.json.gz", "api", recs)
+    got = {}
+    compact.compact_logs([f], str(tmp_path / "o"), "b1", "2026-09-26", "20", id_digests=got)
+    want = {}
+    for n, r in enumerate(recs):
+        hour = (20 + n // 60)
+        for t in {f"trace_id={n:032x}", f"request.id=r{n % 97}"}:
+            want.setdefault(("2026-09-26", f"{hour:02d}"), set()).add(t)
+    expect = {}
+    for key, terms in want.items():
+        for t in terms:
+            d = dayfilter.digest(t)
+            expect.setdefault(key, {}).setdefault(dayfilter.group_of(d), set()).add(d)
+    as_sets = {k: {g: {bytes(b[i:i + 12]) for i in range(0, len(b), 12)} for g, b in v.items()} for k, v in got.items()}
+    assert as_sets == expect
+    assert all(len(b) % 12 == 0 and len(b) // 12 == len(as_sets[k][g])   # no duplicates within an hour
+               for k, v in got.items() for g, b in v.items())
+
+
+def test_malformed_values_do_not_fail_the_chunk(tmp_path):
+    """A client can send a body or attribute value that isn't an OTLP AnyValue object.
+    Such a record must not make the whole chunk fail (it would never compact)."""
+    r = rec(H20, attrs=[{"key": "n", "value": 5}, {"key": "s", "value": "text"}, {"key": "ok", "value": {"stringValue": "v"}}])
+    r["body"] = "plain body"
+    f = batch(tmp_path / "a.json.gz", "api", [r, rec(H20 + 1)])
+    [w], _ = run(tmp_path, [f])
+    rows = read(w["path"], "SELECT body, attributes FROM t ORDER BY ts_unix_nano")
+    assert rows[0] == ('"plain body"', {"n": "5", "s": '"text"', "ok": "v"})
+    assert rows[1][0] == "msg"
