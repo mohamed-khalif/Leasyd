@@ -21,7 +21,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Scale: day + hour ID filters, faster fast lane, fixes found under load | T6 | live, tested at 1, 10, 50 GB/h |
 | Query engine with fan-out (`obs-query`), column-only reads | 4-5 | live, tested |
 | Firehose cost cut (compress before Firehose) | T6 | live, tested: $0.143 -> $0.077/GB at 10 GB/h |
-| Fast lane writes Parquet (queries read only Parquet) | T6 | live; queries pass at 50 GB/h, freshness p99 74 s (open) |
+| Fast lane writes Parquet; per-tenant Firehose buffer (`tune`) | T6 | live, tested at 50 GB/h: freshness p99 38 s, queries pass |
 | Faults, soak | T6 | not started |
 | UI, alerting on customer data | 6+ | not started |
 
@@ -44,13 +44,11 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 
 ## Next
 
-1. Freshness at 50 GB/h was p99 74 s (target 60 s). Built, to deploy and measure: the fast lane
-   parses with the fast attribute-map form (compaction keeps the spill-safe one); per-probe stage
-   timing (Firehose / trigger / parse / visible) in the load-test report, probes every 15 s; and
-   `infra/tenant.sh tune <tenant> <seconds>` sets a tenant's Firehose buffer (shorter for
-   high-volume tenants). Next after that: SQS + dead-letter queue for the fast lane, a permanent
-   freshness canary, ask AWS to raise Lambda memory above 3008 MB, cap compaction chunks by
-   record count before testing 100 GB/h.
+1. Freshness at 50 GB/h fixed: p99 38 s (was 74 s) with the fast parse in the fast lane and 15 s
+   Firehose buffers for the 10 largest tenants (`infra/tenant.sh tune <tenant> 15`). Details and
+   all benchmarks: `docs/REPORT-2026-09-28.md`. Hardening still to do: SQS + dead-letter queue for
+   the fast lane, a permanent freshness canary, Lambda memory above 3008 MB (ask AWS), compaction
+   chunks capped by record count before testing 100 GB/h.
 2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 
