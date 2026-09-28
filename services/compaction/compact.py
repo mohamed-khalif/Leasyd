@@ -93,14 +93,13 @@ _ANYVALUE = (
 # Attribute list -> MAP(VARCHAR, VARCHAR). OTLP forbids duplicate keys but
 # does not enforce it; keep the first occurrence so one bad record can't
 # make a whole partition fail to compact forever.
-_ATTR_ENTRIES = "list_transform(coalesce({a}, []), x -> {{'key': x.key, 'value': " + _ANYVALUE.format(v="x.value") + "}})"
 _ATTR_MAP = (
-    # Records almost never repeat a key: skip the (quadratic) first-occurrence
-    # filter unless this one does. Same result either way, ~2x faster overall.
-    "CASE WHEN len(list_distinct(list_transform(coalesce({a}, []), y -> y.key))) = len(coalesce({a}, [])) "
-    "THEN map_from_entries(" + _ATTR_ENTRIES + ") "
-    "ELSE map_from_entries(list_filter(" + _ATTR_ENTRIES + ", "
-    "(e, i) -> list_position(list_transform(coalesce({a}, []), y -> y.key), e.key) = i)) END"
+    # Not a CASE that skips this filter for records without duplicates: that
+    # is ~2x faster but stops DuckDB spilling, and the biggest chunks (~2M
+    # records) then fail out of memory every time, so they never compact.
+    "map_from_entries(list_filter("
+    "list_transform(coalesce({a}, []), x -> {{'key': x.key, 'value': " + _ANYVALUE.format(v="x.value") + "}}), "
+    "(e, i) -> list_position(list_transform(coalesce({a}, []), y -> y.key), e.key) = i))"
 )
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]")
