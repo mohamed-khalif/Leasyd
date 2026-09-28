@@ -355,7 +355,10 @@ def _provision_streams(tenant):
                     "ErrorOutputPrefix": f"_incoming/_errors/tenant={tenant}/{sig}/!{{firehose:error-output-type}}"
                                          "/dt=!{timestamp:yyyy-MM-dd}/",
                     "BufferingHints": {"SizeInMBs": 64, "IntervalInSeconds": BUFFER_SECONDS},
-                    "CompressionFormat": "GZIP", "FileExtension": ".json.gz",
+                    # Ingest gzips each record before sending (Firehose bills received
+                    # bytes), so the stream passes them through: its objects are gzip
+                    # members back to back, a valid .gz file.
+                    "CompressionFormat": "UNCOMPRESSED", "FileExtension": ".json.gz",
                 },
                 Tags=[{"Key": "tenant", "Value": tenant}, {"Key": "project", "Value": "obs"}])
         except firehose.exceptions.ResourceInUseException:

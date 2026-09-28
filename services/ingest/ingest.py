@@ -31,6 +31,7 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportM
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
+RECORD_COMPRESSION = os.environ.get("RECORD_COMPRESSION", "none")   # "gzip": compress records before Firehose
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 
 # signal -> (protobuf request type, top-level key, scope list key, item list key)
@@ -69,9 +70,15 @@ def handler(event, context):
 
         doc = parse(signal, _body(event, headers), ctype)
         records = list(to_records(signal, doc))
+        raw_bytes = sum(len(r) for r in records)
+        if RECORD_COMPRESSION == "gzip":
+            # Firehose bills the bytes it receives: send each record gzipped (~5x
+            # smaller). Its S3 objects are then gzip members back to back, which
+            # read as one gzip stream; the tenant's streams pass them through.
+            records = [gzip.compress(r, compresslevel=6) for r in records]
         put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
         print(json.dumps({"tenant": tenant, "signal": signal, "records": len(records),
-                          "bytes": sum(len(r) for r in records)}))
+                          "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records)}))
         return _response(200, ctype, None)
     except HttpError as e:
         print(json.dumps({"status": e.status, "error": str(e)}))

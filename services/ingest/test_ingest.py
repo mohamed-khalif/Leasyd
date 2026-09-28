@@ -253,3 +253,18 @@ def test_gzip_header_on_an_already_decompressed_body(fh):
     ev = event(logs_pb(n=3).SerializeToString(), headers={"Content-Encoding": "gzip"})
     assert ingest.handler(ev, None)["statusCode"] == 200
     assert len(lines(fh)) == 1
+
+
+def test_records_gzipped_before_firehose_when_enabled(fh, monkeypatch, tmp_path):
+    """Gzipped records concatenate into a multi-member gzip object that compaction reads."""
+    import compact
+    monkeypatch.setattr(ingest, "RECORD_COMPRESSION", "gzip")
+    ingest.handler(event(logs_pb(n=5, service="api").SerializeToString()), None)
+    ingest.handler(event(logs_pb(n=2500, service="big", body="b" * 1000).SerializeToString()), None)
+    assert all(d[:2] == b"\x1f\x8b" for _, d in fh.puts)
+    plain = sum(len(gzip.decompress(d)) for _, d in fh.puts)
+    assert sum(len(d) for _, d in fh.puts) < plain / 5          # what Firehose bills
+    obj = tmp_path / "firehose-object.json.gz"
+    obj.write_bytes(b"".join(d for _, d in fh.puts))              # passed through, not recompressed
+    written = compact.compact_logs([str(obj)], str(tmp_path / "out"), "b1", "2026-09-26", "20")
+    assert sorted((w["service"], w["rows"]) for w in written) == [("api", 5), ("big", 2500)]

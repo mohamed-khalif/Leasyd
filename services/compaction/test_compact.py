@@ -176,3 +176,22 @@ def test_spill_dir_exists_before_duckdb_needs_it(tmp_path):
         assert con.execute("SELECT current_setting('temp_directory')").fetchone()[0] == str(out / ".duckdb_tmp")
     finally:
         con.close()
+
+
+@pytest.mark.parametrize("encoding", ["one_gzip", "gzip_members", "plain", "gzip_in_gzip"])
+def test_raw_file_encodings_from_the_compression_changeover(tmp_path, encoding):
+    """Firehose-compressed (old), per-record gzip members (new), plain, and double gzip all
+    compact to the same rows."""
+    lines = []
+    for svc in ("api", "web"):
+        doc = {"resourceLogs": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": svc}}]},
+                                 "scopeLogs": [{"logRecords": [rec(H20 + n) for n in range(40)]}]}]}
+        lines.append((json.dumps(doc) + "\n").encode())
+    raw = b"".join(lines)
+    body = {"one_gzip": gzip.compress(raw), "gzip_members": b"".join(gzip.compress(line) for line in lines),
+            "plain": raw, "gzip_in_gzip": gzip.compress(b"".join(gzip.compress(line) for line in lines))}[encoding]
+    path = tmp_path / "raw.json.gz"
+    path.write_bytes(body)
+    written = compact.compact_logs([str(path)], str(tmp_path / "out"), "b1", "2026-09-26", "20")
+    assert sorted((w["service"], w["rows"]) for w in written) == [("api", 40), ("web", 40)]
+    assert path.read_bytes() == body   # the original is left as it was

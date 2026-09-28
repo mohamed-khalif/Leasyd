@@ -318,3 +318,20 @@ aws lambda invoke --function-name obs-query --cli-binary-format raw-in-base64-ou
   "where": [{"field": "severity_number", "op": ">=", "value": 17}],
   "group_by": ["attributes.http.route"], "aggs": [{"fn": "count"}]}' /dev/stdout
 ```
+
+### T6: compress before Firehose
+
+Firehose bills the bytes it receives, and ingest sent it uncompressed OTLP JSON (2.1x the protobuf
+customers send), so Firehose was about half the cost. Now ingest can gzip each record
+(`RecordCompression=gzip` on obs-phaseT2) and tenant streams pass records through
+(`CompressionFormat: UNCOMPRESSED`); the S3 object is gzip members back to back, a valid `.gz`.
+Every raw-file reader accepts all encodings of the changeover (Firehose-gzipped, per-record gzip,
+plain, and gzip-in-gzip), so no step can break reads. Roll out in this order:
+
+```bash
+infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false   # readers
+infra/deploy-phase4.sh --parameter-overrides BytesPerWorker=67108864                           # query readers
+infra/deploy-phaseT5.sh                                                                        # new streams pass through
+python3 infra/migrate-stream-compression.py --apply                                            # existing streams
+infra/deploy-phaseT2.sh --parameter-overrides RecordCompression=gzip                           # ingest compresses
+```

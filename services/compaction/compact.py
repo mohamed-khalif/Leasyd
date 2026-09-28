@@ -10,8 +10,10 @@ One row per item, by signal:
            with metric_type saying which columns are set
 """
 
+import gzip
 import os
 import re
+import shutil
 
 import duckdb
 
@@ -233,6 +235,7 @@ def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs", summary
     and IDs (tested in test_signals.py and test_compact.py)."""
     if signal not in _ROWS_SQL:
         raise ValueError(f"unknown signal {signal!r}")
+    input_paths = [plain_json(p) for p in input_paths]
     fallback_ns = f"{_hour_start_us(con, arrival_dt, arrival_hour)} * 1000"
     sql = (_ROWS_SQL[signal](fallback_ns) if summary_of is None
            else _SUMMARY_SQL[signal](fallback_ns, summary_of))
@@ -245,9 +248,39 @@ def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs", summary
     ).fetchall()
 
 
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def plain_json(path):
+    """A raw file as plain newline-delimited JSON, whatever its encoding:
+      - one gzip stream (Firehose compressing the records itself; before T6)
+      - gzip members back to back (ingest compressing each record; Firehose
+        passing them through; T6 onward), which gzip reads as one stream
+      - plain JSON (a stream switched to pass-through before ingest compressed)
+      - gzip inside gzip (ingest compressing before its stream was switched)
+    So files from any point of that changeover read the same. Returns the
+    path of a plain copy next to the original (or the original if plain)."""
+    with open(path, "rb") as f:
+        head = f.read(2)
+    if head != _GZIP_MAGIC:
+        return path
+    out, layer = path, 0
+    while True:
+        with open(out, "rb") as f:
+            if f.read(2) != _GZIP_MAGIC:
+                return out
+        layer += 1
+        nxt = f"{path}.plain{layer}"
+        with gzip.open(out, "rb") as src, open(nxt, "wb") as dst:
+            shutil.copyfileobj(src, dst, 1024 * 1024)
+        if out != path:
+            os.remove(out)
+        out = nxt
+
+
 def _read(top, json_type):
     return (f"SELECT unnest({top}) AS r FROM read_json(?, columns={{'{top}': '{json_type}'}}, "
-            f"format='newline_delimited', compression='gzip', maximum_object_size={MAX_JSON_OBJECT_BYTES})")
+            f"format='newline_delimited', compression='uncompressed', maximum_object_size={MAX_JSON_OBJECT_BYTES})")
 
 
 def _ns(v):

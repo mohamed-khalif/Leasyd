@@ -20,6 +20,14 @@ Parameters:
   StandardBurstLimit:
     Type: Number
     Default: 1000
+  RecordCompression:
+    Type: String
+    Default: none
+    AllowedValues: [none, gzip]
+    Description: >
+      gzip: ingest compresses each record before Firehose, which bills the bytes
+      it receives (~5x less). Set it only after every tenant stream passes
+      records through (infra/migrate-stream-compression.py); readers accept both.
 
 Resources:
   # ---------- Tenant registry ----------
@@ -161,6 +169,7 @@ Resources:
       Environment:
         Variables:
           STREAM_PREFIX: obs-t-
+          RECORD_COMPRESSION: !Ref RecordCompression
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T2" }
