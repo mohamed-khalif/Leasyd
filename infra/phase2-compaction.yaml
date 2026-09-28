@@ -227,6 +227,45 @@ Resources:
           RetryPolicy:
             MaximumRetryAttempts: 2
             MaximumEventAgeInSeconds: 300
+          DeadLetterConfig: { Arn: !GetAtt FastLaneFailedQueue.Arn }   # events EventBridge could not deliver
+
+  # A fast-lane failure is not data loss (compaction still picks the file up
+  # within ~75 min) but that file is not searchable until then: keep every
+  # failed event here, alarm on it, and replay with infra/redrive-fastlane.py.
+  FastLaneFailedQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: obs-fastlane-failed
+      MessageRetentionPeriod: 1209600   # 14 days
+      SqsManagedSseEnabled: true
+      Tags:
+        - { Key: project, Value: obs }
+
+  FastLaneFailedQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref FastLaneFailedQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt FastLaneFailedQueue.Arn
+            Condition: { ArnEquals: { "aws:SourceArn": !GetAtt RawFileCreatedRule.Arn } }
+
+  # Invocations that fail (e.g. out of memory): 2 retries, within the same
+  # 5 minutes as above (a later retry could index a file that is already
+  # compacted), then the event goes to the queue.
+  RecentIndexerInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref RecentIndexerFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 2
+      MaximumEventAgeInSeconds: 300
+      DestinationConfig:
+        OnFailure: { Destination: !GetAtt FastLaneFailedQueue.Arn }
 
   RawFileCreatedPermission:
     Type: AWS::Lambda::Permission
@@ -297,21 +336,23 @@ Resources:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "2" }
 
-  # Fires if raw data sits uncompacted for 3+ hours, or if the dispatcher
-  # stops reporting at all (missing data counts as breaching).
+  # Fires if raw data sits uncompacted for 95+ minutes (an hour is planned
+  # 10-15 min after it ends and takes up to ~8 min), or if the dispatcher
+  # stops reporting at all (missing data counts as breaching). 3 hours
+  # missed a real stuck chunk: it was retried and failed for over an hour.
   StuckCompactionAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: obs-compaction-stuck
-      AlarmDescription: Raw _incoming/ logs data (any tenant) older than 3 hours, or the dispatcher is not running.
+      AlarmDescription: "Raw _incoming/ logs data (any tenant) older than 95 min (normally <= ~80: compacted 10-25 min after its hour), or the dispatcher is not running."
       Namespace: obs
       MetricName: OldestIncomingAgeMinutes
       Dimensions:
         - { Name: signal, Value: logs }
       Statistic: Maximum
       Period: 900
-      EvaluationPeriods: 2
-      Threshold: 180
+      EvaluationPeriods: 1
+      Threshold: 95
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: breaching
       AlarmActions: [!Ref AlertTopic]
@@ -321,15 +362,15 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: obs-compaction-stuck-traces
-      AlarmDescription: Raw _incoming/ traces data (any tenant) older than 3 hours, or the dispatcher is not running.
+      AlarmDescription: "Raw _incoming/ traces data (any tenant) older than 95 min (normally <= ~80: compacted 10-25 min after its hour), or the dispatcher is not running."
       Namespace: obs
       MetricName: OldestIncomingAgeMinutes
       Dimensions:
         - { Name: signal, Value: traces }
       Statistic: Maximum
       Period: 900
-      EvaluationPeriods: 2
-      Threshold: 180
+      EvaluationPeriods: 1
+      Threshold: 95
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: breaching
       AlarmActions: [!Ref AlertTopic]
@@ -339,17 +380,85 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: obs-compaction-stuck-metrics
-      AlarmDescription: Raw _incoming/ metrics data (any tenant) older than 3 hours, or the dispatcher is not running.
+      AlarmDescription: "Raw _incoming/ metrics data (any tenant) older than 95 min (normally <= ~80: compacted 10-25 min after its hour), or the dispatcher is not running."
       Namespace: obs
       MetricName: OldestIncomingAgeMinutes
       Dimensions:
         - { Name: signal, Value: metrics }
       Statistic: Maximum
       Period: 900
-      EvaluationPeriods: 2
-      Threshold: 180
+      EvaluationPeriods: 1
+      Threshold: 95
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  WorkerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-worker-errors
+      AlarmDescription: "A compaction chunk failed (it is retried every 15 min; repeated failures leave that hour uncompacted)."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-compaction-worker }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  DispatcherErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-dispatcher-errors
+      AlarmDescription: "The compaction dispatcher failed."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-compaction-dispatcher }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  SealerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-day-sealer-errors
+      AlarmDescription: "The day/hour filter sealer failed (ID lookups fall back to per-file blooms)."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-day-sealer }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  FastLaneFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-fastlane-failed
+      AlarmDescription: "A raw file failed fast-lane indexing after retries; it is searchable only once compacted. See queue obs-fastlane-failed and infra/redrive-fastlane.py."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt FastLaneFailedQueue.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
       AlarmActions: [!Ref AlertTopic]
       OKActions: [!Ref AlertTopic]
 

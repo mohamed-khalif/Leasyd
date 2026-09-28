@@ -1,0 +1,231 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Failure visibility (T7): a freshness canary that sends a log and a span every minute through
+  the real endpoint and checks the one sent 2 minutes earlier is findable, and error alarms on
+  ingest and query. Alarms go to the obs-alerts topic (Phase 2). Compaction and fast-lane alarms
+  live in Phase 2 next to what they watch.
+
+Parameters:
+  IngestEndpoint:
+    Type: String
+    Description: OTLP/HTTP base URL (obs-phaseT2 output IngestEndpoint).
+  CanaryKeyParameter:
+    Type: String
+    Default: /obs/canary/api-key
+  CanaryRate:
+    Type: String
+    Default: rate(1 minute)
+    AllowedValues: [rate(1 minute), rate(5 minutes)]
+
+Resources:
+  CanaryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-canary
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: canary
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CanaryKeyParameter}"
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-index-lookup"
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T7" }
+
+  CanaryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-canary
+      RetentionInDays: 14
+
+  CanaryFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CanaryLogGroup
+    Properties:
+      FunctionName: obs-canary
+      Description: Freshness canary (sends and finds a marker record every minute)
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: canary.handler
+      Code: ../services/canary/build
+      Role: !GetAtt CanaryRole.Arn
+      MemorySize: 256
+      Timeout: 50
+      Environment:
+        Variables:
+          INGEST_ENDPOINT: !Ref IngestEndpoint
+          KEY_PARAM: !Ref CanaryKeyParameter
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T7" }
+
+  CanarySchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-canary-schedule
+      ScheduleExpression: !Ref CanaryRate
+      State: ENABLED
+      Targets:
+        - Id: canary
+          Arn: !GetAtt CanaryFunction.Arn
+
+  CanarySchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CanaryFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CanarySchedule.Arn
+
+  CanaryLogsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-canary-logs
+      AlarmDescription: "Canary logs record not findable 2 minutes after sending, 3 minutes in a row (or the canary is not running): new data is not becoming searchable."
+      Namespace: obs
+      MetricName: CanaryMissing
+      Dimensions: [{ Name: signal, Value: logs }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  CanaryTracesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-canary-traces
+      AlarmDescription: "Canary traces record not findable 2 minutes after sending, 3 minutes in a row (or the canary is not running): new data is not becoming searchable."
+      Namespace: obs
+      MetricName: CanaryMissing
+      Dimensions: [{ Name: signal, Value: traces }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  Ingest5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-ingest-5xx
+      AlarmDescription: "Ingest endpoint returned 5 or more server errors in 5 minutes (clients retry, but data may be delayed or refused)."
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions: [{ Name: ApiName, Value: obs-ingest }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  IngestErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-ingest-errors
+      AlarmDescription: "Ingest function errors: 5 or more in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-ingest }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  IngestAuthorizerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-ingest-authorizer-errors
+      AlarmDescription: "Authorizer errors (requests refused): 5 or more in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-ingest-authorizer }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  QueryErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-query-errors
+      AlarmDescription: "Query coordinator errors: 3 or more in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-query }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  QueryWorkerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-query-worker-errors
+      AlarmDescription: "Query worker errors: 3 or more in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-query-worker }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  IndexLookupErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-index-lookup-errors
+      AlarmDescription: "Index lookup errors: 3 or more in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-index-lookup }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]

@@ -340,3 +340,32 @@ Proof that customers see no difference: `infra/compression-check.py send before`
 step), `send after` (after it), then `compare`, which reads both batches back through `obs-query`
 and requires every field of every record to match. Locally, tests require identical Parquet (every
 column, and the blooms) for all four encodings, and for the same requests with compression off and on.
+
+## Phase T7: failure visibility
+
+Every alarm emails the `obs-alerts` topic (Phase 2; subscription AWSkhalif@gmail.com, confirmed).
+
+| Alarm | Fires when | Where |
+|---|---|---|
+| `obs-fastlane-failed` | a raw file failed fast-lane indexing after 2 retries (within 5 min); it is searchable only once compacted | Phase 2 (queue `obs-fastlane-failed`) |
+| `obs-compaction-stuck[-traces/-metrics]` | raw data older than 95 min (normally <= ~80), or the dispatcher stopped | Phase 2 |
+| `obs-compaction-worker-errors`, `obs-compaction-dispatcher-errors`, `obs-day-sealer-errors` | any error in 15 min | Phase 2 |
+| `obs-canary-logs`, `obs-canary-traces` | the canary's record is not findable 2 min after sending, 3 minutes in a row (or the canary is not running) | T7 |
+| `obs-ingest-5xx`, `obs-ingest-errors`, `obs-ingest-authorizer-errors` | 5+ in 5 min | T7 |
+| `obs-query-errors`, `obs-query-worker-errors`, `obs-index-lookup-errors` | 3+ in 5 min | T7 |
+
+The canary (`obs-canary`, every minute) sends one log record and one span for the `canary` tenant
+through the real endpoint and checks the pair sent 2 minutes earlier; metrics `obs/CanaryMissing`
+and `obs/CanarySendFailed` per signal. Its API key is in SSM `/obs/canary/api-key` (SecureString).
+
+Deploy (attach `infra/iam/deployer-phaseT7.json` to `obs-deployer` first; Phase 0 with admin
+credentials, since the boundary gains `sqs:SendMessage` and `ssm:GetParameter` on `obs-*` / `/obs/*`):
+
+```bash
+AWS_PROFILE=<admin> aws cloudformation deploy --stack-name obs-phase0 \
+  --template-file infra/phase0-foundation.yaml --capabilities CAPABILITY_NAMED_IAM
+infra/deploy-phase2.sh
+infra/deploy-phaseT7.sh          # first run creates the canary tenant and stores its key
+```
+
+Failed fast-lane files: `python3 infra/redrive-fastlane.py` lists them, `--apply` replays them.

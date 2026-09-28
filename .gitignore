@@ -7,3 +7,4 @@ services/ingest/__pycache__/
 services/ingest/build/
 services/tenants/build/
 services/loadgen/build/
+services/canary/build/

@@ -227,6 +227,14 @@ Resources:
               - sts:AssumeRole
               - sts:TagSession
             Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+          - Sid: FailedEventQueues     # dead-letter queues (fast lane)
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:obs-*"
+          - Sid: PlatformParameters    # e.g. the canary tenant's API key (SecureString)
+            Effect: Allow
+            Action: ssm:GetParameter
+            Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/*"
           - Sid: Telemetry
             Effect: Allow
             Action:
@@ -346,6 +354,10 @@ Resources:
                 Effect: Allow
                 Action: cloudwatch:PutMetricData
                 Resource: "*"
+              - Sid: FastLaneFailures   # failed fast-lane events (Lambda on-failure destination)
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:obs-fastlane-failed"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }
