@@ -107,6 +107,22 @@ def test_tune_sets_the_buffer_of_every_stream(adm):
     assert "not an active tenant" in call(adm, "tune", tenant="nobody", buffer_seconds=10)["error"]
 
 
+def test_read_keys_have_their_own_scope_and_rotation(adm):
+    ingest = call(adm, "create", tenant="acme")
+    read = call(adm, "read-key", tenant="acme")
+    assert read["scope"] == "read" and read["api_key"].startswith("obs_")
+    keys = {k["api_key_id"]: k for k in call(adm, "status", tenant="acme")["keys"]}
+    assert keys[ingest["key_id"]]["scope"] == "ingest" and keys[read["key_id"]]["scope"] == "read"
+    # Rotating the ingest key leaves the read key alone, and the other way round.
+    call(adm, "rotate", tenant="acme", grace_hours=1)
+    assert key_status(adm, "acme")[read["key_id"]] == "active"
+    assert key_status(adm, "acme")[ingest["key_id"]] == "expiring"
+    call(adm, "rotate", tenant="acme", grace_hours=1, scope="read")
+    assert key_status(adm, "acme")[read["key_id"]] == "expiring"
+    assert "unknown scope" in call(adm, "rotate", tenant="acme", scope="admin")["error"]
+    assert "not an active tenant" in call(adm, "read-key", tenant="nobody")["error"]
+
+
 def test_create_twice_refused_and_bad_input(adm):
     call(adm, "create", tenant="acme")
     assert "already exists" in call(adm, "create", tenant="acme")["error"]

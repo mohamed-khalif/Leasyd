@@ -3,6 +3,7 @@
 #
 #   infra/tenant.sh create <tenant> [standard|test-tiny]  streams + first API key (key printed once, on stdout)
 #   infra/tenant.sh rotate <tenant> [grace-hours]         new key (stdout); old keys work for grace-hours (default 24)
+#   infra/tenant.sh read-key <tenant>                     an extra key that may only query (POST /v1/query), shown once
 #   infra/tenant.sh revoke <tenant> [key-id]              refuse one key, or all of the tenant's keys
 #   infra/tenant.sh delete <tenant>                       refuse all keys, delete streams, purge all data and index
 #   infra/tenant.sh tune <tenant> <buffer-seconds>        Firehose buffer before a file is written (default 30;
@@ -45,6 +46,11 @@ case "$cmd" in
     admin "{\"action\":\"rotate\",\"tenant\":\"${tenant}\",\"grace_hours\":${3:-24}}"
     echo "new key id $(field "['key_id']"); old keys $(field "['old_key_ids']") work until $(field "['old_keys_expire_at']")" >&2
     echo "new api key (shown once):" >&2
+    field "['api_key']"
+    ;;
+  read-key)
+    admin "{\"action\":\"read-key\",\"tenant\":\"${tenant}\"}"
+    echo "read key id $(field "['key_id']") (may only query; active within 1-2 minutes). api key (shown once):" >&2
     field "['api_key']"
     ;;
   revoke)

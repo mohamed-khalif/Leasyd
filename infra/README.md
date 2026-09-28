@@ -375,3 +375,33 @@ Proven on AWS (2026-09-28 21:02, one injected failure each): an invalid compacti
 `obs-canary-logs/traces` in ~4.5 min; a corrupt raw file -> 3 failed fast-lane attempts -> queue ->
 `obs-fastlane-failed` in ~5.5 min, then listed and replayed with the redrive script (file removed:
 skipped, message deleted). All alarms back to OK after the fixes.
+
+## Phase Q1: customer query API
+
+`POST <IngestEndpoint>/v1/query` with header `x-api-key: <read key>` and a JSON query (the fields of
+`services/compaction/query.py`: `signal`, `start`, `end`, `services`, `where`, `match`, `group_by`,
+`aggs`, `search`, `order`, `limit`). The tenant comes only from the key; anything else in the body is
+ignored. Errors: 400 bad query, 401 no/unknown key, 403 wrong key scope, 413 result too large,
+504 over API Gateway's 29 s.
+
+Keys have a scope. `ingest` keys (every key from `create` / `rotate`) may only send data; `read` keys
+may only query, so a key embedded in an application can't read data back:
+
+```bash
+infra/tenant.sh read-key <tenant>        # prints a new read key once
+infra/tenant.sh revoke <tenant> <key-id> # revoke one key
+curl -s -X POST "$ENDPOINT/v1/query" -H "x-api-key: $READ_KEY" -H 'Content-Type: application/json' \
+  -d '{"signal":"logs","start":"2026-09-28T00:00:00Z","end":"2026-09-28T23:59:59Z",
+       "where":[{"field":"severity_number","op":">=","value":17}],
+       "group_by":["service"],"aggs":[{"fn":"count"}]}'
+```
+
+Deploy (obs-phase4 first: it creates `obs-query-api`, which obs-phaseT2 routes to):
+
+```bash
+infra/deploy-phase4.sh --parameter-overrides BytesPerWorker=67108864
+infra/deploy-phaseT2.sh
+infra/deploy-phaseT5.sh     # tenant admin: read-key, scope-aware rotate
+infra/deploy-phaseT7.sh     # alarm obs-query-api-errors
+python3 infra/query-api-test.py
+```

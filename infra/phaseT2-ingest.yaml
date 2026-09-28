@@ -217,7 +217,7 @@ Resources:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: obs-ingest
-      Description: OTLP/HTTP ingest. Send x-api-key; POST /v1/logs, /v1/traces, /v1/metrics.
+      Description: OTLP/HTTP ingest (POST /v1/logs, /v1/traces, /v1/metrics) and queries (POST /v1/query). Send x-api-key.
       EndpointConfiguration: { Types: [REGIONAL] }
       # Pass OTLP protobuf / gzip bodies through untouched.
       BinaryMediaTypes: ["*/*"]
@@ -255,6 +255,9 @@ Resources:
   MetricsResource:
     Type: AWS::ApiGateway::Resource
     Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: metrics }
+  QueryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: query }
 
   LogsMethod:
     Type: AWS::ApiGateway::Method
@@ -307,11 +310,36 @@ Resources:
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
         TimeoutInMillis: 29000
 
+  # Queries (Q1): only read-scope keys are allowed here (see the authorizer);
+  # obs-query-api (obs-phase4) runs them for the key's tenant.
+  QueryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref QueryResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-api/invocations"
+        TimeoutInMillis: 29000
+
+  QueryApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-api"
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/v1/query"
+
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV2:
+  DeploymentV3:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod]
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, QueryMethod]
     Properties:
       RestApiId: !Ref Api
 
@@ -319,7 +347,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV2
+      DeploymentId: !Ref DeploymentV3
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

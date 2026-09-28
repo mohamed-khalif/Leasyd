@@ -25,10 +25,15 @@ def auth():
                 ("good-key", "acme", "active", None), ("old-key", "acme", "revoked", None),
                 ("bad-tenant-key", "Acme#x", "active", None),
                 ("rotated-key", "acme", "expiring", "2999-01-01T00:00:00Z"),
-                ("expired-key", "acme", "expiring", "2020-01-01T00:00:00Z")]:
+                ("expired-key", "acme", "expiring", "2020-01-01T00:00:00Z"),
+                ("read-key", "acme", "active", None), ("odd-scope-key", "acme", "active", None)]:
             item = {"pk": {"S": f"key#{authorizer.key_hash(key)}"}, "tenant": {"S": tenant}, "status": {"S": status}}
             if expires:
                 item["expires_at"] = {"S": expires}
+            if key == "read-key":
+                item["scope"] = {"S": "read"}
+            if key == "odd-scope-key":
+                item["scope"] = {"S": "admin"}
             ddb.put_item(TableName="obs-tenants", Item=item)
         yield authorizer
 
@@ -39,15 +44,23 @@ def call(auth, headers):
 
 def test_valid_key_maps_to_tenant(auth):
     out = call(auth, {"X-Api-Key": "good-key"})
-    assert out["context"] == {"tenant": "acme"} and out["principalId"] == "acme"
+    assert out["context"] == {"tenant": "acme", "scope": "ingest"} and out["principalId"] == "acme"
     assert out["usageIdentifierKey"] == "good-key"
     stmt = out["policyDocument"]["Statement"][0]
     assert stmt["Effect"] == "Allow"
-    assert stmt["Resource"] == "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/*"
+    base = "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest"
+    assert stmt["Resource"] == [f"{base}/POST/v1/logs", f"{base}/POST/v1/traces", f"{base}/POST/v1/metrics"]
+
+
+def test_read_key_may_only_query(auth):
+    out = call(auth, {"x-api-key": "read-key"})
+    assert out["context"] == {"tenant": "acme", "scope": "read"}
+    assert out["policyDocument"]["Statement"][0]["Resource"] == [
+        "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/POST/v1/query"]
 
 
 @pytest.mark.parametrize("headers", [{}, {"x-api-key": ""}, {"x-api-key": "nope"}, {"x-api-key": "old-key"}, {"x-api-key": "expired-key"},
-                                     {"x-api-key": "bad-tenant-key"}, {"x-api-key": "x" * 300},
+                                     {"x-api-key": "bad-tenant-key"}, {"x-api-key": "x" * 300}, {"x-api-key": "odd-scope-key"},
                                      {"authorization": "good-key"}])
 def test_rejected(auth, headers):
     with pytest.raises(Exception, match="^Unauthorized$"):
@@ -60,4 +73,4 @@ def test_keys_are_stored_hashed(auth):
 
 
 def test_rotated_key_works_until_it_expires(auth):
-    assert call(auth, {"x-api-key": "rotated-key"})["context"] == {"tenant": "acme"}
+    assert call(auth, {"x-api-key": "rotated-key"})["context"] == {"tenant": "acme", "scope": "ingest"}
