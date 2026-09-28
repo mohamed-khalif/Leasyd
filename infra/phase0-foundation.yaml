@@ -61,25 +61,19 @@ Resources:
       MetricsConfigurations:
         - Id: incoming
           Prefix: _incoming/
+      # Object-created events go to EventBridge, where the fast-lane indexer
+      # (obs-phase2) picks up new raw files. Free for AWS service events.
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
       LifecycleConfiguration:
         Rules:
-          # Compacted data only. _incoming/ gets no transitions or expiry:
-          # a stuck compaction must never silently lose data.
-          - Id: logs-tiering
+          # Compacted data only (data/tenant=<T>/<signal>/...). _incoming/
+          # gets no transitions or expiry: a stuck compaction must never
+          # silently lose data.
+          - Id: data-tiering
             Status: Enabled
-            Prefix: logs/
-            Transitions:
-              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
-              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
-          - Id: traces-tiering
-            Status: Enabled
-            Prefix: traces/
-            Transitions:
-              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
-              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
-          - Id: metrics-tiering
-            Status: Enabled
-            Prefix: metrics/
+            Prefix: data/
             Transitions:
               - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
               - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
@@ -95,6 +89,32 @@ Resources:
               Transitions:
                 - { StorageClass: GLACIER_IR, TransitionInDays: 1 }
             - !Ref AWS::NoValue
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "0" }
+
+  # Lambda bundles uploaded by `aws cloudformation package`.
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "obs-artifacts-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-bundles
+            Status: Enabled
+            ExpirationInDays: 30
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }
@@ -135,6 +155,8 @@ Resources:
               - s3:PutObject
               - s3:DeleteObject
               - s3:AbortMultipartUpload
+              - s3:GetBucketLocation            # Firehose delivery (T2)
+              - s3:ListBucketMultipartUploads   # Firehose delivery (T2)
             Resource:
               - !GetAtt DataBucket.Arn
               - !Sub "${DataBucket.Arn}/*"
@@ -148,7 +170,10 @@ Resources:
               - dynamodb:UpdateItem
               - dynamodb:DeleteItem
               - dynamodb:BatchWriteItem
-            Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-*"
+              - dynamodb:Scan                   # tenant admin: list tenants, purge a tenant (T5)
+            Resource:
+              - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-*"
+              - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-*/index/*"
           - Sid: PlatformCompute
             Effect: Allow
             Action:
@@ -159,6 +184,57 @@ Resources:
               - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-*"
               - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:obs-*"
               - !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:obs-*"
+          - Sid: TenantIngestStreams
+            Effect: Allow
+            Action:
+              - firehose:PutRecord
+              - firehose:PutRecordBatch
+            Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+          # Tenant operations (T5, obs-tenant-admin): API keys, per-tenant
+          # ingest streams and the role they deliver with.
+          - Sid: TenantAdmin
+            Effect: Allow
+            Action:
+              - apigateway:GET
+              - apigateway:POST
+              - apigateway:PATCH
+              - apigateway:PUT
+              - apigateway:DELETE
+            Resource:
+              - !Sub "arn:aws:apigateway:${AWS::Region}::/apikeys"
+              - !Sub "arn:aws:apigateway:${AWS::Region}::/apikeys/*"
+              - !Sub "arn:aws:apigateway:${AWS::Region}::/usageplans/*/keys"
+              - !Sub "arn:aws:apigateway:${AWS::Region}::/usageplans/*/keys/*"
+              - !Sub "arn:aws:apigateway:${AWS::Region}::/tags/*"
+          - Sid: TenantAdminStreams
+            Effect: Allow
+            Action:
+              - firehose:CreateDeliveryStream
+              - firehose:DeleteDeliveryStream
+              - firehose:DescribeDeliveryStream
+              - firehose:TagDeliveryStream
+              - firehose:UpdateDestination      # tenant tune: buffer interval
+            Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+          - Sid: TenantAdminPassFirehoseRole
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-firehose"
+            Condition:
+              StringEquals: { "iam:PassedToService": firehose.amazonaws.com }
+          - Sid: TenantScopedReads
+            Effect: Allow
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+          - Sid: FailedEventQueues     # dead-letter queues (fast lane)
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:obs-*"
+          - Sid: PlatformParameters    # e.g. the canary tenant's API key (SecureString)
+            Effect: Allow
+            Action: ssm:GetParameter
+            Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/*"
           - Sid: Telemetry
             Effect: Allow
             Action:
@@ -245,21 +321,43 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:AbortMultipartUpload
-                Resource:
-                  - !Sub "${DataBucket.Arn}/logs/*"
-                  - !Sub "${DataBucket.Arn}/traces/*"
-                  - !Sub "${DataBucket.Arn}/metrics/*"
+                Resource: !Sub "${DataBucket.Arn}/data/*"
               - Sid: WriteIndex
                 Effect: Allow
                 Action:
                   - dynamodb:PutItem
                   - dynamodb:BatchWriteItem
                   - dynamodb:Query
+                  - dynamodb:GetItem     # chunk plans
+                  - dynamodb:BatchGetItem  # raw-file records, when retiring fast-lane entries
+                  - dynamodb:UpdateItem  # mark a plan committed
+                  - dynamodb:DeleteItem  # plans and leases
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
+              - Sid: RetireBloomFiles   # fast-lane files once compacted; day-filter housekeeping
+                Effect: Allow
+                Action: s3:DeleteObject
+                Resource:
+                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_fast/*"      # fast-lane Parquet and blooms
+                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/raw-*"  # blooms of the earlier fast lane
+                  # day filters (T6): old versions, and ID digests once no longer needed
+                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/day/*"
+                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_ids/*"
+              - Sid: MeterUsage       # one usage record per compacted chunk (T5)
+                Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-usage"
+              - Sid: InvokeWorker
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-compaction-worker"
               - Sid: Metrics
                 Effect: Allow
                 Action: cloudwatch:PutMetricData
                 Resource: "*"
+              - Sid: FastLaneFailures   # failed fast-lane events (Lambda on-failure destination)
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:obs-fastlane-failed"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }
@@ -290,27 +388,24 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: List
+              # No direct access to tenant data or the index: every read goes
+              # through obs-tenant-reader, tagged with the one tenant it serves.
+              - Sid: AssumeTenantReader
                 Effect: Allow
-                Action: s3:ListBucket
-                Resource: !GetAtt DataBucket.Arn
-              - Sid: ReadCompacted
+                Action:
+                  - sts:AssumeRole
+                  - sts:TagSession
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+              - Sid: FanOutQueryWorkers   # Phase 4: the query coordinator runs workers in parallel
                 Effect: Allow
-                Action: s3:GetObject
-                Resource:
-                  - !Sub "${DataBucket.Arn}/logs/*"
-                  - !Sub "${DataBucket.Arn}/traces/*"
-                  - !Sub "${DataBucket.Arn}/metrics/*"
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-worker"
               - Sid: LargeResults
                 Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                 Resource: !Sub "${DataBucket.Arn}/_results/*"
-              - Sid: ReadIndex
-                Effect: Allow
-                Action: dynamodb:Query
-                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
               - Sid: ResultCache
                 Effect: Allow
                 Action:
@@ -320,6 +415,62 @@ Resources:
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }
+
+  # Reads one tenant's data and index entries. The tenant comes from the
+  # session tag set when the query role assumes this role; IAM itself then
+  # refuses any object or index key belonging to another tenant, whatever
+  # the calling code asks for.
+  TenantReaderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-tenant-reader
+      PermissionsBoundary: !Ref PermissionsBoundary
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt QueryRole.Arn
+            Action: [sts:AssumeRole, sts:TagSession]
+            Condition:
+              StringLike: { "aws:RequestTag/tenant": "?*" }
+          - !If
+            - TestAssume
+            - Effect: Allow
+              Principal:
+                AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+              Action: [sts:AssumeRole, sts:TagSession]
+              Condition:
+                StringLike: { "aws:RequestTag/tenant": "?*" }
+            - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: one-tenant
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadTenantData
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "${DataBucket.Arn}/data/tenant=${!aws:PrincipalTag/tenant}/*"
+                  # Raw files not yet compacted (the fast lane, T3).
+                  - !Sub "${DataBucket.Arn}/_incoming/tenant=${!aws:PrincipalTag/tenant}/*"
+              - Sid: ListTenantData
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+                Condition:
+                  StringLike: { "s3:prefix": "data/tenant=${aws:PrincipalTag/tenant}/*" }
+              - Sid: ReadTenantIndex
+                Effect: Allow
+                Action: [dynamodb:Query, dynamodb:GetItem]
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
+                Condition:
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": "${aws:PrincipalTag/tenant}#*" }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T" }
 
   # ---------- Cost guardrail ----------
 
@@ -359,11 +510,15 @@ Resources:
 Outputs:
   BucketName:
     Value: !Ref DataBucket
+  ArtifactsBucketName:
+    Value: !Ref ArtifactsBucket
   CollectorRoleArn:
     Value: !GetAtt CollectorRole.Arn
   CompactionRoleArn:
     Value: !GetAtt CompactionRole.Arn
   QueryRoleArn:
     Value: !GetAtt QueryRole.Arn
+  TenantReaderRoleArn:
+    Value: !GetAtt TenantReaderRole.Arn
   PermissionsBoundaryArn:
     Value: !Ref PermissionsBoundary

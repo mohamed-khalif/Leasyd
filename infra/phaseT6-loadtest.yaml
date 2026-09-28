@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase T6 load-test tooling for the S3-native observability platform: the
+  obs-loadgen Lambda (realistic OTLP traffic through the public endpoint,
+  plus a freshness prober) and the obs-loadtest results table. Test tooling
+  only; delete the stack after T6. Deploy with infra/deploy-phaseT6.sh and
+  drive it with infra/t6/loadtest.py.
+
+Resources:
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: obs-loadtest
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T6" }
+
+  LoadgenRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-loadgen
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: loadgen
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !GetAtt ResultsTable.Arn
+              # The prober times lookups the way the query engine will call them.
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-index-lookup"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T6" }
+
+  LoadgenLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-loadgen
+      RetentionInDays: 7
+
+  LoadgenFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LoadgenLogGroup
+    Properties:
+      FunctionName: obs-loadgen
+      Description: T6 load generator and freshness prober
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: loadgen.handler
+      Code: ../services/loadgen/build
+      Role: !GetAtt LoadgenRole.Arn
+      MemorySize: 1769   # one full vCPU
+      Timeout: 900
+      Environment:
+        Variables:
+          LOADTEST_TABLE: !Ref ResultsTable
+          LOOKUP_FUNCTION: obs-index-lookup
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T6" }
+
+  # Each invocation is one planned slice of load; never re-run it.
+  LoadgenInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref LoadgenFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+Outputs:
+  LoadgenFunction:
+    Value: !Ref LoadgenFunction

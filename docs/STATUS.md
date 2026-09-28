@@ -1,0 +1,72 @@
+# Status
+
+Where the project stands, what is running on AWS, and how to pick it up.
+Last updated: 2026-09-28. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+and `infra/README.md` (deploy and test commands per phase).
+
+## What exists
+
+A serverless, multi-tenant observability back end on AWS (us-east-1, account 199301651524):
+
+| Area | Phase | State |
+|---|---|---|
+| Storage, IAM boundary, budget ($50, alerts to AWSkhalif@gmail.com) | 0 | live |
+| Compaction: raw OTLP JSON -> sorted Parquet, crash-safe | 2 | live, tested |
+| Index lookups with bloom filters | 3 | live, tested |
+| Tenant-aware storage and IAM isolation | T1 | live, tested |
+| Authenticated ingest: API Gateway + API keys + per-tenant Firehose | T2 | live, tested |
+| Fast lane: data searchable in ~30 s | T3 | live, tested |
+| Traces and metrics | T4 | live, tested |
+| Tenant operations: create, rotate, revoke, usage, delete | T5 | live, tested |
+| Scale: day + hour ID filters, faster fast lane, fixes found under load | T6 | live, tested at 1, 10, 50 GB/h |
+| Query engine with fan-out (`obs-query`), column-only reads | 4-5 | live, tested |
+| Firehose cost cut (compress before Firehose) | T6 | live, tested: $0.143 -> $0.077/GB at 10 GB/h |
+| Fast lane writes Parquet; per-tenant Firehose buffer (`tune`) | T6 | live, tested at 50 GB/h: freshness p99 38 s, queries pass |
+| Failure visibility: fast-lane dead-letter queue + redrive, compaction/ingest/query alarms, freshness canary | T7 | live, each alarm proven by an injected failure |
+| Faults, soak | T6 | crash safety covered by tests and a real stuck-chunk recovery; soak not run |
+| UI, alerting on customer data | 6+ | not started |
+
+Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
+Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.*`.
+
+## Stacks on AWS
+
+`obs-phase0`, `obs-phase1`, `obs-phase2`, `obs-phase3`, `obs-phase4`, `obs-phaseT2`, `obs-phaseT5`,
+`obs-phaseT6` (test tooling only; delete after T6). Deploys run as the `obs-deployer` IAM user; Phase 0
+needs admin credentials only when the `obs-boundary` policy changes. Lambda concurrency limit: 1000.
+
+## Key results (details in the plan)
+
+- 50 GB/h across 100 tenants: every request accepted, freshness p99 44 s (target 60 s),
+  ingest + fast lane $0.117/GB then; after compressing before Firehose, $0.077/GB at 10 GB/h.
+- Query, largest tenant (1.26 GB/day): 1 day in 1.3 s with 19 workers reading only the needed
+  columns (target < 5 s); trace ID across 30 days in 1.0 s (target < 3 s); results identical to Athena.
+- Compaction 1.7x faster (profiled: JSON parsing, not the ID loops), identical output.
+
+## Next
+
+1. Freshness at 50 GB/h fixed: p99 38 s (was 74 s) with the fast parse in the fast lane and 15 s
+   Firehose buffers for the 10 largest tenants (`infra/tenant.sh tune <tenant> 15`). Details and
+   all benchmarks: `docs/REPORT-2026-09-28.md`. Still to do: Lambda memory above 3008 MB (ask AWS), compaction chunks capped by record count
+   before testing 100 GB/h.
+2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
+   (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
+
+## Loose ends
+
+- Old test tenants from before tenant records (`probe-*`, `t2a/t2b/t2tiny-*`, `t3-110448`, `t3-110957`,
+  `t3dbg`, `t4-120402`, `t4-120927`) are being deleted (2026-09-28; purge passes finish on their own).
+  Kept on purpose: `t6-000`..`t6-099` and the `obs-phaseT6` stack (load tests; idle cost ~0),
+  `canary` (freshness canary), `seed-acme` / `seed-globex` (T1 isolation test data),
+  `_bench/chunk-2m/` (the 2M-record benchmark chunk).
+- Lock down Phase 0: redeploy with `AllowTestAssume=false EnableLifecycleTest=false` (admin
+  credentials). After that the Phase 0 / T1 deny tests need the flags back on temporarily.
+- Merge pull request #1 (branch `claude/code-identification-1dxuoa`) into `main`.
+
+## Findings worth remembering
+
+- New AWS accounts start with a Lambda concurrency limit of 10; raise it before any real traffic.
+- New API keys take ~1 minute to work everywhere (they flicker 200/403 meanwhile); revocation ~1 minute.
+- API Gateway may decompress gzip bodies but keep `Content-Encoding: gzip`; ingest checks the gzip magic bytes.
+- Load testing found and fixed: colliding bloom file names, a race deleting fast-lane blooms mid-lookup,
+  compaction failing whenever DuckDB spilled to disk, and slow fast-lane indexing of big files.

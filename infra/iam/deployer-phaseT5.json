@@ -1,0 +1,10 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "UsageTableBackups", "Effect": "Allow",
+      "Action": ["dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups"],
+      "Resource": "arn:aws:dynamodb:*:*:table/obs-usage" },
+    { "Sid": "ReadUsage", "Effect": "Allow", "Action": ["dynamodb:Query", "dynamodb:Scan"],
+      "Resource": "arn:aws:dynamodb:*:*:table/obs-usage" }
+  ]
+}

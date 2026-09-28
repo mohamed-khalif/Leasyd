@@ -1,0 +1,374 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase T2 authenticated, serverless ingest for the S3-native observability
+  platform: a public HTTPS OTLP/HTTP endpoint (API Gateway) where each
+  request carries a tenant API key. A Lambda authorizer maps the key to a
+  tenant; the ingest Lambda converts the OTLP request and puts it on that
+  tenant's own Firehose stream (obs-t-<tenant>-<signal>, created by
+  infra/tenant.sh), which batches it into s3://.../_incoming/tenant=<T>/.
+  Usage plans rate-limit per key. Nothing runs, or costs, while idle.
+  Deploy with infra/deploy-phaseT2.sh.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: ingest
+  StandardRateLimit:
+    Type: Number
+    Default: 500
+    Description: Requests per second per tenant on the standard plan (one OTLP export is one request).
+  StandardBurstLimit:
+    Type: Number
+    Default: 1000
+  RecordCompression:
+    Type: String
+    Default: none
+    AllowedValues: [none, gzip]
+    Description: >
+      gzip: ingest compresses each record before Firehose, which bills the bytes
+      it receives (~5x less). Set it only after every tenant stream passes
+      records through (infra/migrate-stream-compression.py); readers accept both.
+
+Resources:
+  # ---------- Tenant registry ----------
+
+  # pk "key#<sha256 of API key>" -> tenant, status. API keys themselves are
+  # never stored here (API Gateway holds them for usage plans).
+  # pk "tenant#<T>" -> the tenant's status and plan (T5, obs-tenant-admin).
+  TenantsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-tenants
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: tenant, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+      # A tenant's keys (and its tenant record), for rotation, revocation and deletion (T5).
+      GlobalSecondaryIndexes:
+        - IndexName: by-tenant
+          KeySchema:
+            - { AttributeName: tenant, KeyType: HASH }
+            - { AttributeName: pk, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  # ---------- Authorizer ----------
+
+  AuthorizerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-authorizer
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: read-tenants
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:GetItem
+                Resource: !GetAtt TenantsTable.Arn
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  AuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-ingest-authorizer
+      RetentionInDays: 14
+
+  AuthorizerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: AuthorizerLogGroup
+    Properties:
+      FunctionName: obs-ingest-authorizer
+      Description: API key -> tenant for the ingest API
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: authorizer.handler
+      Code: ../services/ingest/build
+      Role: !GetAtt AuthorizerRole.Arn
+      MemorySize: 256
+      Timeout: 5
+      Environment:
+        Variables:
+          TENANTS_TABLE: !Ref TenantsTable
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  AuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/authorizers/${Authorizer}"
+
+  # ---------- Ingest ----------
+
+  IngestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-ingest
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: put-tenant-streams
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [firehose:PutRecord, firehose:PutRecordBatch]
+                Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-ingest
+      RetentionInDays: 14
+
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: IngestLogGroup
+    Properties:
+      FunctionName: obs-ingest
+      Description: OTLP/HTTP -> the tenant's Firehose stream
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: ingest.handler
+      Code: ../services/ingest/build
+      Role: !GetAtt IngestRole.Arn
+      MemorySize: 1024
+      Timeout: 28   # just under API Gateway's 29 s integration limit
+      Environment:
+        Variables:
+          STREAM_PREFIX: obs-t-
+          RECORD_COMPRESSION: !Ref RecordCompression
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  IngestPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/v1/*"
+
+  # Assumed by each tenant's Firehose streams to write into _incoming/.
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-firehose
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: firehose.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "sts:ExternalId": !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: deliver-incoming
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket, s3:ListBucketMultipartUploads]
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload, s3:GetObject]
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  # ---------- API ----------
+
+  Api:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: obs-ingest
+      Description: OTLP/HTTP ingest. Send x-api-key; POST /v1/logs, /v1/traces, /v1/metrics.
+      EndpointConfiguration: { Types: [REGIONAL] }
+      # Pass OTLP protobuf / gzip bodies through untouched.
+      BinaryMediaTypes: ["*/*"]
+      ApiKeySourceType: AUTHORIZER
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  Authorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: api-key
+      RestApiId: !Ref Api
+      Type: REQUEST
+      IdentitySource: method.request.header.x-api-key
+      AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations"
+      # How long API Gateway reuses an allow/deny per key: a revoked key can
+      # keep working up to this long (disabling it in API Gateway usually
+      # takes effect sooner). 60 s costs only a few extra authorizer calls.
+      AuthorizerResultTtlInSeconds: 60
+
+  V1Resource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref Api
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: v1
+
+  LogsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: logs }
+  TracesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: traces }
+  MetricsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: metrics }
+
+  LogsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref LogsResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      ApiKeyRequired: true
+      Integration:
+        # The tenant reaches the Lambda in requestContext.authorizer, which
+        # only the authorizer can set.
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
+        TimeoutInMillis: 29000
+
+  TracesMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref TracesResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      ApiKeyRequired: true
+      Integration:
+        # The tenant reaches the Lambda in requestContext.authorizer, which
+        # only the authorizer can set.
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
+        TimeoutInMillis: 29000
+
+  MetricsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref MetricsResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      ApiKeyRequired: true
+      Integration:
+        # The tenant reaches the Lambda in requestContext.authorizer, which
+        # only the authorizer can set.
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
+        TimeoutInMillis: 29000
+
+  # Bump the logical ID's suffix whenever methods change, so CloudFormation
+  # creates a new deployment (it doesn't redeploy an unchanged one).
+  DeploymentV2:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod]
+    Properties:
+      RestApiId: !Ref Api
+
+  Stage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref Api
+      DeploymentId: !Ref DeploymentV2
+      StageName: !Ref StageName
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          MetricsEnabled: true
+          # Whole-API ceiling; each tenant is further limited by its usage plan.
+          ThrottlingRateLimit: 5000
+          ThrottlingBurstLimit: 10000
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  # ---------- Per-tenant limits ----------
+
+  StandardPlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: Stage
+    Properties:
+      UsagePlanName: obs-standard
+      Description: Default per-tenant limits
+      ApiStages:
+        - { ApiId: !Ref Api, Stage: !Ref StageName }
+      Throttle:
+        RateLimit: !Ref StandardRateLimit
+        BurstLimit: !Ref StandardBurstLimit
+
+  # Deliberately tiny, for the throttling test in infra/phaseT2-test.sh.
+  TestTinyPlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: Stage
+    Properties:
+      UsagePlanName: obs-test-tiny
+      Description: 1 request/second, for testing per-tenant throttling
+      ApiStages:
+        - { ApiId: !Ref Api, Stage: !Ref StageName }
+      Throttle:
+        RateLimit: 1
+        BurstLimit: 1
+
+Outputs:
+  IngestEndpoint:
+    Description: OTLP/HTTP base URL; SDKs append /v1/logs, /v1/traces, /v1/metrics.
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+  StandardPlanId:
+    Value: !Ref StandardPlan
+  TestTinyPlanId:
+    Value: !Ref TestTinyPlan
+  TenantsTable:
+    Value: !Ref TenantsTable
+  FirehoseRoleArn:
+    Description: Delivery role for tenant streams (used by infra/tenant.sh).
+    Value: !GetAtt FirehoseRole.Arn

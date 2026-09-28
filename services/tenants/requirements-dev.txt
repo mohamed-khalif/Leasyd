@@ -1,0 +1,3 @@
+boto3
+moto[apigateway,dynamodb,firehose,s3]
+pytest

@@ -24,8 +24,8 @@ The platform separates two concerns that traditional observability tools bundle 
 
 | Component | AWS service |
 |---|---|
-| Agents/collectors | OpenTelemetry Collector on ECS Fargate. One agent for all three signal types. |
-| Cold-path writer | The collector's S3 exporter, writing OTLP JSON to `_incoming/` |
+| Agents/collectors | Customers' OpenTelemetry SDKs (or their own collectors) send OTLP/HTTP with an API key |
+| Cold-path writer | API Gateway → ingest Lambda → a Firehose stream per tenant and signal, writing OTLP JSON to `_incoming/tenant=<T>/` (Phase T2) |
 | Cold storage | S3 |
 | Compaction | Lambda: a dispatcher runs on an EventBridge schedule and starts one worker per partition |
 | Metadata index | DynamoDB (on-demand) |
@@ -85,40 +85,125 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 **Build**
 - **Dispatcher Lambda** (EventBridge, every 15 min):
   - Lists `_incoming/` hour partitions that closed at least 10 minutes ago. The 10-minute grace period catches late-arriving data.
-  - Invokes one worker per (signal, arrival hour).
-  - Publishes a CloudWatch metric for the age of the oldest `_incoming/` object, with an alarm if it goes over 3 hours.
-- **Worker Lambda**, per partition:
-  1. List the input files and compute `batch_id = hash(sorted input keys)`.
-  2. Read the inputs, split rows by service and by event hour, convert to Parquet, sort by timestamp, and write files of 128–512 MB named `part-<batch_id>-NNN.parquet` under each `{signal}/dt=/hour=/service=/`. The same inputs always produce the same names, so a re-run overwrites instead of duplicating.
-  3. Write the index entries (Phase 3). Because the keys are also derived from `batch_id`, re-writing them is harmless.
-  4. Delete the input files.
-- Data that arrives after its hour was compacted gets picked up on the next run. Its input set is different, so it gets a new `batch_id` and an additional file.
+  - Splits each closed hour's raw files into **chunks** (at most 2,000 files or 200 MB each) and records a **plan** per chunk in DynamoDB: its input keys and `batch_id = hash(input keys)`. Files already in a plan are never planned again.
+  - Invokes one worker per plan, so a busy hour is compacted by many workers in parallel. Plans still present from an earlier run are invoked again, which is how a crashed chunk gets retried.
+  - Holds a lease while planning, so two overlapping runs can't split the same files two different ways.
+  - Publishes a CloudWatch metric for the age of the oldest `_incoming/` hour, with an alarm if it goes over 3 hours.
+- **Worker Lambda**, per chunk:
+  0. Take a lease on the chunk (a conditional DynamoDB write), so a retry never runs alongside the original.
+  1. Read the chunk's inputs, split rows by service and by event hour, sort by timestamp, and write Parquet under each `{signal}/dt=/hour=/service=/`. A group bigger than 4 million rows (~150–250 MB) is cut into consecutive time slices, `part-<batch_id>-000.parquet`, `-001`, …, so no single file is too big for one query worker. The cut depends only on row count, so a re-run produces the same file names and overwrites instead of duplicating.
+  2. Write the index entries (Phase 3), keyed by `min_ts#<batch_id>-NNN`. Re-writing them is harmless for the same reason.
+  3. Commit: mark the plan committed. A crash before this redoes steps 1–2; a crash after it skips to step 4.
+  4. Delete the input files, then the plan.
+- Data that arrives after its hour was planned gets its own plan on the next run, and becomes additional files.
 - Files never cross an hour boundary, so every file covers at most one hour. Phase 3's range lookup depends on this.
-- If one partition is too big for a single run (15-minute timeout, 10 GB memory), the worker splits the input list into chunks. The chunk number becomes part of `batch_id`.
 
 **Test on AWS**
 - Run the Phase 1 Athena query against the compacted Parquet. Compare bytes scanned and duration with the raw-JSON baseline. This is the billed-in-dollars case for compaction.
-- Kill a worker at each step boundary (after step 2, after step 3). Re-run it. Confirm row counts match and there are no duplicate files or index entries.
+- Kill a worker at each step boundary (after writing, indexing, committing, and part-way through deleting). Re-run it. Confirm row counts match and there are no duplicate files or index entries.
 - Use S3 Storage Lens to confirm average object size goes up and object count goes down.
 
 ## Phase 3: Metadata index
 
 **Build**
-- DynamoDB table, on-demand billing:
+- DynamoDB table `obs-index` (created in Phase 2), on-demand billing:
   - **Partition key:** `signal#service`
-  - **Sort key:** `min_ts#file_id`
+  - **Sort key:** `min_ts#<batch_id>-NNN`
   - **Attributes:**
     - `max_ts`, `file_path`, `row_count`, `size_bytes`
     - `storage_class`: set when lifecycle rules move the file, for cost estimates
-    - `bloom`: the bloom filter for high-cardinality fields (trace_id, request_id, etc.). Stored inline if under about 300 KB. Otherwise it goes to S3 and the item holds `bloom_s3_key`.
+    - `bloom`, `bloom_m`, `bloom_k`, `bloom_n`, `bloom_fields`: a bloom filter over every `trace_id` and `request.id` value in the file (the attributes are configurable: `BloomAttributes` on the Phase 2 stack). Sized for 1% false positives, about 10 bits per distinct value. Stored inline if under 300 KB (~250,000 values); otherwise it goes to `{signal}/_bloom/` in S3 and the item holds `bloom_s3_key`.
+  - A `_services#{signal}` item lists every service seen, so a lookup that names no service can search them all.
 - The Phase 2 worker fills the index in the same pass, since it already reads every row.
-- **Range lookup:** for `[t0, t1]`, query `min_ts BETWEEN (t0 − 1h) AND t1`, then filter `max_ts ≥ t0`. The one-hour lookback works because no file spans more than one hour.
+- **Lookup Lambda** `obs-index-lookup` (runs as the read-only query role). Input: services (optional), start, end, and optionally `match` on a trace or request ID. Output: the files to read, plus how many candidates each step kept.
+  - **Time range:** for `[t0, t1]`, query `min_ts BETWEEN (t0 − 1h) AND t1`, then filter `max_ts ≥ t0`. The one-hour lookback works because no file spans more than one hour. No S3 listing.
+  - **ID match:** drop every file whose bloom filter says the ID is certainly absent. Files indexed before blooms existed are never dropped.
+  - Phase 4 imports the same module rather than calling the Lambda, to save a network hop.
 
-**Test on AWS**
-- Write a small Lambda that takes a time range and a service and returns file paths. Compare its result with a naive S3 listing of the same range: the counts should show real pruning.
-- Build a test file that crosses an hour boundary within its own hour (e.g. 10:40–10:59). Query from 10:50 and confirm the file is returned.
-- Look up a known trace_id and confirm the bloom filters rule out most files.
-- Watch consumed capacity in CloudWatch and confirm cost is near zero at idle.
+**Test on AWS** (`infra/phase3-test.sh`)
+- Seed 3 hours × 3 services of logs, each record with its own random trace and request ID, and compact them.
+- A time-range lookup for one service returns only the overlapping files, far fewer than an S3 listing of the same day.
+- A file that starts before the range is included; one that ends before it is excluded.
+- A trace ID or request ID lookup keeps about 1 of the 9 files, and it's the right one.
+- Athena confirms that file really holds the ID (no false negatives).
+- Report warm lookup latency and DynamoDB read units, and the table's consumed capacity at idle.
+
+## Phase T: Multi-tenancy and production hardening
+
+The platform will serve many separate customers (tenants). This phase comes before Phase 4, because it changes storage paths and index keys, and the query engine is where tenant isolation is enforced.
+
+**Decisions**
+- **Isolation:** one shared bucket and index; every path and index key starts with the tenant ID. Queries run under credentials that AWS restricts to the tenant's prefix and index keys (IAM session tags), so a bug in our code still cannot read another tenant's data.
+- **Ingest:** a public HTTPS endpoint. Each customer's OpenTelemetry SDK sends OTLP/HTTP with an API key header. The key maps to a tenant ID; requests without a valid key are rejected. (OTLP/HTTP rather than gRPC, since API Gateway doesn't proxy gRPC; every OpenTelemetry SDK supports both.)
+- **Scale:** elastic. The collector autoscales behind a load balancer, compaction and queries fan out across Lambdas, and DynamoDB is on-demand. Per-tenant rate limits and quotas stop one customer from starving the others.
+
+**Targets** (volumes are unknown and will grow, so the aim is proving the design keeps scaling out, and measuring cost as it does)
+- **Freshness:** a log line is searchable within **60 seconds** of arriving.
+- **Search speed:** 1 day of one tenant's logs in **under 5 seconds**; a trace or request ID lookup across 30 days in **under 3 seconds**.
+- **Tenants:** about 100, of mixed sizes.
+- **Durability:** no accepted data is lost when a collector task, Lambda or availability zone fails.
+- **Load test:** ramp 1 → 10 → 50 GB/hour across 100 tenants; at each step record throughput, freshness, search speed and cost per GB, and fix the first bottleneck before stepping up.
+
+**Build, in order**
+- **T1. Tenant-aware storage, compaction and lookups.** ✅ Deployed and tested on AWS.
+  - Raw: `_incoming/tenant=<T>/<signal>/dt=/hour=/`. Compacted: `data/tenant=<T>/<signal>/dt=/hour=/service=/`. Lifecycle tiering moves to the `data/` prefix.
+  - Index keys become `<T>#<signal>#<service>`; every internal record carries the tenant.
+  - Lookups require a tenant and read through a tenant-scoped role (`obs-tenant-reader`) that IAM restricts to `data/tenant=<T>/*` and index keys starting `<T>#`.
+- **T2. Authenticated, serverless ingest.** ✅ Deployed and tested on AWS: auth, tenant isolation, throttling, revocation (~1 min), 20,000 protobuf records stored exactly once, data in S3 ~20–35 s after sending. New API keys take up to ~1 minute to become active.
+  - API Gateway (TLS) → Lambda authorizer (API key → tenant, from an `obs-tenants` table) → ingest Lambda → the tenant's own Firehose stream per signal → `_incoming/tenant=<T>/<signal>/`.
+  - The tenant comes only from the authorizer; client-sent `obs.*` attributes are stripped.
+  - Durability: the client gets 200 only once Firehose has stored the records; otherwise 503 and the SDK retries.
+  - Per-tenant throttling and quotas via API Gateway usage plans.
+  - No servers: nothing runs or costs while idle. (A first version with an OpenTelemetry Collector fleet behind a load balancer was built and tested locally, then replaced before deployment: it cost ~$75/month idle, and every job it did has a serverless equivalent.)
+  - One Firehose stream per tenant per signal rather than one shared stream with dynamic partitioning: no partitioning fees ($0.020/GB, JQ hours, per-object charges), no shared 500-active-partition limit, per-tenant throughput limits, and a 30 s flush. Firehose bills each record as at least 5 KB, so tiny requests cost more per byte; T6 measures it.
+- **T3. Fast lane for recent data (freshness).** ✅ Deployed and tested on AWS: records findable 35 s after sending (target 60 s), exact row count from raw files, trace ID found via the raw file's bloom filter, and after compaction the same 500 rows come from Parquet only, with the fast-lane records retired.
+  - An S3 event (via EventBridge) on each new raw file triggers `obs-recent-indexer`, which indexes it as `kind=raw` entries: one per (service, event hour), with time range, row count and bloom filter. It uses compaction's own parsing code, so both see the same rows.
+  - Lookups return raw files alongside compacted Parquet, marked by `kind`, so the query engine (Phase 4) reads both.
+  - Handover: each raw file belongs to its arrival hour's compaction plan. While the plan is `planned`, raw entries are visible and the new Parquet entries hidden; one write marks it `committed`, which flips both; cleanup then deletes the raw entries and files. A search never counts a record twice or misses it, whatever step a crash interrupts.
+- **T4. Traces and metrics compaction.** ✅ Deployed and tested on AWS: 300 spans and 200 metric points (gauge, sum, histogram) sent through the endpoint; findable in 35 s (spans) and 64 s (metrics: Firehose delivered that file ~30 s later than the spans file sent at the same moment; the indexer itself takes ~1 s); trace ID lookups hit the right file before and after compaction; exact counts after compaction; Athena returns the values sent. Spans and metric data points flattened to Parquet, with the same index, bloom filters (trace IDs for spans) and lookups as logs.
+  - `obs.traces`: one row per span at its start time, events and links nested. `obs.metrics`: one row per data point; all five OTLP metric types in one table, `metric_type` saying which columns are set, sorted by metric then time.
+  - Same fast lane, handover, chunking and crash safety as logs: one code path, parameterised by signal.
+  - Not yet: metric exemplars (they would link metrics to traces); spans are placed by start time, so a lookup finds a long span by when it started.
+- **T5. Tenant operations.** ✅ Deployed and tested on AWS: create (3 streams, working key); rotation (new key works, old key works through its grace then refused ~40 s after); usage exact per signal (100 logs, 50 spans, 20 points; bytes counted); delete (key refused in ~70-80 s, streams gone, every raw file, Parquet file and index entry purged in the first pass, lookups empty, a tenant whose id starts with the deleted id untouched, usage kept, "deleted" after a clean second pass). Onboarding (create tenant, issue and rotate API keys), per-tenant usage metering (bytes and records ingested, stored, scanned), and full tenant deletion (data, index entries and keys).
+  - One control-plane Lambda, `obs-tenant-admin`: create, rotate (old keys work for a grace period), revoke, status, usage, list, delete. Serverless; a 15-minute sweep expires rotated keys and advances deletions.
+  - Metering: each compacted chunk writes one usage record (records, raw bytes, stored bytes) before its commit, keyed by the chunk, so re-runs never double count. Bytes scanned come with the query engine (Phase 4).
+  - Deletion: keys refused, streams deleted, then purge passes 20 minutes apart (longer than a worker lease) until one finds nothing, so in-flight compaction can't leave data behind. Usage records are kept.
+- **T6. Scale, fault and soak tests** against the targets above.
+  - Tooling (T6.1): serverless load generator (realistic OTLP protobuf through the public endpoint, 100 Zipf-sized tenants), a freshness prober, and a report with cost per GB. Steps run 45 min each; estimated platform cost ~$2 (1 GB/h), ~$3 (10 GB/h), ~$7 (50 GB/h), plus compaction.
+  - Ramp load; inject faults under load (kill collector tasks, force S3 and DynamoDB throttling, lose an AZ); run for several days at steady load.
+  - Freshness under load: a new stream's Firehose delivery sometimes takes ~60 s (seen once in T4); measure the distribution across many streams.
+  - Fixed (T6 fixes A/B, before load): blooms over 1 KB moved from index items to S3; parallel lookups; sharded per-day ID filters built by an hourly sealer, trusted only while no chunk was added after sealing, so an ID lookup across 30 days reads ~30 small ranges. Dispatcher lists tenants in parallel. Fast-lane bloom files no longer leak.
+  - Verified on AWS after the fixes: T3/T4 end-to-end tests pass; day filters (infra/phaseT6-dayfilter-test.sh): known ID found via the day filter, unknown ID rules the day out with no per-file bloom reads (173 ms), late data found via per-file blooms until re-sealed.
+  - Found by the load-test smoke run: gzip-encoded requests (what OTLP SDKs send by default) were rejected with 400, because API Gateway had already decompressed the body but kept Content-Encoding: gzip. Ingest now checks the gzip magic bytes.
+  - Smoke run after the gzip fix (5 tenants, 0.05 GB/h, 8 min): 47/47 requests accepted, 0 retries; freshness p50 34 s, max 36 s (9 probes); lookups p50 170-290 ms. At trickle volume cost is $0.22/GB, dominated by fixed per-record and per-file charges; the real steps measure it at volume. Even this trickle used 6 concurrent indexers and 5 ingest functions.
+  - **Step s1 (1 GB/h, 100 tenants, 45 min):** 0.99 GB/h achieved; 5,383 requests, all 200 (8 retries, 0 dropped); freshness p50 34 s, p99 37 s, max 37 s over 270 probes (target 60 s); lookups 1 h / 24 h p50 ~260 ms; ID lookup over 24 h p50 770 ms, p99 7.3 s. Peak concurrency: ingest 49, fast-lane indexer 100. Ingest + fast lane cost $0.19/GB (Firehose 32%, indexer 18%, S3 PUTs + events 15%, index writes 14%, API Gateway 13%); compaction added ~$0.01. Compaction kept up (178 chunks/hour, avg 1.1 s, 0 errors); dispatcher max 47 s.
+  - Found by s1: a chunk writing the same service and part for two event hours gave both files the same S3 bloom key, so one bloom overwrote the other (22 lookup errors; could also have caused missed files). Bloom keys now follow the file's own path. Lookups also used only 10 S3 connections for 32 fetch threads (boto3 default); now 80 connections, 64 threads, 1 GB memory.
+  - **Step s2 (10 GB/h, 100 tenants, 20 min):** 10.0 GB/h achieved; 23,061 requests, all 200, 0 retries; freshness p50 21 s, p99 43 s, max 43 s (90 probes); lookups 1 h / 24 h p50 ~160 ms; ID lookup over 24 h p50 665 ms, p99 6.0 s (up to 718 candidate files, today's, so no day filter yet). Peak concurrency: ingest 59, indexer 47. **Cost fell to $0.143/GB** (from $0.19 at 1 GB/h). Firehose is now 43% of it: it bills the OTLP JSON, 2.1x the protobuf sent. Compressing records before Firehose would cut that share by ~5-8x (a change to the raw format; candidate optimisation).
+  - Found by s2: a lookup could read a fast-lane entry, then compaction retired it and deleted its bloom before the fetch (NoSuchKey, 2 errors). A missing bloom now means "can't rule out"; the handover check hides the retired copy.
+  - **Step s3 (50 GB/h, 100 tenants, 20 min):** 49.9 GB/h achieved; 115,023 requests, all 200, 0 retries, 0 errors; freshness p50 33 s, p90 48 s, p99 56 s (90 probes; target 60 s); lookups 1 h / 24 h p50 ~160 ms; ID lookup over 24 h p50 1.0 s, **p99 10.7 s** (up to 1,424 of today's files). Peak concurrency: ingest 79, indexer 113, compaction workers 129. **Cost $0.121/GB** (Firehose 51%, API Gateway 20%, fast lane 14%); compaction added $0.33 for the hour (~$0.02/GB).
+  - Found by s3, fixed: (1) compaction chunks big enough to spill to disk failed every time (DuckDB's spill folder's parent didn't exist yet): 10 failed chunks that would have stayed stuck. (2) Fast-lane indexing of the biggest raw files (~100k records) took up to 23 s, most of it building full rows; the fast lane now reads only time, service and IDs (~3x faster), proven equal to compaction's rows. (3) ID lookups over today checked every file's bloom: compaction now files ID digests by hour, and the sealer (every 15 min) seals each closed hour of today ~20 min after it ends, so today's ID lookups check ~24 hour filters instead of ~1,400 blooms.
+  - **Step s3b (50 GB/h re-run after the fixes):** 49.9 GB/h; 114,902 requests, all 200, 0 retries; **freshness p50 29 s, p99 44 s, max 44 s** (was 56 s max); fast-lane indexer p99 9 s (was 23 s); compaction 0 errors (was 10), including the chunks that had been failing. Cost $0.117/GB for ingest + fast lane. Next bottleneck seen: compaction workers averaged 76 s and p99 411 s on the biggest chunks (15-min limit), and compaction cost ~$0.9 over 40 min while catching up. The per-ID Python loops (bloom and digest building) are the likely cause; vectorise them before going beyond 50 GB/h.
+  - **Compress before Firehose (live):** ingest gzips each record (`RecordCompression=gzip`), tenant streams pass records through (336 switched), readers accept every encoding of the changeover. Proven on AWS: the same 1,000 records sent before and after the switch read back identical in every field (`infra/compression-check.py`). **10 GB/h re-run: $0.077/GB, down from $0.143** (Firehose $0.206 -> $0.026, 8x less; now 10% of the cost, API Gateway the largest share at 31%); freshness p50 30 s, p99 38 s; 23,087 requests all accepted; ingest avg 88 ms (was 119 ms).
+  - **Compaction speed (built):** profiling a 400k-record chunk showed 73% of the time was DuckDB parsing raw JSON into rows, not the Python ID loops as first thought. The attribute-map expression rebuilt the key list for every attribute to drop duplicate keys; it now takes that path only for records that have duplicates, and reads the four scalar value types in one JSON pass. The bloom and digest loops are batched in numpy with identical results. **40.8 s -> 23.8 s (1.7x)** at Lambda's 2 threads, same memory floor (fits 1.2 GB, not 900 MB). Rejected: typed value structs (another ~2x on parsing) — DuckDB then fails the whole file on one malformed value, which would leave a chunk stuck forever. Tests require identical output: every column, blooms, digests, malformed values. **Correction (found at 50 GB/h):** the attribute-map shortcut stopped DuckDB spilling to disk; the biggest chunks (190 MB gzip, ~2M records) then failed out of memory on every retry, so that hour never compacted (the fast lane kept serving it). Memory had been checked on a 400k-record chunk only. Reproduced locally on the real chunk and reverted that part: the chunk compacts in 265 s (limit 900 s). The one-pass value extraction and numpy loops stay.
+  - After deploying it: T3/T4 end-to-end tests and the query test pass (same answers as Athena). Hour 08 of the 10 GB/h run compacted in 26 chunks, avg 1.3 s, 0 errors. Query test once everything was compacted: 1 day of the largest tenant 1.23 s, p95 by service 1.17 s, search 1.6 s, trace ID across 30 days 1.0 s.
+  - Found: a query that includes the current, not yet compacted hour must fully parse its raw files; with 59 raw files (181 MB) in range the 1-day query took 5.0 s instead of 1.2 s. A first fix (query workers parsing only the needed attribute keys, raw files weighted 8x in planning) still left 4.5 s for 1 day and 10.3 s for an ID lookup with 565 raw files in range under live 10 GB/h ingest. Root cause: the same raw JSON was parsed in three places (fast lane, compaction, every query). **Redesign (built):** the fast lane compacts each raw file on its own into Parquet under `data/tenant=T/<signal>/_fast/` (same code as compaction), indexed as kind=raw entries with the same handover rules; queries read only Parquet, in place; compaction retires the fast-lane files with their entries. The first fix was removed (net -176 lines, incl. the fast lane's separate summary parser). Entries from before the change (pointing at raw JSON) still work during the switchover (tested). To watch: fast-lane time per big raw file (it was 23 s with a full parse before compaction got 1.7x faster), i.e. freshness at 50 GB/h.
+  - Found in preflight: the account's Lambda concurrency limit is 10 (new-account default). Raised limit requested; a production account needs 1,000+.
+  - The dispatcher lists every tenant's raw folders each run; check it stays within its timeout at 100+ tenants.
+- **Also:** configurable bloom attributes cover common request-ID names by default (`request.id`, `http.request_id`, `request_id`, `x-request-id`).
+
+## Phases 4-5 status
+
+Built together (T6 showed the write path holds at 50 GB/h, so the read path was the biggest unknown): `obs-query` coordinator + `obs-query-worker` (`services/compaction/query.py`, `infra/phase4-query.yaml`). JSON queries (filters, ID match, group-by with count/sum/min/max/avg/percentiles, search), compiled with a field whitelist and bound values; fan-out to up to 64 workers by file size; mergeable partials (percentiles from log-bucket histograms, <= 2.5% error). Workers download whole files with tenant-scoped credentials; reading only the needed columns straight from S3 (DuckDB httpfs) is the next optimisation if scans are slow. Tested locally (12 tests incl. fan-out = single worker, raw + Parquet, tenant isolation, injection attempts).
+
+**On AWS** (`infra/phase4-test.py`, largest T6 tenant: 20 services, 255 files, 1.26 GB of Parquet and raw files in the last 24 h):
+- Errors by endpoint over 24 h: one worker 24.8 s (Phase 4 baseline); fan-out to 5 workers **4.9 s** (target < 5 s), identical results (7 routes, 1,527,602 errors). Scan time dominates (downloading whole files); lookup ~0.2-0.4 s.
+- p95 latency by service over 24 h: 3.6 s (p95 860 ms against a true ~855 ms).
+- Search, 50 newest "timeout" lines: 3.4 s.
+- **Trace ID across 30 days: 1.5 s** (target < 3 s): 255 files in range, 1 day filter and 1 hour filter consulted, 2 files read.
+- Error counts identical to Athena for a compacted hour (592,728 errors).
+- Next (built, to measure): 64 MB per worker instead of 256 MB (about 4x the workers), and workers read Parquet in place, fetching only the footer and the column chunks a query needs as S3 range requests through a tenant-scoped client (fsspec filesystem registered in DuckDB). Locally a one-column query read 4% of a 24 MB file. Whole-file download stays available (`"read": "download"`).
+- First AWS run of those (BytesPerWorker was still 256 MB: `cloudformation deploy` keeps a stack's previous parameter values unless overridden): same answer; column-only reads fetched 479 MB instead of 1,262 MB but saved only 6.2 -> 5.3 s with 5 workers. Search with column-only reads failed: DuckDB turned the S3 path's dt=/hour=/service= folders into extra columns (a DATE the response couldn't serialise). Fixed (hive_partitioning off), and range-reading workers now use 8 DuckDB threads to keep more S3 requests in flight.
+- **After both speedups (64 MB per worker, column-only reads), all checks pass:** 1 day of the largest tenant, errors by endpoint: **1.28 s** with 19 workers reading 479 MB (was 4.9 s; 1 worker 22.6 s; 19 workers with whole files 3.3 s); p95 by service 1.26 s; search 1.65 s; trace ID across 30 days 1.59 s; identical to Athena.
 
 ## Phase 4: Single-worker query path
 
@@ -177,6 +262,15 @@ Every phase has a build step and a test on AWS. Nothing counts as working until 
 **Test on AWS**
 - Run a popular query twice. On the second call, the Lambda invocation count in CloudWatch should stay flat.
 - Run a very broad query and compare the estimate with the actual bytes scanned and duration. Tune it until the error is within an agreed margin (e.g. ±25%). A badly calibrated estimate is worse than none.
+
+## Instrumentation (later phase)
+
+The collector only receives OTLP (gRPC 4317, HTTP 4318); it does not scrape or pull anything. Real services will send telemetry with the **OpenTelemetry SDK**, pointed at the collector. Until then the only source is the `telemetrygen` load generator.
+
+When this is picked up:
+- Give the collector a stable address (an internal load balancer or Cloud Map name) instead of the task's private IP.
+- Decide how services outside the platform VPC reach it (VPC peering or PrivateLink), since the security group admits only VPC traffic today.
+- Extend compaction to traces and metrics before sending them, or raw files will pile up in `_incoming/traces/` and `_incoming/metrics/`.
 
 ## Data freshness
 

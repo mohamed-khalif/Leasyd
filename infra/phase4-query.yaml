@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phases 4-5 query engine for the S3-native observability platform:
+  obs-query (coordinator: index lookup, split the files, fan out, merge)
+  and obs-query-worker (reads one chunk of the tenant's files with
+  tenant-scoped credentials and runs the query in DuckDB). Both run as
+  obs-query, which reaches tenant data only through obs-tenant-reader.
+  Requires obs-phase0 (redeployed for Phase 4), obs-phase2 and obs-phase3.
+  Deploy with infra/deploy-phase4.sh.
+
+Parameters:
+  MaxWorkers:
+    Type: Number
+    Default: 64
+    Description: Most workers one query fans out to.
+  BytesPerWorker:
+    Type: Number
+    Default: 67108864
+    Description: >
+      Target bytes of files per worker (64 MB). Fewer bytes, more workers in
+      parallel: faster, at about the same total cost (billed per GB-second).
+  ReadMode:
+    Type: String
+    Default: ranges
+    AllowedValues: [ranges, download]
+    Description: ranges reads only the Parquet columns a query needs, in place; download fetches whole files.
+
+Resources:
+  CoordinatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-query
+      RetentionInDays: 14
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-query-worker
+      RetentionInDays: 14
+
+  CoordinatorFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CoordinatorLogGroup
+    Properties:
+      FunctionName: obs-query
+      Description: Runs a query over one tenant's data (lookup, fan out, merge)
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: query.handler
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-query"
+      MemorySize: 2048
+      Timeout: 300
+      EphemeralStorage: { Size: 4096 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: obs-index
+          TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+          QUERY_WORKER_FUNCTION: obs-query-worker
+          QUERY_MAX_WORKERS: !Ref MaxWorkers
+          QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "4" }
+
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: WorkerLogGroup
+    Properties:
+      FunctionName: obs-query-worker
+      Description: Reads one chunk of a tenant's files and runs the query in DuckDB
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: query.worker
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-query"
+      MemorySize: 3008    # CPU and network scale with memory
+      Timeout: 300
+      EphemeralStorage: { Size: 10240 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: obs-index
+          TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+          QUERY_READ_MODE: !Ref ReadMode
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "4" }
+
+Outputs:
+  QueryFunction:
+    Value: !Ref CoordinatorFunction
+  QueryWorkerFunction:
+    Value: !Ref WorkerFunction

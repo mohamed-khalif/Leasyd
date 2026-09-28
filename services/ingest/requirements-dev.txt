@@ -1,0 +1,5 @@
+-r requirements.txt
+boto3
+moto[dynamodb]
+pytest
+duckdb==1.5.5

@@ -1,0 +1,638 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase 2 compaction for the S3-native observability platform: a scheduled
+  dispatcher and per-chunk worker Lambdas that turn _incoming/ raw OTLP JSON
+  (logs, traces, metrics) into sorted Parquet under data/, the obs-index
+  DynamoDB table they write, the fast-lane indexer, alarms on stuck
+  compaction, and the obs.logs / obs.traces / obs.metrics Athena tables.
+  Requires obs-phase0 and obs-phase1. Deploy through infra/deploy-phase2.sh,
+  which builds and uploads the Lambda code.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Default: AWSkhalif@gmail.com
+  ScheduleExpression:
+    Type: String
+    Default: rate(15 minutes)
+  ScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: >
+      DISABLED while collecting data for the Phase 2 before/after comparison,
+      so the schedule doesn't compact the test hour first.
+  GraceMinutes:
+    Type: Number
+    Default: 10
+    Description: Wait this long after an hour closes before compacting it (late data).
+  BloomAttributes:
+    Type: String
+    Default: request.id
+    Description: >
+      Comma-separated log attributes whose values go into each file's bloom
+      filter, alongside trace_id (Phase 3). Pick IDs people look up one at a time.
+  CompactSignals:
+    Type: String
+    Default: logs,traces,metrics
+    Description: Signals the dispatcher compacts (T4 added traces and metrics).
+  AllowCrashInjection:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Lets the Phase 2 test make the worker crash between steps. Set false once tested.
+
+Resources:
+  # ---------- Index ----------
+
+  IndexTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-index
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  # One item per compacted chunk: records and bytes, per tenant, day and
+  # signal (T5 metering). Billing records: kept when a tenant is deleted.
+  UsageTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-usage
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: tenant, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: tenant, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T5" }
+
+  # ---------- Lambdas ----------
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-compaction-worker
+      RetentionInDays: 14
+
+  DispatcherLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-compaction-dispatcher
+      RetentionInDays: 14
+
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: WorkerLogGroup
+    Properties:
+      FunctionName: obs-compaction-worker
+      Description: Compacts one arrival hour of _incoming/ into Parquet
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.worker
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
+      MemorySize: 3008
+      Timeout: 900
+      EphemeralStorage: { Size: 10240 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: !Ref IndexTable
+          WORKER_FUNCTION: obs-compaction-worker
+          USAGE_TABLE: !Ref UsageTable
+          ALLOW_CRASH_INJECTION: !Ref AllowCrashInjection
+          BLOOM_ATTRIBUTES: !Ref BloomAttributes
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  # A failed hour is retried by the next dispatcher run, not by Lambda.
+  WorkerInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref WorkerFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+  DispatcherFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: DispatcherLogGroup
+    Properties:
+      FunctionName: obs-compaction-dispatcher
+      Description: Invokes a compaction worker for each closed _incoming/ hour
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.dispatcher
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
+      MemorySize: 256
+      Timeout: 300   # lists every tenant's raw folders; the lease is 6 min
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: !Ref IndexTable
+          WORKER_FUNCTION: !Ref WorkerFunction
+          COMPACT_SIGNALS: !Ref CompactSignals
+          GRACE_MINUTES: !Ref GraceMinutes
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-compaction-schedule
+      ScheduleExpression: !Ref ScheduleExpression
+      State: !Ref ScheduleState
+      Targets:
+        - Id: dispatcher
+          Arn: !GetAtt DispatcherFunction.Arn
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DispatcherFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+
+  # ---------- Fast lane: index raw files as they arrive (T3) ----------
+
+  RecentIndexerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-recent-indexer
+      RetentionInDays: 14
+
+  RecentIndexerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: RecentIndexerLogGroup
+    Properties:
+      FunctionName: obs-recent-indexer
+      Description: Indexes each new raw file so lookups can return it before compaction
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.recent_indexer
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
+      # CPU scales with memory: 3008 MB (this account's maximum) gives ~1.7
+      # vCPUs vs ~1.2 at 2048, so DuckDB parses the biggest raw files faster.
+      MemorySize: 3008
+      Timeout: 120
+      EphemeralStorage: { Size: 2048 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: !Ref IndexTable
+          BLOOM_ATTRIBUTES: !Ref BloomAttributes
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T3" }
+
+  RawFileCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-raw-file-created
+      Description: New raw files under _incoming/tenant=... -> obs-recent-indexer
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket:
+            name: [!Sub "obs-data-${AWS::AccountId}-${AWS::Region}"]
+          object:
+            key: [{ prefix: "_incoming/tenant=" }]
+      State: ENABLED
+      Targets:
+        - Id: indexer
+          Arn: !GetAtt RecentIndexerFunction.Arn
+          # Keep every raw entry's write well inside the dispatcher's
+          # 10-minute grace, so none can land after its file was compacted.
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 300
+          DeadLetterConfig: { Arn: !GetAtt FastLaneFailedQueue.Arn }   # events EventBridge could not deliver
+
+  # A fast-lane failure is not data loss (compaction still picks the file up
+  # within ~75 min) but that file is not searchable until then: keep every
+  # failed event here, alarm on it, and replay with infra/redrive-fastlane.py.
+  FastLaneFailedQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: obs-fastlane-failed
+      MessageRetentionPeriod: 1209600   # 14 days
+      SqsManagedSseEnabled: true
+      Tags:
+        - { Key: project, Value: obs }
+
+  FastLaneFailedQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref FastLaneFailedQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt FastLaneFailedQueue.Arn
+            Condition: { ArnEquals: { "aws:SourceArn": !GetAtt RawFileCreatedRule.Arn } }
+
+  # Invocations that fail (e.g. out of memory): 2 retries, within the same
+  # 5 minutes as above (a later retry could index a file that is already
+  # compacted), then the event goes to the queue.
+  RecentIndexerInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref RecentIndexerFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 2
+      MaximumEventAgeInSeconds: 300
+      DestinationConfig:
+        OnFailure: { Destination: !GetAtt FastLaneFailedQueue.Arn }
+
+  RawFileCreatedPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RecentIndexerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RawFileCreatedRule.Arn
+
+  # ---------- Day filters: one ID filter per tenant, signal and day (T6) ----------
+
+  SealerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-day-sealer
+      RetentionInDays: 14
+
+  SealerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SealerLogGroup
+    Properties:
+      FunctionName: obs-day-sealer
+      Description: Builds ID filters for closed days, and closed hours of today, from compaction's digests
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.sealer
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
+      MemorySize: 3008
+      Timeout: 900
+      EphemeralStorage: { Size: 2048 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: !Ref IndexTable
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T6" }
+
+  SealerSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-day-sealer-schedule
+      # Hours of today are sealed ~20 min after they end, days 2 h after they end.
+      ScheduleExpression: rate(15 minutes)
+      State: !Ref ScheduleState
+      Targets:
+        - Id: sealer
+          Arn: !GetAtt SealerFunction.Arn
+
+  SealerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SealerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SealerSchedule.Arn
+
+  # ---------- Stuck-compaction alarm ----------
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: obs-alerts
+      Subscription:
+        - { Protocol: email, Endpoint: !Ref AlertEmail }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "2" }
+
+  # Fires if raw data sits uncompacted for 95+ minutes (an hour is planned
+  # 10-15 min after it ends and takes up to ~8 min), or if the dispatcher
+  # stops reporting at all (missing data counts as breaching). 3 hours
+  # missed a real stuck chunk: it was retried and failed for over an hour.
+  StuckCompactionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-stuck
+      AlarmDescription: "Raw _incoming/ logs data (any tenant) older than 95 min (normally <= ~80: compacted 10-25 min after its hour), or the dispatcher is not running."
+      Namespace: obs
+      MetricName: OldestIncomingAgeMinutes
+      Dimensions:
+        - { Name: signal, Value: logs }
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 95
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  StuckCompactionTracesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-stuck-traces
+      AlarmDescription: "Raw _incoming/ traces data (any tenant) older than 95 min (normally <= ~80: compacted 10-25 min after its hour), or the dispatcher is not running."
+      Namespace: obs
+      MetricName: OldestIncomingAgeMinutes
+      Dimensions:
+        - { Name: signal, Value: traces }
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 95
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  StuckCompactionMetricsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-stuck-metrics
+      AlarmDescription: "Raw _incoming/ metrics data (any tenant) older than 95 min (normally <= ~80: compacted 10-25 min after its hour), or the dispatcher is not running."
+      Namespace: obs
+      MetricName: OldestIncomingAgeMinutes
+      Dimensions:
+        - { Name: signal, Value: metrics }
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 95
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  WorkerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-worker-errors
+      AlarmDescription: "A compaction chunk failed (it is retried every 15 min; repeated failures leave that hour uncompacted)."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-compaction-worker }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  DispatcherErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-compaction-dispatcher-errors
+      AlarmDescription: "The compaction dispatcher failed."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-compaction-dispatcher }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  SealerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-day-sealer-errors
+      AlarmDescription: "The day/hour filter sealer failed (ID lookups fall back to per-file blooms)."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-day-sealer }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  FastLaneFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-fastlane-failed
+      AlarmDescription: "A raw file failed fast-lane indexing after retries; it is searchable only once compacted. See queue obs-fastlane-failed and infra/redrive-fastlane.py."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt FastLaneFailedQueue.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  # ---------- Athena tables over compacted data ----------
+
+  LogsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: obs
+      TableInput:
+        Name: logs
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy-MM-dd
+          projection.dt.range: "2026-09-01,NOW"
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          projection.hour.type: integer
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          # Queries must name a tenant: WHERE tenant = '...'. service=...
+          # subfolders are read recursively; service is also a column.
+          projection.tenant.type: injected
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=${!tenant}/logs/dt=${!dt}/hour=${!hour}/"
+        PartitionKeys:
+          - { Name: tenant, Type: string }
+          - { Name: dt, Type: string }
+          - { Name: hour, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: ts, Type: timestamp }
+            - { Name: ts_unix_nano, Type: bigint }
+            - { Name: observed_ts, Type: timestamp }
+            - { Name: service, Type: string }
+            - { Name: severity_number, Type: int }
+            - { Name: severity_text, Type: string }
+            - { Name: body, Type: string }
+            - { Name: trace_id, Type: string }
+            - { Name: span_id, Type: string }
+            - { Name: scope_name, Type: string }
+            - { Name: attributes, Type: "map<string,string>" }
+            - { Name: resource_attributes, Type: "map<string,string>" }
+
+  TracesTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: obs
+      TableInput:
+        Name: traces
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy-MM-dd
+          projection.dt.range: "2026-09-01,NOW"
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          projection.hour.type: integer
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          # Queries must name a tenant: WHERE tenant = '...'. service=...
+          # subfolders are read recursively; service is also a column.
+          projection.tenant.type: injected
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=${!tenant}/traces/dt=${!dt}/hour=${!hour}/"
+        PartitionKeys:
+          - { Name: tenant, Type: string }
+          - { Name: dt, Type: string }
+          - { Name: hour, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: ts, Type: timestamp }
+            - { Name: ts_unix_nano, Type: bigint }
+            - { Name: end_ts, Type: timestamp }
+            - { Name: duration_ns, Type: bigint }
+            - { Name: service, Type: string }
+            - { Name: name, Type: string }
+            - { Name: kind, Type: int }
+            - { Name: status_code, Type: int }
+            - { Name: status_message, Type: string }
+            - { Name: trace_id, Type: string }
+            - { Name: span_id, Type: string }
+            - { Name: parent_span_id, Type: string }
+            - { Name: trace_state, Type: string }
+            - { Name: scope_name, Type: string }
+            - { Name: attributes, Type: "map<string,string>" }
+            - { Name: resource_attributes, Type: "map<string,string>" }
+            - { Name: events, Type: "array<struct<ts:timestamp,name:string,attributes:map<string,string>>>" }
+            - { Name: links, Type: "array<struct<trace_id:string,span_id:string,trace_state:string,attributes:map<string,string>>>" }
+
+  MetricsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: obs
+      TableInput:
+        Name: metrics
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: parquet
+          projection.enabled: "true"
+          projection.dt.type: date
+          projection.dt.format: yyyy-MM-dd
+          projection.dt.range: "2026-09-01,NOW"
+          projection.dt.interval: "1"
+          projection.dt.interval.unit: DAYS
+          projection.hour.type: integer
+          projection.hour.range: "0,23"
+          projection.hour.digits: "2"
+          # Queries must name a tenant: WHERE tenant = '...'. service=...
+          # subfolders are read recursively; service is also a column.
+          projection.tenant.type: injected
+          storage.location.template: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=${!tenant}/metrics/dt=${!dt}/hour=${!hour}/"
+        PartitionKeys:
+          - { Name: tenant, Type: string }
+          - { Name: dt, Type: string }
+          - { Name: hour, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://obs-data-${AWS::AccountId}-${AWS::Region}/data/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - { Name: ts, Type: timestamp }
+            - { Name: ts_unix_nano, Type: bigint }
+            - { Name: start_ts, Type: timestamp }
+            - { Name: service, Type: string }
+            - { Name: metric_name, Type: string }
+            - { Name: metric_type, Type: string }
+            - { Name: unit, Type: string }
+            - { Name: description, Type: string }
+            - { Name: temporality, Type: int }
+            - { Name: is_monotonic, Type: boolean }
+            - { Name: value, Type: double }
+            - { Name: count, Type: bigint }
+            - { Name: sum, Type: double }
+            - { Name: min, Type: double }
+            - { Name: max, Type: double }
+            - { Name: bucket_counts, Type: "array<bigint>" }
+            - { Name: explicit_bounds, Type: "array<double>" }
+            - { Name: exp_scale, Type: int }
+            - { Name: exp_zero_count, Type: bigint }
+            - { Name: exp_positive_offset, Type: int }
+            - { Name: exp_positive_bucket_counts, Type: "array<bigint>" }
+            - { Name: exp_negative_offset, Type: int }
+            - { Name: exp_negative_bucket_counts, Type: "array<bigint>" }
+            - { Name: quantiles, Type: "array<struct<quantile:double,value:double>>" }
+            - { Name: flags, Type: int }
+            - { Name: scope_name, Type: string }
+            - { Name: attributes, Type: "map<string,string>" }
+            - { Name: resource_attributes, Type: "map<string,string>" }
+
+Outputs:
+  WorkerFunction:
+    Value: !Ref WorkerFunction
+  DispatcherFunction:
+    Value: !Ref DispatcherFunction
+  IndexTable:
+    Value: !Ref IndexTable
+  UsageTable:
+    Value: !Ref UsageTable

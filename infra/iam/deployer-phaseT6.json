@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "ReadLimitsAndMetrics", "Effect": "Allow",
+      "Action": ["lambda:GetAccountSettings", "servicequotas:GetServiceQuota", "servicequotas:ListServiceQuotas",
+                 "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics",
+                 "cloudwatch:DescribeAlarms", "logs:StartQuery", "logs:GetQueryResults",
+                 "ce:GetCostAndUsage", "firehose:ListDeliveryStreams"],
+      "Resource": "*" },
+    { "Sid": "LoadtestResults", "Effect": "Allow",
+      "Action": ["dynamodb:Query", "dynamodb:Scan", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"],
+      "Resource": "arn:aws:dynamodb:*:*:table/obs-loadtest" }
+  ]
+}
