@@ -71,7 +71,7 @@ case "$cmd" in
     admin '{"action":"list"}'
     python3 -c 'import json,sys
 for t in json.loads(sys.argv[1])["tenants"]:
-    print(f"{t[\"tenant\"]:42} {t[\"status\"]:9} {t[\"plan\"] or \"\":10} {t[\"created_at\"] or \"\"}")' "$RESULT"
+    print("%-42s %-9s %-10s %s" % (t["tenant"], t["status"], t.get("plan") or "", t.get("created_at") or ""))' "$RESULT"
     ;;
   *) sed -n '2,12p' "$0"; exit 2 ;;
 esac

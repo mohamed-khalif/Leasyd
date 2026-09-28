@@ -54,13 +54,14 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 
 ## Loose ends
 
-- The `t6-*` tenant keys are only in the working session's `~/.obs-t6-keys.json`. If that file is
-  gone, delete the tenants with `infra/tenant.sh delete t6-000` .. `t6-099`.
-- Older test tenants (`t2a-*`, `t2b-*`, `t2tiny-*`, `probe-*`, `t3-*`, `t5-*`) can be removed with
-  `infra/tenant.sh delete <tenant>`.
-- Lock down Phase 0 (lifecycle check was due ~2026-09-28): redeploy with
-  `AllowTestAssume=false EnableLifecycleTest=false`.
-- Merge the pull request from branch `claude/code-identification-1dxuoa` into `main`.
+- Old test tenants from before tenant records (`probe-*`, `t2a/t2b/t2tiny-*`, `t3-110448`, `t3-110957`,
+  `t3dbg`, `t4-120402`, `t4-120927`) are being deleted (2026-09-28; purge passes finish on their own).
+  Kept on purpose: `t6-000`..`t6-099` and the `obs-phaseT6` stack (load tests; idle cost ~0),
+  `canary` (freshness canary), `seed-acme` / `seed-globex` (T1 isolation test data),
+  `_bench/chunk-2m/` (the 2M-record benchmark chunk).
+- Lock down Phase 0: redeploy with `AllowTestAssume=false EnableLifecycleTest=false` (admin
+  credentials). After that the Phase 0 / T1 deny tests need the flags back on temporarily.
+- Merge pull request #1 (branch `claude/code-identification-1dxuoa`) into `main`.
 
 ## Findings worth remembering
 
