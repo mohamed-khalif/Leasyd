@@ -93,14 +93,23 @@ _ANYVALUE = (
 # Attribute list -> MAP(VARCHAR, VARCHAR). OTLP forbids duplicate keys but
 # does not enforce it; keep the first occurrence so one bad record can't
 # make a whole partition fail to compact forever.
-_ATTR_MAP = (
-    # Not a CASE that skips this filter for records without duplicates: that
-    # is ~2x faster but stops DuckDB spilling, and the biggest chunks (~2M
-    # records) then fail out of memory every time, so they never compact.
-    "map_from_entries(list_filter("
-    "list_transform(coalesce({a}, []), x -> {{'key': x.key, 'value': " + _ANYVALUE.format(v="x.value") + "}}), "
-    "(e, i) -> list_position(list_transform(coalesce({a}, []), y -> y.key), e.key) = i))"
-)
+_ATTR_ENTRIES = "list_transform(coalesce({a}, []), x -> {{'key': x.key, 'value': " + _ANYVALUE.format(v="x.value") + "}})"
+_FIRST_OF_EACH_KEY = "(e, i) -> list_position(list_transform(coalesce({a}, []), y -> y.key), e.key) = i"
+
+
+def _attr_map(a, spill_safe):
+    """spill_safe (compaction): always filter to the first occurrence of each
+    key. Otherwise (the fast lane, one raw file at a time) take a ~2x faster
+    path for records without duplicate keys: same result, but the CASE stops
+    DuckDB spilling, so chunks of ~2M records run out of memory (they then
+    never compact). One raw file (<= 64 MB gzip) fits either way."""
+    entries = _ATTR_ENTRIES.format(a=a)
+    first = f"map_from_entries(list_filter({entries}, {_FIRST_OF_EACH_KEY.format(a=a)}))"
+    if spill_safe:
+        return first
+    return (f"CASE WHEN len(list_distinct(list_transform(coalesce({a}, []), y -> y.key))) = len(coalesce({a}, [])) "
+            f"THEN map_from_entries({entries}) ELSE {first} END")
+
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -131,7 +140,7 @@ def bloom_fields(signal, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES):
 
 def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB",
             max_rows_per_file=DEFAULT_MAX_ROWS_PER_FILE, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES,
-            bloom_fpp=bloom.DEFAULT_FPP, id_digests=None, one_bloom=False):
+            bloom_fpp=bloom.DEFAULT_FPP, id_digests=None, one_bloom=False, spill_safe=True):
     """Compact gzipped OTLP-JSON batches of one signal into Parquet.
 
     Rows are split by service and by the hour of their own timestamp, so no
@@ -145,6 +154,8 @@ def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, me
     min_ts / max_ts (ISO-8601, UTC, microseconds), size_bytes, and a bloom
     filter over the file's bloom_fields(signal) values.
 
+    spill_safe=False: faster parsing for small inputs (see _attr_map).
+
     one_bloom: every written file gets the same bloom, over all the input's
     rows (the fast lane: one bloom per raw file instead of one per service).
 
@@ -156,7 +167,7 @@ def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, me
     con = _connect(out_dir, memory_limit)
     try:
         written = []
-        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour, signal):
+        for service, dt, hour in load_rows(con, input_paths, arrival_dt, arrival_hour, signal, spill_safe):
             n_rows = _select_group(con, service, dt, hour, signal)
             for part in range(-(-n_rows // max_rows_per_file)):
                 rel = (f"dt={dt}/hour={hour}/service={safe_service(service)}/"
@@ -209,14 +220,15 @@ def _connect(work_dir, memory_limit):
     return con
 
 
-def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs"):
+def load_rows(con, input_paths, arrival_dt, arrival_hour, signal="logs", spill_safe=True):
     """Parse raw OTLP-JSON files of one signal into the temp table `rows`
-    (the Parquet schema) and return its (service, dt, hour) groups in order."""
+    (the Parquet schema) and return its (service, dt, hour) groups in order.
+    spill_safe: see _attr_map (False only for small inputs, e.g. one raw file)."""
     if signal not in _ROWS_SQL:
         raise ValueError(f"unknown signal {signal!r}")
     input_paths = [plain_json(p) for p in input_paths]
     fallback_ns = f"{_hour_start_us(con, arrival_dt, arrival_hour)} * 1000"
-    con.execute(f"CREATE OR REPLACE TEMP TABLE rows AS {_ROWS_SQL[signal](fallback_ns)}", [input_paths])
+    con.execute(f"CREATE OR REPLACE TEMP TABLE rows AS {_ROWS_SQL[signal](fallback_ns, spill_safe)}", [input_paths])
     return con.execute(
         """
         SELECT service, strftime(ts, '%Y-%m-%d') AS dt, strftime(ts, '%H') AS hour
@@ -281,7 +293,8 @@ def _enum(v, names):
 
 # obs.* are the platform's own routing labels; the tenant is already in the
 # path, so they aren't stored.
-_RES_ATTRS = _ATTR_MAP.format(a="list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))")
+def _res_attrs(spill_safe):
+    return _attr_map("list_filter(res_attrs, z -> NOT starts_with(z.key, 'obs.'))", spill_safe)
 _SERVICE = "coalesce(resource_attributes['service.name'], 'unknown') AS service"
 _SPAN_KINDS = ("SPAN_KIND_UNSPECIFIED", "SPAN_KIND_INTERNAL", "SPAN_KIND_SERVER", "SPAN_KIND_CLIENT",
                "SPAN_KIND_PRODUCER", "SPAN_KIND_CONSUMER")
@@ -290,7 +303,7 @@ _TEMPORALITIES = ("AGGREGATION_TEMPORALITY_UNSPECIFIED", "AGGREGATION_TEMPORALIT
                   "AGGREGATION_TEMPORALITY_CUMULATIVE")
 
 
-def _logs_sql(fallback_ns):
+def _logs_sql(fallback_ns, spill_safe=True):
     return f"""
         WITH rl AS ({_read('resourceLogs', LOGS_JSON_TYPE)}),
         sl AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeLogs) AS sl FROM rl),
@@ -299,14 +312,14 @@ def _logs_sql(fallback_ns):
             SELECT
                 coalesce({_ns('lr.timeUnixNano')}, {_ns('lr.observedTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano,
                 {_ns('lr.observedTimeUnixNano')} AS observed_unix_nano,
-                {_RES_ATTRS} AS resource_attributes,
+                {_res_attrs(spill_safe)} AS resource_attributes,
                 scope_name,
                 lr.severityNumber AS severity_number,
                 lr.severityText AS severity_text,
                 {_ANYVALUE.format(v='lr.body')} AS body,
                 nullif(lr.traceId, '') AS trace_id,
                 nullif(lr.spanId, '') AS span_id,
-                {_ATTR_MAP.format(a='lr.attributes')} AS attributes
+                {_attr_map('lr.attributes', spill_safe)} AS attributes
             FROM lr
         )
         SELECT
@@ -320,7 +333,7 @@ def _logs_sql(fallback_ns):
     """
 
 
-def _traces_sql(fallback_ns):
+def _traces_sql(fallback_ns, spill_safe=True):
     return f"""
         WITH rs AS ({_read('resourceSpans', SPANS_JSON_TYPE)}),
         ss AS (SELECT r.resource.attributes AS res_attrs, unnest(r.scopeSpans) AS ss FROM rs),
@@ -329,7 +342,7 @@ def _traces_sql(fallback_ns):
             SELECT
                 coalesce({_ns('sp.startTimeUnixNano')}, {fallback_ns}) AS ts_unix_nano,
                 {_ns('sp.endTimeUnixNano')} AS end_unix_nano,
-                {_RES_ATTRS} AS resource_attributes,
+                {_res_attrs(spill_safe)} AS resource_attributes,
                 scope_name,
                 sp.name AS name,
                 {_enum('sp.kind', _SPAN_KINDS)} AS kind,
@@ -339,13 +352,13 @@ def _traces_sql(fallback_ns):
                 nullif(sp.spanId, '') AS span_id,
                 nullif(sp.parentSpanId, '') AS parent_span_id,
                 nullif(sp.traceState, '') AS trace_state,
-                {_ATTR_MAP.format(a='sp.attributes')} AS attributes,
+                {_attr_map('sp.attributes', spill_safe)} AS attributes,
                 list_transform(coalesce(sp.events, []), ev -> {{
                     'ts': {_ts(_ns('ev.timeUnixNano'))}, 'name': ev.name,
-                    'attributes': {_ATTR_MAP.format(a='ev.attributes')}}}) AS events,
+                    'attributes': {_attr_map('ev.attributes', spill_safe)}}}) AS events,
                 list_transform(coalesce(sp.links, []), lk -> {{
                     'trace_id': lk.traceId, 'span_id': lk.spanId, 'trace_state': nullif(lk.traceState, ''),
-                    'attributes': {_ATTR_MAP.format(a='lk.attributes')}}}) AS links
+                    'attributes': {_attr_map('lk.attributes', spill_safe)}}}) AS links
             FROM sp
         )
         SELECT
@@ -360,7 +373,7 @@ def _traces_sql(fallback_ns):
     """
 
 
-def _metrics_sql(fallback_ns):
+def _metrics_sql(fallback_ns, spill_safe=True):
     base = "res_attrs, scope_name, m.name AS metric_name, m.unit AS unit, m.description AS description"
     counts = "list_transform(coalesce({b}, []), c -> TRY_CAST(c AS BIGINT))"
     stats = (f"TRY_CAST(p.count AS BIGINT) AS count, {_num('p.sum')} AS sum, "
@@ -410,8 +423,8 @@ def _metrics_sql(fallback_ns):
         flat AS (
             SELECT *,
                 coalesce({_ns('time_ns')}, {fallback_ns}) AS ts_unix_nano,
-                {_RES_ATTRS} AS resource_attributes,
-                {_ATTR_MAP.format(a='attrs')} AS attributes
+                {_res_attrs(spill_safe)} AS resource_attributes,
+                {_attr_map('attrs', spill_safe)} AS attributes
             FROM points
         )
         SELECT

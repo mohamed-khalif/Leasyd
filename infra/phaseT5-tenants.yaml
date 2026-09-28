@@ -74,7 +74,8 @@ Resources:
               - Sid: Streams
                 Effect: Allow
                 Action: [firehose:CreateDeliveryStream, firehose:DeleteDeliveryStream,
-                         firehose:DescribeDeliveryStream, firehose:TagDeliveryStream]
+                         firehose:DescribeDeliveryStream, firehose:TagDeliveryStream,
+                         firehose:UpdateDestination]   # tune: buffer interval
                 Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
               - Sid: StreamRole
                 Effect: Allow

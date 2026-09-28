@@ -218,3 +218,32 @@ def test_bloom_over_id_attributes(tmp_path):
     assert (a["service"], u["service"]) == ("api", "unknown")
     assert a["bloom"].might_contain(bloom.term("request.id", "r7"))
     assert not a["bloom"].might_contain(bloom.term("request.id", "dup"))   # first occurrence wins, as in the map
+
+
+# ---- the fast lane's parse (spill_safe=False) gives the same rows as compaction's ----
+
+def test_fast_and_spill_safe_parsing_give_identical_output(tmp_path):
+    dup = [attr("k", "first"), attr("n", 1), attr("k", "second"), attr("request.id", "R1")]
+    malformed = [{"key": "n", "value": 5}, {"key": "s", "value": "text"}, attr("ok", "v")]
+    logs = {"resourceLogs": [
+        {"resource": {"attributes": [attr("service.name", "api"), attr("host", "h"), attr("host", "h2"),
+                                     attr("obs.route", "x")]},
+         "scopeLogs": [{"logRecords": [
+             {"timeUnixNano": str(H20 + i * MS), "body": {"stringValue": f"m{i}"}, "traceId": f"{i:032x}",
+              "attributes": [dup, malformed, [], [attr("a", i)]][i % 4] if i % 5 else None} for i in range(40)]
+             + [{"timeUnixNano": str(H20), "body": "plain", "attributes": malformed}]}]},
+        {"resource": {"attributes": [attr("host", "h")]},        # no service.name
+         "scopeLogs": [{"logRecords": [{"timeUnixNano": str(H20 + 3600 * 10**9), "body": {"intValue": "7"}}]}]}]}
+    spans = [span(H20 + i * MS, trace=f"{i:032x}", attributes=[dup, [attr("request.id", f"q{i}")]][i % 2],
+                  events=[{"timeUnixNano": str(H20 + i * MS), "name": "e", "attributes": dup}],
+                  links=[{"traceId": "cd" * 16, "spanId": "ef" * 8, "attributes": dup}]) for i in range(20)]
+    cases = [("logs", logs), ("traces", spans_doc("api", spans)), ("metrics", metrics_doc("api", ALL_TYPES))]
+    for signal, doc in cases:
+        f = write(tmp_path / f"{signal}.json.gz", doc)
+        out = {}
+        for safe in (True, False):
+            written = compact.compact(signal, [f], str(tmp_path / f"{signal}-{safe}"), "b1", "2026-09-26", "20",
+                                      bloom_attributes=("request.id",), spill_safe=safe)
+            out[safe] = [(w["relpath"], w["rows"], w["bloom"].to_bytes(), rows(w["path"])) for w in written]
+        assert out[True] == out[False], signal
+        assert out[True] and all(r for *_, r in out[True])

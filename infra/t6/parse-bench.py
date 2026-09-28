@@ -2,7 +2,7 @@
 """Compact real raw files locally under a Lambda's limits: time, peak memory, pass/fail.
 
     python3 infra/t6/parse-bench.py --files 12                 # a compaction chunk (2M records)
-    python3 infra/t6/parse-bench.py --files 1                  # one raw file, as the fast lane sees it
+    python3 infra/t6/parse-bench.py --files 1 --fast           # one raw file, as the fast lane parses it
     python3 infra/t6/parse-bench.py --files 12 --memory-mb 3008 --threads 2
 
 Input: the 12 raw files of a real 50 GB/h chunk (t6-000 logs, 2026-09-28 hour 11,
@@ -38,6 +38,7 @@ def main():
     p.add_argument("--memory-mb", type=int, default=3008, help="the Lambda's memory size")
     p.add_argument("--threads", type=int, default=2)
     p.add_argument("--signal", default="logs")
+    p.add_argument("--fast", action="store_true", help="the fast lane's parse (spill_safe=False)")
     p.add_argument("--dir", default=os.path.expanduser("~/.obs-bench/chunk-2m"))
     p.add_argument("--bucket", default=None, help="default obs-data-<account>-us-east-1")
     a = p.parse_args()
@@ -64,7 +65,7 @@ def main():
     t0 = time.time()
     try:
         written = compact.compact(a.signal, files, out, "bench", "2026-09-28", "11", memory_limit=limit,
-                                  id_digests={})
+                                  id_digests={}, spill_safe=not a.fast)
         result = f"OK: {len(written)} files, {sum(w['rows'] for w in written)} rows"
     except Exception as e:  # noqa: BLE001  (report, don't crash)
         result = "FAIL: " + str(e).splitlines()[0]
@@ -74,7 +75,7 @@ def main():
             os.remove(f)
     gz = sum(os.path.getsize(f) for f in files) >> 20
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss >> 10
-    print(f"{len(files)} files ({gz} MB gzip), DuckDB limit {limit}, {a.threads} threads: {result}; "
+    print(f"{'fast' if a.fast else 'spill-safe'}: {len(files)} files ({gz} MB gzip), DuckDB limit {limit}, {a.threads} threads: {result}; "
           f"{time.time() - t0:.1f} s, peak RSS {rss} MB (Lambda {a.memory_mb} MB)")
 
 

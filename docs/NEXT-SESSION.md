@@ -1,5 +1,8 @@
 # Prompt for the next session: fast-lane freshness at 50 GB/h
 
+**Status: implemented in the original session (fast parse in the fast lane, stage timing,
+per-tenant Firehose buffer); kept for reference.**
+
 Copy everything below the line into a new session.
 
 ---

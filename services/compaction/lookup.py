@@ -119,6 +119,8 @@ def lookup(tenant, start, end, signal="logs", services=None, match=None):
             "row_count": int(item["row_count"]["N"]),
             "size_bytes": int(item["size_bytes"]["N"]),
             "storage_class": item.get("storage_class", {}).get("S", "STANDARD"),
+            # fast-lane entries: when the file was delivered, picked up and parsed
+            **{k: item[k]["S"] for k in ("delivered_at", "received_at", "indexed_at") if k in item},
         })
     files.sort(key=lambda f: (f["min_ts"], f["file_path"]))
     stats["ms"] = round((time.perf_counter() - t0) * 1000, 1)

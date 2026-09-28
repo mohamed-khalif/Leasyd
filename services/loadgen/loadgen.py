@@ -30,6 +30,7 @@ import secrets
 import threading
 import time
 import urllib.parse
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 import boto3
@@ -267,6 +268,12 @@ def _lookup(payload):
     return out, time.time() - t0
 
 
+def _epoch(iso):
+    if not iso:
+        return None
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+
+
 def _iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
@@ -286,10 +293,22 @@ def _probe_once(event, t, poster):
     if status == 200:
         q = {"tenant": t["tenant"], "signal": "logs", "services": ["t6-probe"], "start": _iso(sent - 600),
              "end": _iso(sent + 600), "match": {"trace_id": trace}}
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now_ns // 10**9))
         while time.time() - sent < 300:
             out, _ = _lookup(q)
-            if out.get("files"):
+            # A file whose time range covers the probe record (a bloom false
+            # positive on another file must not count as found).
+            hit = [f for f in out.get("files", []) if f["min_ts"][:19] <= ts <= f["max_ts"][:19]]
+            if hit:
                 found = time.time() - sent
+                f = hit[0]
+                # Where the time went: Firehose buffer + delivery, S3 event ->
+                # fast lane start, parse, then upload + index + lookup polling.
+                marks = [sent] + [_epoch(f.get(k)) for k in ("delivered_at", "received_at", "indexed_at")]
+                if None not in marks:
+                    for name, a, b in (("firehose_s", 0, 1), ("trigger_s", 1, 2), ("parse_s", 2, 3)):
+                        item[name] = {"N": f"{marks[b] - marks[a]:.1f}"}
+                    item["visible_s"] = {"N": f"{sent + found - marks[3]:.1f}"}
                 break
             time.sleep(2)
     item["freshness_s"] = {"N": f"{found:.1f}" if found is not None else "-1"}

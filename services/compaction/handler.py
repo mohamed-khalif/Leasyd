@@ -336,6 +336,7 @@ def recent_indexer(event, context):
     uploading or indexing anything, so compaction can always find and retire
     them. Idempotent: the
     same file always produces the same keys."""
+    received_at = datetime.now(timezone.utc).isoformat()
     detail = event.get("detail") or {}
     key = urllib.parse.unquote_plus((detail.get("object") or {}).get("key", ""))
     parsed = layout.parse_incoming_key(key)
@@ -360,12 +361,15 @@ def recent_indexer(event, context):
         mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048"))
         written = compact.compact(signal, [local], os.path.join(work, "out"), fid, dt, hour,
                                   memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
-                                  bloom_attributes=BLOOM_ATTRIBUTES, one_bloom=True)
+                                  bloom_attributes=BLOOM_ATTRIBUTES, one_bloom=True, spill_safe=False)
         # One bloom for the whole raw file, shared by its entries (one per service).
         _name(written, layout.fast_prefix(tenant, signal), bloom_name=fid)
         now = datetime.now(timezone.utc).isoformat()
         plan_pk = layout.plan_pk(tenant, signal, dt, hour)
-        items = [_index_item(tenant, signal, fid, w, now, plan_pk, raw_key=key) for w in written]
+        # Freshness stages: S3 event time (Firehose delivered the file), this
+        # invocation's start, and parsed (now); lookups return them.
+        timing = {"delivered_at": event.get("time"), "received_at": received_at}
+        items = [_index_item(tenant, signal, fid, w, now, plan_pk, raw_key=key, timing=timing) for w in written]
         ddb.put_item(TableName=TABLE, Item={
             "pk": {"S": layout.raw_files_pk(tenant, signal, dt, hour)}, "sk": {"S": key},
             "entries": {"L": [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items]},
@@ -595,7 +599,7 @@ def _upload(written):
         s3.put_object(Bucket=BUCKET, Key=k, Body=b.to_bytes())
 
 
-def _index_item(tenant, signal, batch_id, w, now, plan_pk, raw_key=None):
+def _index_item(tenant, signal, batch_id, w, now, plan_pk, raw_key=None, timing=None):
     """Index entry of a written Parquet file: compacted (kind=parquet), or the
     fast-lane copy of one raw file (kind=raw, visible until it is compacted)."""
     b = w["bloom"]
@@ -619,6 +623,7 @@ def _index_item(tenant, signal, batch_id, w, now, plan_pk, raw_key=None):
     }
     if raw_key:
         item.update(raw_key={"S": raw_key}, indexed_at={"S": now})
+        item.update({k: {"S": v} for k, v in (timing or {}).items() if v})
     else:
         item.update(batch_id={"S": batch_id}, compacted_at={"S": now})
     if "bloom_key" in w:

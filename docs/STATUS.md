@@ -44,9 +44,13 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 
 ## Next
 
-1. Freshness at 50 GB/h is p99 74 s (target 60 s) since compaction switched to the spill-safe
-   parser (7b2f5d7), which the fast lane shares. Fix specified in `docs/NEXT-SESSION.md`;
-   full state and benchmarks in `docs/REPORT-2026-09-28.md`.
+1. Freshness at 50 GB/h was p99 74 s (target 60 s). Built, to deploy and measure: the fast lane
+   parses with the fast attribute-map form (compaction keeps the spill-safe one); per-probe stage
+   timing (Firehose / trigger / parse / visible) in the load-test report, probes every 15 s; and
+   `infra/tenant.sh tune <tenant> <seconds>` sets a tenant's Firehose buffer (shorter for
+   high-volume tenants). Next after that: SQS + dead-letter queue for the fast lane, a permanent
+   freshness canary, ask AWS to raise Lambda memory above 3008 MB, cap compaction chunks by
+   record count before testing 100 GB/h.
 2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 

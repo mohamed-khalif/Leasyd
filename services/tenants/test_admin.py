@@ -90,6 +90,23 @@ def test_create_makes_streams_record_and_hashed_key(adm):
     assert [k["id"] for k in usage_keys] == [out["key_id"]]
 
 
+def buffer_seconds(stream):
+    d = boto3.client("firehose").describe_delivery_stream(DeliveryStreamName=stream)["DeliveryStreamDescription"]
+    return d["Destinations"][0]["ExtendedS3DestinationDescription"]["BufferingHints"]["IntervalInSeconds"]
+
+
+def test_tune_sets_the_buffer_of_every_stream(adm):
+    call(adm, "create", tenant="acme")
+    call(adm, "create", tenant="big", buffer_seconds=15)
+    assert buffer_seconds("obs-t-acme-logs") == adm.BUFFER_SECONDS
+    assert {buffer_seconds(f"obs-t-big-{s}") for s in ("logs", "traces", "metrics")} == {15}
+    assert call(adm, "tune", tenant="acme", buffer_seconds=10) == {"tenant": "acme", "buffer_seconds": 10}
+    assert {buffer_seconds(f"obs-t-acme-{s}") for s in ("logs", "traces", "metrics")} == {10}
+    assert call(adm, "status", tenant="acme")["buffer_seconds"] == 10
+    assert "0-900" in call(adm, "tune", tenant="acme", buffer_seconds=901)["error"]
+    assert "not an active tenant" in call(adm, "tune", tenant="nobody", buffer_seconds=10)["error"]
+
+
 def test_create_twice_refused_and_bad_input(adm):
     call(adm, "create", tenant="acme")
     assert "already exists" in call(adm, "create", tenant="acme")["error"]

@@ -2,12 +2,16 @@
 
 Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
 
-  create  {tenant, plan}         ingest streams, tenant record, first API key (returned once)
+  create  {tenant, plan, buffer_seconds?}  ingest streams, tenant record, first API key (returned once)
   rotate  {tenant, grace_hours}  a new key; the tenant's other keys keep working for
                                  grace_hours (default 24), then are refused
   revoke  {tenant, key_id?}      refuse one key, or all of the tenant's keys
   delete  {tenant}               refuse all keys, remove the streams, then purge every
                                  object and index entry of the tenant (see below)
+  tune    {tenant, buffer_seconds}  how long the tenant's Firehose streams buffer before writing
+                                 a file (default BUFFER_SECONDS). Shorter for high-volume
+                                 tenants: smaller files are parsed sooner and faster
+                                 (fresher data), at the cost of more files
   status  {tenant}               tenant record and keys (never the keys themselves)
   usage   {tenant, start, end}   records and bytes compacted per day and signal
   list    {}                     every tenant
@@ -132,17 +136,18 @@ def _keys(tenant):
 
 # ------------------------------------------------------------------ actions
 
-def create(tenant, plan="standard", context=None):
+def create(tenant, plan="standard", buffer_seconds=None, context=None):
     if plan not in PLANS:
         raise Refused(f"unknown plan {plan!r}; one of {sorted(PLANS)}")
+    secs = _buffer_seconds(BUFFER_SECONDS if buffer_seconds is None else buffer_seconds)
     rec = _record(tenant)
     if rec and rec["status"] == "deleting":
         raise Refused(f"{tenant} is being deleted; wait until it is deleted")
     if rec and rec["status"] == "active":
         raise Refused(f"{tenant} already exists; use rotate for a new key")
-    _provision_streams(tenant)
+    _provision_streams(tenant, secs)
     tenants.put_item(Item={"pk": f"tenant#{tenant}", "tenant": tenant, "status": "active", "plan": plan,
-                           "created_at": _iso(_now())})
+                           "buffer_seconds": secs, "created_at": _iso(_now())})
     key, key_id = _issue_key(tenant, plan)
     return {"tenant": tenant, "plan": plan, "key_id": key_id, "api_key": key}
 
@@ -193,6 +198,32 @@ def delete(tenant, context=None):
     return {"tenant": tenant, "status": "deleting", "revoked": revoked,
             "note": f"data purge started; passes repeat every {int(SETTLE.total_seconds() // 60)} min "
                     "until one finds nothing"}
+
+
+def tune(tenant, buffer_seconds, context=None):
+    secs = _buffer_seconds(buffer_seconds)
+    rec = _active(tenant)
+    for sig in SIGNALS:
+        name = f"obs-t-{tenant}-{sig}"
+        d = firehose.describe_delivery_stream(DeliveryStreamName=name)["DeliveryStreamDescription"]
+        dest = d["Destinations"][0]
+        hints = dest["ExtendedS3DestinationDescription"]["BufferingHints"]
+        firehose.update_destination(
+            DeliveryStreamName=name, CurrentDeliveryStreamVersionId=d["VersionId"],
+            DestinationId=dest["DestinationId"],
+            ExtendedS3DestinationUpdate={"BufferingHints": {"SizeInMBs": hints["SizeInMBs"],
+                                                            "IntervalInSeconds": secs}})
+    if "pk" in rec:   # tenants created before T5 have no record
+        tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET buffer_seconds = :s",
+                            ExpressionAttributeValues={":s": secs})
+    return {"tenant": tenant, "buffer_seconds": secs}
+
+
+def _buffer_seconds(v):
+    secs = int(v)
+    if not 0 <= secs <= 900:   # Firehose's range
+        raise Refused(f"buffer_seconds must be 0-900, not {v!r}")
+    return secs
 
 
 def status(tenant, context=None):
@@ -296,7 +327,7 @@ def purge(tenant, deleted=0, context=None):
     return {"tenant": tenant, "deleted": deleted, "pass_complete": True}
 
 
-ACTIONS = {"create": create, "rotate": rotate, "revoke": revoke, "delete": delete, "status": status,
+ACTIONS = {"create": create, "rotate": rotate, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
            "usage": usage, "list": list_tenants, "sweep": sweep, "purge": purge}
 
 
@@ -340,7 +371,7 @@ def _revoke_key(k, delete_from_gateway=False):
         pass
 
 
-def _provision_streams(tenant):
+def _provision_streams(tenant, buffer_seconds=BUFFER_SECONDS):
     """One Firehose stream per signal, obs-t-<tenant>-<signal>, delivering
     gzipped OTLP JSON to _incoming/tenant=<T>/<signal>/. Returns once all are
     ACTIVE (about a minute for new streams)."""
@@ -354,7 +385,7 @@ def _provision_streams(tenant):
                     "Prefix": f"_incoming/tenant={tenant}/{sig}/dt=!{{timestamp:yyyy-MM-dd}}/hour=!{{timestamp:HH}}/",
                     "ErrorOutputPrefix": f"_incoming/_errors/tenant={tenant}/{sig}/!{{firehose:error-output-type}}"
                                          "/dt=!{timestamp:yyyy-MM-dd}/",
-                    "BufferingHints": {"SizeInMBs": 64, "IntervalInSeconds": BUFFER_SECONDS},
+                    "BufferingHints": {"SizeInMBs": 64, "IntervalInSeconds": buffer_seconds},
                     # Ingest gzips each record before sending (Firehose bills received
                     # bytes), so the stream passes them through: its objects are gzip
                     # members back to back, a valid .gz file.

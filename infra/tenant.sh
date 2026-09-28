@@ -5,6 +5,8 @@
 #   infra/tenant.sh rotate <tenant> [grace-hours]         new key (stdout); old keys work for grace-hours (default 24)
 #   infra/tenant.sh revoke <tenant> [key-id]              refuse one key, or all of the tenant's keys
 #   infra/tenant.sh delete <tenant>                       refuse all keys, delete streams, purge all data and index
+#   infra/tenant.sh tune <tenant> <buffer-seconds>        Firehose buffer before a file is written (default 30;
+#                                                         shorter for high-volume tenants: fresher, more files)
 #   infra/tenant.sh status <tenant>                       status, plan, keys (ids and states only)
 #   infra/tenant.sh usage <tenant> [start] [end]          records and bytes per day and signal (YYYY-MM-DD)
 #   infra/tenant.sh list                                  all tenants
@@ -52,6 +54,9 @@ case "$cmd" in
     ;;
   delete)
     admin "{\"action\":\"delete\",\"tenant\":\"${tenant}\"}"; pretty
+    ;;
+  tune)
+    admin "{\"action\":\"tune\",\"tenant\":\"${tenant}\",\"buffer_seconds\":${3:?buffer seconds}}"; pretty
     ;;
   status)
     admin "{\"action\":\"status\",\"tenant\":\"${tenant}\"}"; pretty

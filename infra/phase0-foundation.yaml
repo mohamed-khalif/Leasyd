@@ -213,6 +213,7 @@ Resources:
               - firehose:DeleteDeliveryStream
               - firehose:DescribeDeliveryStream
               - firehose:TagDeliveryStream
+              - firehose:UpdateDestination      # tenant tune: buffer interval
             Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
           - Sid: TenantAdminPassFirehoseRole
             Effect: Allow

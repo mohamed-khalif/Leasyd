@@ -201,7 +201,7 @@ def run(args):
                                    "endpoint": ep, "duration_s": dur, "tenants": ts}, asynchronous=True)
         if dur > 360:
             invoke("obs-loadgen", {"mode": "probe", "run": RUN, "step": args.step, "endpoint": ep,
-                                   "duration_s": dur, "interval_s": 60, "tenants": probes}, asynchronous=True)
+                                   "duration_s": dur, "interval_s": 15, "tenants": probes}, asynchronous=True)
         print(f"{datetime.now(timezone.utc):%H:%M:%S} window {window}: {len(workers)} senders for {dur:.0f}s",
               flush=True)
         window += 1
@@ -318,6 +318,16 @@ def report(args):
     print(f"freshness (send -> findable by trace id): {len(fresh)} probes, p50 {pct(fresh, .5):.0f}s, "
           f"p90 {pct(fresh, .9):.0f}s, p99 {pct(fresh, .99):.0f}s, max {max(fresh or [0]):.0f}s; "
           f"not found within 300s: {len(lost)}  (target 60s)")
+    # Where the time went (fast-lane entries carry delivery, pickup and parse times).
+    staged = [p for p in probes if "parse_s" in p]
+    if staged:
+        stages = ("firehose_s", "trigger_s", "parse_s", "visible_s")
+        print(f"  stages over {len(staged)} probes (p50 / p99): " + ", ".join(
+            f"{k[:-2]} {pct([_n(p, k) for p in staged], .5):.0f}/{pct([_n(p, k) for p in staged], .99):.0f}s"
+            for k in stages))
+        for p in sorted(staged, key=lambda p: -_n(p, "freshness_s"))[:5]:
+            print(f"    slowest: {p['tenant']['S']} {_n(p, 'freshness_s'):.0f}s = "
+                  + " + ".join(f"{k[:-2]} {_n(p, k):.0f}" for k in stages))
     for label in ("1h", "24h", "24h_id"):
         s = [_n(p, f"lookup_{label}_s") for p in probes if f"lookup_{label}_s" in p]
         c = [_n(p, f"lookup_{label}_candidates") for p in probes if f"lookup_{label}_s" in p]
