@@ -174,3 +174,11 @@ def test_range_reads_fetch_only_the_needed_columns(aws, tmp_path):  # noqa: F811
                       "GROUP BY 1 ORDER BY 1").fetchall()
     assert got[0] == (0, 71429)
     assert fs.bytes_read < len(data) / 10 and fs.requests < 20
+
+
+def test_search_reading_in_place_has_only_the_files_columns(data):
+    """S3 paths contain dt=/hour=/service= folders; they must not become columns."""
+    ranged, downloaded = run(read="ranges", search={"limit": 5}), run(read="download", search={"limit": 5})
+    assert ranged["columns"] == downloaded["columns"] and "dt" not in ranged["columns"]
+    assert ranged["rows"] == downloaded["rows"]
+    json.dumps(ranged)   # everything serialisable

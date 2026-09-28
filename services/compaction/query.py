@@ -40,7 +40,9 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from datetime import time as dt_time
+from decimal import Decimal
 
 import boto3
 import botocore.config
@@ -55,6 +57,7 @@ MAX_WORKERS = int(os.environ.get("QUERY_MAX_WORKERS", "64"))
 TARGET_BYTES_PER_WORKER = int(os.environ.get("QUERY_BYTES_PER_WORKER", str(256 * 1024 * 1024)))
 DOWNLOAD_THREADS = 32
 READ_MODE = os.environ.get("QUERY_READ_MODE", "ranges")   # or "download"
+RANGE_THREADS = int(os.environ.get("QUERY_RANGE_THREADS", "8"))
 RANGE_BLOCK_BYTES = 256 * 1024   # read-ahead per S3 range request (small: column chunks can be tiny)
 MAX_ROWS = 10_000          # search results and aggregate groups returned
 HIST_BASE = 1.05           # percentile buckets: relative error <= 2.5%
@@ -224,11 +227,17 @@ def run_worker(event):
             pq = [p for f, p in local if f["kind"] == "parquet"]
             if in_place:
                 con.register_filesystem(ranges)
+                # Reading in place mostly waits on S3: more threads keep more
+                # range requests in flight than one per vCPU would.
+                con.execute(f"SET threads = {RANGE_THREADS}")
                 pq += [f"{TenantS3.protocol}://{f['file_path'][len(prefix):]}" for f in in_place]
             if pq:
                 # Our own local paths (views can't take parameters).
                 paths = ", ".join("'" + p.replace("'", "''") + "'" for p in pq)
-                con.execute(f"CREATE TEMP VIEW pq AS SELECT * FROM read_parquet([{paths}], union_by_name = true)")
+                # hive_partitioning off: the dt=/hour=/service= folders in S3 paths must
+                # not become extra columns (the files hold the real ones).
+                con.execute(f"CREATE TEMP VIEW pq AS SELECT * FROM read_parquet([{paths}], union_by_name = true, "
+                            "hive_partitioning = false)")
                 parts.append("SELECT * FROM pq")
             raw = [(f, p) for f, p in local if f["kind"] == "raw"]
             for i, (f, p) in enumerate(raw):
@@ -294,6 +303,8 @@ class TenantS3(AbstractFileSystem):
 def _jsonable(v):
     if isinstance(v, datetime):
         return v.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    if isinstance(v, (date, dt_time, Decimal)):
+        return str(v)
     if isinstance(v, dict):
         return {str(k): _jsonable(x) for k, x in v.items()}
     if isinstance(v, (list, tuple)):

@@ -198,6 +198,7 @@ Built together (T6 showed the write path holds at 50 GB/h, so the read path was 
 - **Trace ID across 30 days: 1.5 s** (target < 3 s): 255 files in range, 1 day filter and 1 hour filter consulted, 2 files read.
 - Error counts identical to Athena for a compacted hour (592,728 errors).
 - Next (built, to measure): 64 MB per worker instead of 256 MB (about 4x the workers), and workers read Parquet in place, fetching only the footer and the column chunks a query needs as S3 range requests through a tenant-scoped client (fsspec filesystem registered in DuckDB). Locally a one-column query read 4% of a 24 MB file. Whole-file download stays available (`"read": "download"`).
+- First AWS run of those (BytesPerWorker was still 256 MB: `cloudformation deploy` keeps a stack's previous parameter values unless overridden): same answer; column-only reads fetched 479 MB instead of 1,262 MB but saved only 6.2 -> 5.3 s with 5 workers. Search with column-only reads failed: DuckDB turned the S3 path's dt=/hour=/service= folders into extra columns (a DATE the response couldn't serialise). Fixed (hive_partitioning off), and range-reading workers now use 8 DuckDB threads to keep more S3 requests in flight.
 
 ## Phase 4: Single-worker query path
 
