@@ -324,11 +324,12 @@ Resources:
                   - dynamodb:UpdateItem  # mark a plan committed
                   - dynamodb:DeleteItem  # plans and leases
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
-              - Sid: RetireBloomFiles   # fast-lane blooms once compacted; day-filter housekeeping
+              - Sid: RetireBloomFiles   # fast-lane files once compacted; day-filter housekeeping
                 Effect: Allow
                 Action: s3:DeleteObject
                 Resource:
-                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/raw-*"
+                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_fast/*"      # fast-lane Parquet and blooms
+                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/raw-*"  # blooms of the earlier fast lane
                   # day filters (T6): old versions, and ID digests once no longer needed
                   - !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/day/*"
                   - !Sub "${DataBucket.Arn}/data/tenant=*/*/_ids/*"
