@@ -382,7 +382,11 @@ skipped, message deleted). All alarms back to OK after the fixes.
 `services/compaction/query.py`: `signal`, `start`, `end`, `services`, `where`, `match`, `group_by`,
 `aggs`, `search`, `order`, `limit`). The tenant comes only from the key; anything else in the body is
 ignored. Errors: 400 bad query, 401 no/unknown key, 403 wrong key scope, 413 result too large,
-504 over API Gateway's 29 s.
+504 over API Gateway's 29 s. A new key can be refused by some requests for up to ~10 minutes.
+
+Tested on AWS (2026-09-28, `infra/query-api-test.py`): same counts as the engine for a day of the
+largest tenant in ~4 s; a tenant named in the body is ignored; read keys can't send, ingest keys
+can't query; 401 without a key; 400 for bad or incomplete queries; trace id across 30 days ~2 s.
 
 Keys have a scope. `ingest` keys (every key from `create` / `rotate`) may only send data; `read` keys
 may only query, so a key embedded in an application can't read data back:
