@@ -75,9 +75,10 @@ def test_raw_file_searchable_on_arrival(aws):
     assert {f["service"] for f in out["files"]} == {"api", "web"}
     assert all(f["file_path"].startswith("s3://obs-data-test/data/tenant=acme/logs/_fast/")
                and f["file_path"].endswith(".parquet") for f in out["files"])
-    # bloom filters work on raw entries too
+    # one bloom per raw file, shared by its entries: it rules the whole file in or out
     out, _, _ = visible(lookup, match={"trace_id": "web-7".encode().hex().ljust(32, "0")[:32]})
-    assert [f["service"] for f in out["files"]] == ["web"]
+    assert sorted(f["service"] for f in out["files"]) == ["api", "web"]
+    assert visible(lookup, match={"trace_id": "f" * 32})[0]["files"] == []
 
 
 def test_indexer_is_idempotent(aws):
@@ -207,12 +208,13 @@ def test_blooms_in_s3_still_prune_and_raw_ones_are_cleaned_up(aws, monkeypatch):
     put_raw()
     handler.recent_indexer(event(), None)
     raw_blooms = bloom_objects()
-    assert len(raw_blooms) == 2 and all("/_fast/_bloom/" in k for k in raw_blooms)
+    assert len(raw_blooms) == 1 and "/_fast/_bloom/" in raw_blooms[0]   # one per raw file
     items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
     assert not any("bloom" in i for i in items)  # nothing inline
     web7 = {"trace_id": "web-7".encode().hex().ljust(32, "0")[:32]}
     out = lookup.lookup(**RANGE, match=web7)
-    assert [f["service"] for f in out["files"]] == ["web"] and out["stats"]["bloom_fetches"] == 2
+    assert len(out["files"]) == 2 and out["stats"]["bloom_fetches"] == 1   # fetched once for both entries
+    assert lookup.lookup(**RANGE, match={"trace_id": "f" * 32})["files"] == []
 
     [b] = handler.dispatcher({"plan_only": HOUR}, ctx(0))["planned"]
     handler.worker({**HOUR, "batch_id": b}, ctx(1))

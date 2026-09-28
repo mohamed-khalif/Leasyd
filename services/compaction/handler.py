@@ -360,8 +360,9 @@ def recent_indexer(event, context):
         mem_mb = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048"))
         written = compact.compact(signal, [local], os.path.join(work, "out"), fid, dt, hour,
                                   memory_limit=f"{int(mem_mb * 0.6)}MB", max_rows_per_file=MAX_ROWS_PER_FILE,
-                                  bloom_attributes=BLOOM_ATTRIBUTES)
-        _name(written, layout.fast_prefix(tenant, signal))
+                                  bloom_attributes=BLOOM_ATTRIBUTES, one_bloom=True)
+        # One bloom for the whole raw file, shared by its entries (one per service).
+        _name(written, layout.fast_prefix(tenant, signal), bloom_name=fid)
         now = datetime.now(timezone.utc).isoformat()
         plan_pk = layout.plan_pk(tenant, signal, dt, hour)
         items = [_index_item(tenant, signal, fid, w, now, plan_pk, raw_key=key) for w in written]
@@ -369,7 +370,8 @@ def recent_indexer(event, context):
             "pk": {"S": layout.raw_files_pk(tenant, signal, dt, hour)}, "sk": {"S": key},
             "entries": {"L": [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items]},
             # S3 objects of those entries (Parquet and blooms), deleted with them
-            "objects": {"L": [{"S": k} for w in written for k in (w["key"], w.get("bloom_key")) if k]},
+            "objects": {"L": [{"S": k} for k in dict.fromkeys(
+                k for w in written for k in (w["key"], w.get("bloom_key")) if k)]},
         })
         _upload(written)
     finally:
@@ -570,23 +572,27 @@ def _batch_delete(keys):
 
 # ------------------------------------------------------------------- helpers
 
-def _name(written, prefix):
+def _name(written, prefix, bloom_name=None):
     """S3 keys for written Parquet files under prefix: w["key"], and
-    w["bloom_key"] for blooms too big to keep in the index entry."""
+    w["bloom_key"] for blooms too big to keep in the index entry (bloom_name:
+    one bloom file shared by all of them)."""
     for w in written:
         w["key"] = prefix + w["relpath"]
         if len(w["bloom"].to_bytes()) > BLOOM_INLINE_MAX_BYTES:
             # Unique per output file: a chunk can write the same service
             # and part number for several event hours.
-            w["bloom_key"] = f"{prefix}_bloom/{w['relpath'][:-len('.parquet')]}.bloom"
+            w["bloom_key"] = f"{prefix}_bloom/{bloom_name or w['relpath'][:-len('.parquet')]}.bloom"
     return written
 
 
 def _upload(written):
+    blooms = {}
     for w in written:
         s3.upload_file(w["path"], BUCKET, w["key"])
         if "bloom_key" in w:
-            s3.put_object(Bucket=BUCKET, Key=w["bloom_key"], Body=w["bloom"].to_bytes())
+            blooms[w["bloom_key"]] = w["bloom"]
+    for k, b in blooms.items():
+        s3.put_object(Bucket=BUCKET, Key=k, Body=b.to_bytes())
 
 
 def _index_item(tenant, signal, batch_id, w, now, plan_pk, raw_key=None):

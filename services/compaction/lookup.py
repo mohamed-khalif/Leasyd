@@ -96,10 +96,14 @@ def lookup(tenant, start, end, signal="logs", services=None, match=None):
         # every Parquet file of that day without reading their blooms.
         candidates = _day_filter(ddb, s3, tenant, signal, candidates, terms, stats)
         in_range = candidates
-        # Blooms too big for the index item are in S3: fetch those in parallel.
-        stats["bloom_fetches"] = sum(1 for _, it in in_range if "bloom_s3_key" in it and _checkable(it, terms))
+        # Blooms too big for the index item are in S3: fetch each one once, in
+        # parallel (a fast-lane raw file's entries, one per service, share one).
+        shared = {it["bloom_s3_key"]["S"]: it for _, it in in_range if "bloom_s3_key" in it}
         with ThreadPoolExecutor(BLOOM_THREADS) as pool:
-            keep = list(pool.map(lambda c: _bloom_says_maybe(s3, c[1], terms), in_range))
+            fetched = dict(zip(shared, pool.map(lambda it: _bloom_says_maybe(s3, it, terms), shared.values())))
+        stats["bloom_fetches"] = sum(1 for it in shared.values() if _checkable(it, terms))
+        keep = [fetched[it["bloom_s3_key"]["S"]] if "bloom_s3_key" in it else _bloom_says_maybe(s3, it, terms)
+                for _, it in in_range]
         candidates = [c for c, k in zip(in_range, keep) if k]
     stats["after_bloom"] = len(candidates)
 
