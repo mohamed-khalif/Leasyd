@@ -189,7 +189,15 @@ The platform will serve many separate customers (tenants). This phase comes befo
 
 ## Phases 4-5 status
 
-Built together (T6 showed the write path holds at 50 GB/h, so the read path was the biggest unknown): `obs-query` coordinator + `obs-query-worker` (`services/compaction/query.py`, `infra/phase4-query.yaml`). JSON queries (filters, ID match, group-by with count/sum/min/max/avg/percentiles, search), compiled with a field whitelist and bound values; fan-out to up to 64 workers by file size; mergeable partials (percentiles from log-bucket histograms, <= 2.5% error). Workers download whole files with tenant-scoped credentials; reading only the needed columns straight from S3 (DuckDB httpfs) is the next optimisation if scans are slow. Tested locally (12 tests incl. fan-out = single worker, raw + Parquet, tenant isolation, injection attempts); AWS test `infra/phase4-test.py` pending.
+Built together (T6 showed the write path holds at 50 GB/h, so the read path was the biggest unknown): `obs-query` coordinator + `obs-query-worker` (`services/compaction/query.py`, `infra/phase4-query.yaml`). JSON queries (filters, ID match, group-by with count/sum/min/max/avg/percentiles, search), compiled with a field whitelist and bound values; fan-out to up to 64 workers by file size; mergeable partials (percentiles from log-bucket histograms, <= 2.5% error). Workers download whole files with tenant-scoped credentials; reading only the needed columns straight from S3 (DuckDB httpfs) is the next optimisation if scans are slow. Tested locally (12 tests incl. fan-out = single worker, raw + Parquet, tenant isolation, injection attempts).
+
+**On AWS** (`infra/phase4-test.py`, largest T6 tenant: 20 services, 255 files, 1.26 GB of Parquet and raw files in the last 24 h):
+- Errors by endpoint over 24 h: one worker 24.8 s (Phase 4 baseline); fan-out to 5 workers **4.9 s** (target < 5 s), identical results (7 routes, 1,527,602 errors). Scan time dominates (downloading whole files); lookup ~0.2-0.4 s.
+- p95 latency by service over 24 h: 3.6 s (p95 860 ms against a true ~855 ms).
+- Search, 50 newest "timeout" lines: 3.4 s.
+- **Trace ID across 30 days: 1.5 s** (target < 3 s): 255 files in range, 1 day filter and 1 hour filter consulted, 2 files read.
+- Error counts identical to Athena for a compacted hour (592,728 errors).
+- Next: smaller chunks per worker (more parallelism; 1 day was only just under 5 s with 5 workers), then read only the needed columns from S3 instead of whole files.
 
 ## Phase 4: Single-worker query path
 

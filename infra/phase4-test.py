@@ -90,8 +90,9 @@ def main():
 
     # 2. p95 latency by service
     lat = query(dict(day, group_by=["service"], aggs=[{"fn": "count"}, {"fn": "p95", "field": "attributes.duration_ms"}]))
-    check(len(lat["rows"]) > 1 and all(r[2] is not None for r in lat["rows"]),
-          f"p95 latency by service: {len(lat['rows'])} services in {lat['wall_s']:.2f}s")
+    timed = [r for r in lat["rows"] if r[0] != "t6-probe"]   # the prober's records carry no duration
+    check(len(timed) > 1 and all(r[2] is not None for r in timed),
+          f"p95 latency by service: {len(timed)} services in {lat['wall_s']:.2f}s")
 
     # 3. search
     hour = dict(base, start=iso(now - timedelta(hours=26)), end=iso(now))
