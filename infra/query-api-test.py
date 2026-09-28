@@ -48,6 +48,17 @@ def post(endpoint, path, key, body):
             return e.code, {"raw": raw.decode(errors="replace")}, time.time() - t0
 
 
+def post_ok(endpoint, path, key, body):
+    """post() for calls that should succeed: a new key is refused (403) by
+    some API Gateway nodes for a while after it starts working on others."""
+    for _ in range(10):
+        status, out, secs = post(endpoint, path, key, body)
+        if status != 403:
+            break
+        time.sleep(3)
+    return status, out, secs
+
+
 def admin(lam, payload):
     out = json.loads(lam.invoke(FunctionName="obs-tenant-admin", Payload=json.dumps(payload).encode())["Payload"].read())
     if "error" in out:
@@ -82,7 +93,7 @@ def main():
             time.sleep(2 if status == 200 else 5)
         check(ok_in_a_row >= 5, f"read key active for {a.tenant}")
 
-        status, out, secs = post(endpoint, "/v1/query", key, q)
+        status, out, secs = post_ok(endpoint, "/v1/query", key, q)
         direct = json.loads(lam.invoke(FunctionName="obs-query",
                                        Payload=json.dumps({**q, "tenant": a.tenant}).encode())["Payload"].read())
         check(status == 200 and sorted(out.get("rows", [])) == sorted(direct["rows"]) and out["rows"],
@@ -90,9 +101,9 @@ def main():
 
         other = json.loads(lam.invoke(FunctionName="obs-query",
                                       Payload=json.dumps({**q, "tenant": a.other}).encode())["Payload"].read())
-        status, out2, _ = post(endpoint, "/v1/query", key, {**q, "tenant": a.other})
-        check(status == 200 and sorted(out2["rows"]) == sorted(out["rows"]) != sorted(other["rows"]),
-              f"a tenant named in the body ({a.other}) is ignored: still {a.tenant}'s data")
+        status, out2, _ = post_ok(endpoint, "/v1/query", key, {**q, "tenant": a.other})
+        check(status == 200 and sorted(out2.get("rows", [])) == sorted(direct["rows"]) != sorted(other["rows"]),
+              f"a tenant named in the body ({a.other}) is ignored: still {a.tenant}'s data (HTTP {status})")
 
         status, body, _ = post(endpoint, "/v1/logs", key, {"resourceLogs": []})
         check(status == 403, f"read key cannot send data (POST /v1/logs -> {status})")
@@ -100,18 +111,18 @@ def main():
         check(status == 403, f"ingest key cannot query (POST /v1/query -> {status})")
         status, body, _ = post(endpoint, "/v1/query", None, q)
         check(status == 401, f"no key -> {status}")
-        status, body, _ = post(endpoint, "/v1/query", key, {**q, "group_by": ["body; DROP TABLE t"]})
+        status, body, _ = post_ok(endpoint, "/v1/query", key, {**q, "group_by": ["body; DROP TABLE t"]})
         check(status == 400 and "unknown field" in body.get("error", ""), f"bad query -> {status}: {body.get('error')}")
-        status, body, _ = post(endpoint, "/v1/query", key, {"signal": "logs"})
+        status, body, _ = post_ok(endpoint, "/v1/query", key, {"signal": "logs"})
         check(status == 400, f"missing time range -> {status}")
 
         trace_q = {**q, "search": {"limit": 5}}
         trace_q.pop("group_by"), trace_q.pop("aggs")
-        status, rows, _ = post(endpoint, "/v1/query", key, trace_q)
+        status, rows, _ = post_ok(endpoint, "/v1/query", key, trace_q)
         tid = rows["columns"].index("trace_id") if status == 200 else None
         if tid is not None and rows["rows"]:
             trace = rows["rows"][0][tid]
-            status, found, secs = post(endpoint, "/v1/query", key, {
+            status, found, secs = post_ok(endpoint, "/v1/query", key, {
                 "signal": "logs", "start": iso(now - timedelta(days=30)), "end": iso(now),
                 "match": {"trace_id": trace}, "search": {"limit": 10}})
             check(status == 200 and trace in [r[found["columns"].index("trace_id")] for r in found["rows"]],

@@ -17,8 +17,9 @@ so a key embedded in an application can send data but never read it back.
 
 API Gateway caches the answer per key for 60 s, so a revoked key is refused
 within that; disabling the key in API Gateway (infra/tenant.sh revoke does
-both) usually refuses it sooner. New keys take about a minute to reach every
-API Gateway node, and are refused (403) until then.
+both) usually refuses it sooner. New keys take up to ~6 minutes to reach every
+API Gateway node (measured 2026-09-28) and are refused (403) by some requests
+until then.
 """
 
 import hashlib

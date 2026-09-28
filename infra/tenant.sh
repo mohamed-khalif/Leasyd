@@ -39,7 +39,7 @@ case "$cmd" in
     echo "tenant:   ${tenant} ($(field "['plan']") plan), key id $(field "['key_id']")" >&2
     echo "endpoint: $(aws cloudformation describe-stacks --stack-name obs-phaseT2 \
       --query "Stacks[0].Outputs[?OutputKey=='IngestEndpoint'].OutputValue" --output text)" >&2
-    echo "api key (shown once; store it securely). It becomes active within 1-2 minutes:" >&2
+    echo "api key (shown once; store it securely). It becomes active within ~6 minutes (refused on some requests until then):" >&2
     field "['api_key']"
     ;;
   rotate)
@@ -50,7 +50,7 @@ case "$cmd" in
     ;;
   read-key)
     admin "{\"action\":\"read-key\",\"tenant\":\"${tenant}\"}"
-    echo "read key id $(field "['key_id']") (may only query; active within 1-2 minutes). api key (shown once):" >&2
+    echo "read key id $(field "['key_id']") (may only query; active within ~6 minutes). api key (shown once):" >&2
     field "['api_key']"
     ;;
   revoke)
