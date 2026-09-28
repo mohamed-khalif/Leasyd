@@ -187,6 +187,10 @@ The platform will serve many separate customers (tenants). This phase comes befo
   - The dispatcher lists every tenant's raw folders each run; check it stays within its timeout at 100+ tenants.
 - **Also:** configurable bloom attributes cover common request-ID names by default (`request.id`, `http.request_id`, `request_id`, `x-request-id`).
 
+## Phases 4-5 status
+
+Built together (T6 showed the write path holds at 50 GB/h, so the read path was the biggest unknown): `obs-query` coordinator + `obs-query-worker` (`services/compaction/query.py`, `infra/phase4-query.yaml`). JSON queries (filters, ID match, group-by with count/sum/min/max/avg/percentiles, search), compiled with a field whitelist and bound values; fan-out to up to 64 workers by file size; mergeable partials (percentiles from log-bucket histograms, <= 2.5% error). Workers download whole files with tenant-scoped credentials; reading only the needed columns straight from S3 (DuckDB httpfs) is the next optimisation if scans are slow. Tested locally (12 tests incl. fan-out = single worker, raw + Parquet, tenant isolation, injection attempts); AWS test `infra/phase4-test.py` pending.
+
 ## Phase 4: Single-worker query path
 
 **Build**

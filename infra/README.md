@@ -290,3 +290,29 @@ aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-f
 infra/deploy-phase2.sh --parameter-overrides ScheduleState=ENABLED AllowCrashInjection=false
 infra/deploy-phase3.sh
 ```
+
+## Phases 4-5: query engine
+
+`obs-query` answers a JSON query over one tenant's data (`services/compaction/query.py` documents
+the format): filters (`where`), an ID `match`, `group_by` with `count/sum/min/max/avg/p50/p90/p95/p99`,
+or `search` for the newest matching rows. It runs the index lookup, splits the files into chunks of
+similar size (~256 MB each, up to 64), runs an `obs-query-worker` per chunk in parallel, and merges
+their partial results. Workers download files with tenant-scoped credentials (IAM refuses anything
+outside the tenant) and query them with DuckDB; raw (fast-lane) files are parsed exactly as
+compaction would. Queries are never SQL from the caller: fields are checked, values are bound.
+
+```bash
+aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
+  --capabilities CAPABILITY_NAMED_IAM          # lets obs-query invoke its workers
+infra/deploy-phase4.sh
+python3 infra/phase4-test.py                   # over the T6 load-test tenant t6-000
+```
+
+Example:
+
+```bash
+aws lambda invoke --function-name obs-query --cli-binary-format raw-in-base64-out --payload '{
+  "tenant": "t6-000", "signal": "logs", "start": "2026-09-27T00:00:00Z", "end": "2026-09-28T00:00:00Z",
+  "where": [{"field": "severity_number", "op": ">=", "value": 17}],
+  "group_by": ["attributes.http.route"], "aggs": [{"fn": "count"}]}' /dev/stdout
+```
