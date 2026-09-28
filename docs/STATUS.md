@@ -20,7 +20,8 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Tenant operations: create, rotate, revoke, usage, delete | T5 | live, tested |
 | Scale: day + hour ID filters, faster fast lane, fixes found under load | T6 | live, tested at 1, 10, 50 GB/h |
 | Query engine with fan-out (`obs-query`), column-only reads | 4-5 | live, tested |
-| Faults, soak, Firehose cost cut | T6 | not started |
+| Firehose cost cut (compress before Firehose) | T6 | live, tested: $0.143 -> $0.077/GB at 10 GB/h |
+| Faults, soak | T6 | not started |
 | UI, alerting on customer data | 6+ | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
@@ -35,15 +36,14 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 ## Key results (details in the plan)
 
 - 50 GB/h across 100 tenants: every request accepted, freshness p99 44 s (target 60 s),
-  ingest + fast lane $0.117/GB (Firehose ~half of that).
+  ingest + fast lane $0.117/GB then; after compressing before Firehose, $0.077/GB at 10 GB/h.
 - Query, largest tenant (1.26 GB/day): 1 day in 1.3 s with 19 workers reading only the needed
   columns (target < 5 s); trace ID across 30 days in 1.6 s (target < 3 s); results identical to Athena.
 
 ## Next
 
-1. Compress records before Firehose (cost ~$0.12 -> ~$0.07/GB).
-2. Vectorise compaction's per-ID loops (biggest chunks took up to ~7 min at 50 GB/h).
-3. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
+1. Vectorise compaction's per-ID loops (biggest chunks took up to ~7 min at 50 GB/h).
+2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 
 ## Loose ends
