@@ -191,9 +191,9 @@ Resources:
       Handler: handler.recent_indexer
       Code: ../services/compaction/build
       Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-compaction"
-      # CPU scales with memory: 4 GB gives ~2 vCPUs, so DuckDB parses the
-      # biggest raw files in about half the time at about the same cost.
-      MemorySize: 4096
+      # CPU scales with memory: 3008 MB (this account's maximum) gives ~1.7
+      # vCPUs vs ~1.2 at 2048, so DuckDB parses the biggest raw files faster.
+      MemorySize: 3008
       Timeout: 120
       EphemeralStorage: { Size: 2048 }
       Environment:
