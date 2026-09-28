@@ -3,8 +3,11 @@
 Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
 
   create  {tenant, plan, buffer_seconds?}  ingest streams, tenant record, first API key (returned once)
-  rotate  {tenant, grace_hours}  a new key; the tenant's other keys keep working for
-                                 grace_hours (default 24), then are refused
+  rotate  {tenant, grace_hours, scope?}  a new key of that scope (default ingest); the tenant's
+                                 other keys of that scope keep working for grace_hours
+                                 (default 24), then are refused
+  read-key {tenant}              an extra key that may only query (POST /v1/query), never send;
+                                 revoke it with revoke {tenant, key_id}
   revoke  {tenant, key_id?}      refuse one key, or all of the tenant's keys
   delete  {tenant}               refuse all keys, remove the streams, then purge every
                                  object and index entry of the tenant (see below)
@@ -19,7 +22,9 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
   purge   {tenant}               internal: one purge pass (re-invokes itself if long)
 
 Keys: only their SHA-256 is stored (obs-tenants, pk "key#<hash>"); the
-authorizer maps a key to its tenant from there. API Gateway also holds each
+authorizer maps a key to its tenant and scope from there. Scope "ingest"
+(the default, and every key made before scopes) may only send data; "read"
+may only query. An SDK's key therefore can't be used to read data back. API Gateway also holds each
 key, for the tenant's usage plan (rate limits).
 
 Deletion: the tenant is marked "deleting" and its keys revoked, so nothing
@@ -56,6 +61,7 @@ BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
 SETTLE = timedelta(minutes=int(os.environ.get("SETTLE_MINUTES", "20")))
 SIGNALS = ("logs", "traces", "metrics")
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+SCOPES = {"ingest", "read"}   # see the authorizer: ingest sends, read queries
 _KEY_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 ddb = boto3.resource("dynamodb")
@@ -152,10 +158,12 @@ def create(tenant, plan="standard", buffer_seconds=None, context=None):
     return {"tenant": tenant, "plan": plan, "key_id": key_id, "api_key": key}
 
 
-def rotate(tenant, grace_hours=24, context=None):
+def rotate(tenant, grace_hours=24, scope="ingest", context=None):
+    if scope not in SCOPES:
+        raise Refused(f"unknown scope {scope!r}; one of {sorted(SCOPES)}")
     rec = _active(tenant)
-    old = [k for k in _keys(tenant) if k["status"] == "active"]
-    key, key_id = _issue_key(tenant, rec.get("plan", "standard"))
+    old = [k for k in _keys(tenant) if k["status"] == "active" and k.get("scope", "ingest") == scope]
+    key, key_id = _issue_key(tenant, rec.get("plan", "standard"), scope)
     expires = _iso(_now() + timedelta(hours=float(grace_hours)))
     for k in old:
         tenants.update_item(Key={"pk": k["pk"]}, UpdateExpression="SET #s = :e, expires_at = :x",
@@ -163,6 +171,12 @@ def rotate(tenant, grace_hours=24, context=None):
                             ExpressionAttributeValues={":e": "expiring", ":x": expires, ":a": "active"})
     return {"tenant": tenant, "key_id": key_id, "api_key": key,
             "old_keys_expire_at": expires if old else None, "old_key_ids": [k["api_key_id"] for k in old]}
+
+
+def read_key(tenant, context=None):
+    rec = _active(tenant)
+    key, key_id = _issue_key(tenant, rec.get("plan", "standard"), "read")
+    return {"tenant": tenant, "scope": "read", "key_id": key_id, "api_key": key}
 
 
 def revoke(tenant, key_id=None, context=None):
@@ -327,7 +341,7 @@ def purge(tenant, deleted=0, context=None):
     return {"tenant": tenant, "deleted": deleted, "pass_complete": True}
 
 
-ACTIONS = {"create": create, "rotate": rotate, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
+ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
            "usage": usage, "list": list_tenants, "sweep": sweep, "purge": purge}
 
 
@@ -342,12 +356,12 @@ def _active(tenant):
     return rec
 
 
-def _issue_key(tenant, plan):
+def _issue_key(tenant, plan, scope="ingest"):
     key = "obs_" + "".join(secrets.choice(_KEY_CHARS) for _ in range(40))
     key_id = apigw.create_api_key(name=f"{tenant}-{_now():%Y%m%dT%H%M%S}-{secrets.token_hex(2)}", value=key,
                                   enabled=True, tags={"tenant": tenant, "project": "obs"})["id"]
     apigw.create_usage_plan_key(usagePlanId=PLANS[plan], keyId=key_id, keyType="API_KEY")
-    tenants.put_item(Item={"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active",
+    tenants.put_item(Item={"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active", "scope": scope,
                            "api_key_id": key_id, "plan": plan, "created_at": _iso(_now())},
                      ConditionExpression="attribute_not_exists(pk)")
     return key, key_id

@@ -31,6 +31,7 @@ anything outside the tenant), loads them into DuckDB, runs the compiled
 query and returns partial aggregates or rows.
 """
 
+import base64
 import json
 import math
 import os
@@ -326,6 +327,50 @@ def handler(event, context):
         return run(event)
     except BadQuery as e:
         return {"error": str(e)}
+
+
+# ------------------------------------------------------------ HTTP API
+
+API_FIELDS = {"signal", "start", "end", "services", "where", "match", "group_by", "aggs", "search", "order", "limit"}
+MAX_RESPONSE_BYTES = 5_500_000   # Lambda's response limit is 6 MB
+
+
+def api(event, context):
+    """POST /v1/query through API Gateway. The tenant comes only from the
+    authorizer (the caller's read key); a tenant or any other field in the
+    body outside API_FIELDS is ignored. Unexpected errors raise, so they
+    count as Lambda errors (alarmed) and the caller gets a 5xx."""
+    tenant = ((event.get("requestContext") or {}).get("authorizer") or {}).get("tenant")
+    if not tenant:
+        return _http(401, {"error": "no tenant for this key"})
+    body = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        body = base64.b64decode(body)
+    try:
+        q = json.loads(body)
+    except ValueError:
+        return _http(400, {"error": "body must be a JSON query"})
+    if not isinstance(q, dict):
+        return _http(400, {"error": "body must be a JSON object"})
+    q = {k: v for k, v in q.items() if k in API_FIELDS}
+    if not q.get("start") or not q.get("end"):
+        return _http(400, {"error": "start and end are required (ISO-8601, e.g. 2026-09-28T00:00:00Z)"})
+    q["tenant"] = tenant
+    try:
+        out = run(q)
+    except BadQuery as e:
+        return _http(400, {"error": str(e)})
+    except ValueError as e:     # e.g. an unparseable timestamp
+        return _http(400, {"error": f"bad query: {e}"})
+    text = json.dumps(out)
+    if len(text) > MAX_RESPONSE_BYTES:
+        return _http(413, {"error": "result too large; ask for fewer rows (search.limit / limit)"})
+    return _http(200, text)
+
+
+def _http(status, body):
+    return {"statusCode": status, "headers": {"Content-Type": "application/json"},
+            "body": body if isinstance(body, str) else json.dumps(body), "isBase64Encoded": False}
 
 
 def run(q, invoke_worker=None):

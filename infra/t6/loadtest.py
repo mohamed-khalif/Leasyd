@@ -120,7 +120,7 @@ def tenants_create(args):
             keys[t] = v
             _save_keys(args.keys, keys)
             print(f"{t}: {len(v['services'])} services")
-    print(f"{len(keys)} tenants; keys in {args.keys}. New keys take 1-2 minutes to activate.")
+    print(f"{len(keys)} tenants; keys in {args.keys}. New keys take up to ~10 minutes to activate fully.")
 
 
 def tenants_delete(args):

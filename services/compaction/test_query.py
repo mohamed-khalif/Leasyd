@@ -182,3 +182,38 @@ def test_search_reading_in_place_has_only_the_files_columns(data):
     assert ranged["columns"] == downloaded["columns"] and "dt" not in ranged["columns"]
     assert ranged["rows"] == downloaded["rows"]
     json.dumps(ranged)   # everything serialisable
+
+
+# ---- HTTP API (POST /v1/query) ----
+
+def http(tenant, body, b64=False):
+    import base64 as b
+    raw = body if isinstance(body, str) else json.dumps(body)
+    event = {"requestContext": {"authorizer": {"tenant": tenant, "scope": "read"}} if tenant else {},
+             "body": b.b64encode(raw.encode()).decode() if b64 else raw, "isBase64Encoded": b64}
+    out = query.api(event, None)
+    return out["statusCode"], json.loads(out["body"])
+
+
+def test_api_answers_for_the_keys_tenant_only(data, monkeypatch):
+    monkeypatch.setattr(query, "_invoke_worker", query.run_worker)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    status, out = http("acme", q)
+    assert status == 200 and out["columns"] == ["count"] and "stats" in out
+    status, out = http("acme", {**q, "tenant": "globex", "workers": 64, "read": "download"})
+    assert status == 200 and out["rows"] == [[len(data)]]          # acme's rows; tenant in the body ignored
+    assert http("globex", q)[1]["rows"] == [[50]]
+    assert http("acme", q, b64=True)[1]["rows"] == [[len(data)]]   # API Gateway base64-encodes bodies
+
+
+@pytest.mark.parametrize("tenant,body,status,msg", [
+    (None, {"start": "x", "end": "y"}, 401, "no tenant"),
+    ("acme", "not json", 400, "JSON"),
+    ("acme", "[1, 2]", 400, "JSON object"),
+    ("acme", {"signal": "logs"}, 400, "start and end"),
+    ("acme", {"start": f"{DAY}T00:00:00Z", "end": f"{DAY}T01:00:00Z", "where": [{"field": "x;", "op": "="}]}, 400, "unknown field"),
+    ("acme", {"start": "yesterday", "end": f"{DAY}T01:00:00Z"}, 400, "bad query"),
+])
+def test_api_rejects_bad_requests(data, tenant, body, status, msg):
+    got, out = http(tenant, body)
+    assert got == status and msg in out["error"]

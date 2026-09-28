@@ -10,10 +10,16 @@ returned as usageIdentifierKey so API Gateway applies the tenant's usage plan
 A key is accepted while its status is "active", or "expiring" (replaced by a
 rotation) until its expires_at.
 
+Each key has a scope (keys created before scopes existed are "ingest"):
+  ingest  POST /v1/logs, /v1/traces, /v1/metrics   (the key in customers' SDKs)
+  read    POST /v1/query                          (dashboards, scripts, the UI)
+so a key embedded in an application can send data but never read it back.
+
 API Gateway caches the answer per key for 60 s, so a revoked key is refused
 within that; disabling the key in API Gateway (infra/tenant.sh revoke does
-both) usually refuses it sooner. New keys take about a minute to reach every
-API Gateway node, and are refused (403) until then.
+both) usually refuses it sooner. New keys take up to ~10 minutes to reach every
+API Gateway node (measured 2026-09-28) and are refused (403) by some requests
+until then.
 """
 
 import hashlib
@@ -26,6 +32,8 @@ import boto3
 
 TABLE = os.environ["TENANTS_TABLE"]
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+
+ROUTES = {"ingest": ["POST/v1/logs", "POST/v1/traces", "POST/v1/metrics"], "read": ["POST/v1/query"]}
 
 ddb = boto3.client("dynamodb")
 
@@ -53,19 +61,21 @@ def handler(event, context):
         print(json.dumps({"denied": "unknown or inactive key"}))
         raise Exception("Unauthorized")
     tenant = item["tenant"]["S"]
-    if not _TENANT.match(tenant):
+    scope = item.get("scope", {}).get("S", "ingest")
+    if not _TENANT.match(tenant) or scope not in ROUTES:
         raise Exception("Unauthorized")
 
-    # Allow every method of this API stage, so the cached answer covers
-    # /v1/logs, /v1/traces and /v1/metrics alike.
-    arn = event["methodArn"].split("/")
-    resource = "/".join(arn[:2]) + "/*"
+    # Allow every route of the key's scope in this API stage, so the cached
+    # answer (per key) covers them all; other routes get 403.
+    arn = event["methodArn"].split("/")      # arn:...:<api-id> / <stage> / <method> / <path...>
+    base = "/".join(arn[:2])
     return {
         "principalId": tenant,
         "policyDocument": {
             "Version": "2012-10-17",
-            "Statement": [{"Effect": "Allow", "Action": "execute-api:Invoke", "Resource": resource}],
+            "Statement": [{"Effect": "Allow", "Action": "execute-api:Invoke",
+                           "Resource": [f"{base}/{route}" for route in ROUTES[scope]]}],
         },
-        "context": {"tenant": tenant},
+        "context": {"tenant": tenant, "scope": scope},
         "usageIdentifierKey": key,
     }

@@ -88,6 +88,40 @@ Resources:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "4" }
 
+  # ---------- Customer query API (POST /v1/query, routed by obs-phaseT2) ----------
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-query-api
+      RetentionInDays: 14
+
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: obs-query-api
+      Description: POST /v1/query - runs a query for the tenant of the caller's read key
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: query.api
+      Code: ../services/compaction/build
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-query"
+      MemorySize: 2048
+      Timeout: 30          # API Gateway gives up after 29 s
+      EphemeralStorage: { Size: 4096 }
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          INDEX_TABLE: obs-index
+          TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+          QUERY_WORKER_FUNCTION: obs-query-worker
+          QUERY_MAX_WORKERS: !Ref MaxWorkers
+          QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "Q1" }
+
 Outputs:
   QueryFunction:
     Value: !Ref CoordinatorFunction
