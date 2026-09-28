@@ -182,3 +182,34 @@ def test_search_reading_in_place_has_only_the_files_columns(data):
     assert ranged["columns"] == downloaded["columns"] and "dt" not in ranged["columns"]
     assert ranged["rows"] == downloaded["rows"]
     json.dumps(ranged)   # everything serialisable
+
+
+def test_needed_keys():
+    assert query.needed_keys({"search": {}}) == (None, None)
+    q = {"where": [{"field": "attributes.a", "op": "exists"}, {"field": "severity_number", "op": ">", "value": 1}],
+         "group_by": ["resource.host.name", "service"], "aggs": [{"fn": "p95", "field": "attributes.b"}],
+         "match": {"trace_id": "x", "request.id": "y"}}
+    assert query.needed_keys(q) == ({"a", "b", "request.id"}, {"host.name"})
+
+
+def test_raw_files_count_as_more_work(monkeypatch):
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1000)
+    files = [{"file_path": "s3://b/p", "size_bytes": 900, "kind": "parquet"},
+             {"file_path": "s3://b/r1", "size_bytes": 200, "kind": "raw"},
+             {"file_path": "s3://b/r2", "size_bytes": 200, "kind": "raw"}]
+    chunks = query.plan_chunks(files, 8)
+    assert len(chunks) == 3 and sorted(len(c) for c in chunks) == [1, 1, 1]   # raw files get their own workers
+
+
+def test_aggregate_over_raw_files_matches_full_rows(data, monkeypatch):
+    """Raw files parsed with only the needed attribute keys give the same answer as whole rows."""
+    q = dict(where=[{"field": "severity_number", "op": ">=", "value": 17}],
+             group_by=["attributes.http.route"], aggs=[{"fn": "count"}, {"fn": "sum", "field": "attributes.duration_ms"}])
+    fast = run(**q)
+    real = query.compact.load_rows
+
+    def full_rows(con, paths, dt, hour, signal, **_):   # ignore the key restriction
+        return real(con, paths, dt, hour, signal)
+    monkeypatch.setattr(query.compact, "load_rows", full_rows)
+    slow = run(**q)
+    assert fast["rows"] and sorted(fast["rows"]) == sorted(slow["rows"])

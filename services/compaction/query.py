@@ -58,6 +58,7 @@ TARGET_BYTES_PER_WORKER = int(os.environ.get("QUERY_BYTES_PER_WORKER", str(256 *
 DOWNLOAD_THREADS = 32
 READ_MODE = os.environ.get("QUERY_READ_MODE", "ranges")   # or "download"
 RANGE_THREADS = int(os.environ.get("QUERY_RANGE_THREADS", "8"))
+RAW_WORK_FACTOR = int(os.environ.get("QUERY_RAW_WORK_FACTOR", "8"))  # raw JSON vs Parquet, per byte
 RANGE_BLOCK_BYTES = 256 * 1024   # read-ahead per S3 range request (small: column chunks can be tiny)
 MAX_ROWS = 10_000          # search results and aggregate groups returned
 HIST_BASE = 1.05           # percentile buckets: relative error <= 2.5%
@@ -239,11 +240,17 @@ def run_worker(event):
                 con.execute(f"CREATE TEMP VIEW pq AS SELECT * FROM read_parquet([{paths}], union_by_name = true, "
                             "hive_partitioning = false)")
                 parts.append("SELECT * FROM pq")
-            raw = [(f, p) for f, p in local if f["kind"] == "raw"]
-            for i, (f, p) in enumerate(raw):
-                # Raw (not yet compacted) files: parsed exactly as compaction would.
-                parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
-                compact.load_rows(con, [p], parsed[2], parsed[3], signal)
+            # Raw (not yet compacted) files: parsed exactly as compaction would,
+            # all of one arrival hour in one pass, building only the attribute
+            # keys the query uses (all of them for search).
+            attr_keys, res_keys = needed_keys(q)
+            by_hour = {}
+            for f, p in local:
+                if f["kind"] == "raw":
+                    parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
+                    by_hour.setdefault((parsed[2], parsed[3]), []).append(p)
+            for i, ((dt, hr), paths) in enumerate(sorted(by_hour.items())):
+                compact.load_rows(con, paths, dt, hr, signal, attr_keys=attr_keys, res_keys=res_keys)
                 con.execute(f"CREATE TEMP TABLE raw{i} AS SELECT * FROM rows")
                 parts.append(f"SELECT * FROM raw{i}")
             if not parts:
@@ -350,19 +357,42 @@ def run(q, invoke_worker=None):
     return result
 
 
+def _work(f):
+    """Bytes of work a file represents: a raw file (gzipped JSON, parsed in
+    full) costs several times what the same bytes of Parquet do."""
+    return f["size_bytes"] * (RAW_WORK_FACTOR if f.get("kind") == "raw" else 1)
+
+
 def plan_chunks(files, max_workers):
-    """Split files into <= max_workers chunks of similar total size (largest first)."""
-    files = sorted({f["file_path"]: f for f in files}.values(), key=lambda f: -f["size_bytes"])
+    """Split files into <= max_workers chunks of similar work (largest first)."""
+    files = sorted({f["file_path"]: f for f in files}.values(), key=lambda f: -_work(f))
     if not files:
         return []
-    total = sum(f["size_bytes"] for f in files)
+    total = sum(_work(f) for f in files)
     n = max(1, min(max_workers, MAX_WORKERS, len(files), math.ceil(total / TARGET_BYTES_PER_WORKER)))
     bins = [[0, []] for _ in range(n)]
     for f in files:
         b = min(bins, key=lambda x: x[0])
-        b[0] += f["size_bytes"]
+        b[0] += _work(f)
         b[1].append(f)
     return [b[1] for b in bins if b[1]]
+
+
+def needed_keys(q):
+    """(attribute keys, resource attribute keys) a query uses; (None, None)
+    for search, which returns whole rows."""
+    if q.get("search") is not None:
+        return None, None
+    attrs, res = set(), set()
+    fields = ([c.get("field") for c in q.get("where") or []] + list(q.get("group_by") or [])
+              + [a.get("field") for a in q.get("aggs") or []]
+              + [f if f == "trace_id" else "attributes." + f for f in (q.get("match") or {})])
+    for f in fields:
+        if isinstance(f, str) and f.startswith("attributes."):
+            attrs.add(f[len("attributes."):])
+        elif isinstance(f, str) and f.startswith("resource."):
+            res.add(f[len("resource."):])
+    return attrs, res
 
 
 def _invoke_worker(payload):
