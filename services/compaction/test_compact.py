@@ -178,20 +178,44 @@ def test_spill_dir_exists_before_duckdb_needs_it(tmp_path):
         con.close()
 
 
-@pytest.mark.parametrize("encoding", ["one_gzip", "gzip_members", "plain", "gzip_in_gzip"])
-def test_raw_file_encodings_from_the_compression_changeover(tmp_path, encoding):
-    """Firehose-compressed (old), per-record gzip members (new), plain, and double gzip all
-    compact to the same rows."""
+def _changeover_lines():
     lines = []
     for svc in ("api", "web"):
+        recs = [rec(H20 + n * 10**6, body=f"msg {svc} {n}", observed=H20 + n,
+                    attrs=[{"key": "request.id", "value": {"stringValue": f"r{svc}{n}"}},
+                           {"key": "n", "value": {"intValue": str(n)}}]) for n in range(40)]
+        for n, r in enumerate(recs):
+            r["traceId"] = f"{n:032x}"
         doc = {"resourceLogs": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": svc}}]},
-                                 "scopeLogs": [{"logRecords": [rec(H20 + n) for n in range(40)]}]}]}
+                                 "scopeLogs": [{"scope": {"name": "lib"}, "logRecords": recs}]}]}
         lines.append((json.dumps(doc) + "\n").encode())
+    return lines
+
+
+def _encode(lines, encoding):
     raw = b"".join(lines)
-    body = {"one_gzip": gzip.compress(raw), "gzip_members": b"".join(gzip.compress(line) for line in lines),
+    return {"one_gzip": gzip.compress(raw), "gzip_members": b"".join(gzip.compress(line) for line in lines),
             "plain": raw, "gzip_in_gzip": gzip.compress(b"".join(gzip.compress(line) for line in lines))}[encoding]
-    path = tmp_path / "raw.json.gz"
+
+
+def _compact_encoded(tmp_path, encoding):
+    path = tmp_path / encoding / "raw.json.gz"
+    path.parent.mkdir()
+    body = _encode(_changeover_lines(), encoding)
     path.write_bytes(body)
-    written = compact.compact_logs([str(path)], str(tmp_path / "out"), "b1", "2026-09-26", "20")
-    assert sorted((w["service"], w["rows"]) for w in written) == [("api", 40), ("web", 40)]
+    written = compact.compact_logs([str(path)], str(tmp_path / encoding / "out"), "b1", "2026-09-26", "20")
     assert path.read_bytes() == body   # the original is left as it was
+    content = {w["service"]: read(w["path"], "SELECT * FROM t ORDER BY ts_unix_nano") for w in written}
+    blooms = {w["service"]: w["bloom"].to_bytes() for w in written}
+    return content, blooms
+
+
+def test_raw_file_encodings_from_the_compression_changeover(tmp_path):
+    """Firehose-compressed (old), per-record gzip members (new), plain, and double gzip all
+    compact to exactly the same Parquet: every column of every row, and the same blooms."""
+    base, base_blooms = _compact_encoded(tmp_path, "one_gzip")
+    assert sorted((s, len(r)) for s, r in base.items()) == [("api", 40), ("web", 40)]
+    for encoding in ("gzip_members", "plain", "gzip_in_gzip"):
+        content, blooms = _compact_encoded(tmp_path, encoding)
+        assert content == base, encoding
+        assert blooms == base_blooms, encoding

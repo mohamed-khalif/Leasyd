@@ -268,3 +268,29 @@ def test_records_gzipped_before_firehose_when_enabled(fh, monkeypatch, tmp_path)
     obj.write_bytes(b"".join(d for _, d in fh.puts))              # passed through, not recompressed
     written = compact.compact_logs([str(obj)], str(tmp_path / "out"), "b1", "2026-09-26", "20")
     assert sorted((w["service"], w["rows"]) for w in written) == [("api", 5), ("big", 2500)]
+
+
+def test_same_parquet_with_and_without_record_compression(monkeypatch, tmp_path):
+    """The same requests, sent with RECORD_COMPRESSION off and on, compact to identical Parquet."""
+    import compact
+    import duckdb
+    monkeypatch.setattr(ingest.time, "sleep", lambda s: None)
+    reqs = [logs_pb(n=300, service="api").SerializeToString(),
+            logs_pb(n=2500, service="big", body="payload " * 150).SerializeToString()]
+    out = {}
+    for mode in ("none", "gzip"):
+        fh = FakeFirehose()
+        monkeypatch.setattr(ingest, "firehose", fh)
+        monkeypatch.setattr(ingest, "RECORD_COMPRESSION", mode)
+        for body in reqs:
+            assert ingest.handler(event(body), None)["statusCode"] == 200
+        data = b"".join(d for _, d in fh.puts)
+        obj = tmp_path / f"{mode}.json.gz"
+        # Firehose gzips the object itself when records arrive plain (the old setup).
+        obj.write_bytes(gzip.compress(data) if mode == "none" else data)
+        written = compact.compact_logs([str(obj)], str(tmp_path / mode), "b1", "2026-09-26", "20")
+        out[mode] = {w["service"]: (duckdb.sql(f"SELECT * FROM read_parquet('{w['path']}') ORDER BY ts_unix_nano")
+                                    .fetchall(), w["bloom"].to_bytes()) for w in written}
+        out[mode + "_bytes"] = len(data)
+    assert out["gzip"] == out["none"] and sorted(out["none"]) == ["api", "big"]
+    assert out["gzip_bytes"] < out["none_bytes"] / 4   # what Firehose would bill

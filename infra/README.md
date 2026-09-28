@@ -335,3 +335,8 @@ infra/deploy-phaseT5.sh                                                         
 python3 infra/migrate-stream-compression.py --apply                                            # existing streams
 infra/deploy-phaseT2.sh --parameter-overrides RecordCompression=gzip                           # ingest compresses
 ```
+
+Proof that customers see no difference: `infra/compression-check.py send before` (before the last
+step), `send after` (after it), then `compare`, which reads both batches back through `obs-query`
+and requires every field of every record to match. Locally, tests require identical Parquet (every
+column, and the blooms) for all four encodings, and for the same requests with compression off and on.
