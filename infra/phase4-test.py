@@ -79,10 +79,14 @@ def main():
     # 1. errors by endpoint, 24 h: one worker, then fan-out
     errors = dict(day, where=[{"field": "severity_number", "op": ">=", "value": 17}],
                   group_by=["attributes.http.route"], aggs=[{"fn": "count"}])
-    one = query(dict(errors, workers=1))
-    print(f"INFO  one worker: {describe(one)}")
+    one = query(dict(errors, workers=1, read="download"))
+    print(f"INFO  one worker, whole files:     {describe(one)}")
+    dl = query(dict(errors, read="download"))
+    print(f"INFO  fan-out, whole files:        {describe(dl)}")
     many = query(errors)
-    print(f"INFO  fan-out:    {describe(many)}")
+    print(f"INFO  fan-out, needed columns only: {describe(many)}")
+    check(sorted(map(tuple, dl["rows"])) == sorted(map(tuple, many["rows"])),
+          "reading only the needed columns gives the same answer as whole files")
     check(sorted(map(tuple, one["rows"])) == sorted(map(tuple, many["rows"])) and many["rows"],
           f"errors by endpoint: same {len(many['rows'])} groups with 1 and {many['stats']['workers']} workers "
           f"({sum(r[1] for r in many['rows'])} errors)")

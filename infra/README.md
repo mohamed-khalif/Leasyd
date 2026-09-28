@@ -299,7 +299,9 @@ or `search` for the newest matching rows. It runs the index lookup, splits the f
 similar size (~256 MB each, up to 64), runs an `obs-query-worker` per chunk in parallel, and merges
 their partial results. Workers download files with tenant-scoped credentials (IAM refuses anything
 outside the tenant) and query them with DuckDB; raw (fast-lane) files are parsed exactly as
-compaction would. Queries are never SQL from the caller: fields are checked, values are bound.
+compaction would. Parquet is read in place by default: only the footer and the columns the query
+needs, as S3 range requests (`ReadMode=download` fetches whole files instead). Each worker takes
+~64 MB of files (`BytesPerWorker`), so the number of workers grows with the data a query covers. Queries are never SQL from the caller: fields are checked, values are bound.
 
 ```bash
 aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \

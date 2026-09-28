@@ -150,3 +150,27 @@ def test_plan_chunks_balances_by_size(monkeypatch):
     assert len(chunks) == 3 and sizes == [600, 700, 900]      # ceil(2200 / 1000) workers, largest first
     assert len(query.plan_chunks(files, 2)) == 2               # capped by the caller's limit
     assert query.plan_chunks([], 4) == []
+
+
+def test_reading_in_place_matches_downloading_and_reads_less(data):
+    q = dict(where=[{"field": "severity_number", "op": ">=", "value": 17}],
+             group_by=["attributes.http.route"], aggs=[{"fn": "count"}])
+    ranged, downloaded = run(read="ranges", **q), run(read="download", **q)
+    assert sorted(ranged["rows"]) == sorted(downloaded["rows"])
+    assert ranged["stats"]["bytes"] <= downloaded["stats"]["bytes"]   # these test files are tiny
+
+
+def test_range_reads_fetch_only_the_needed_columns(aws, tmp_path):  # noqa: F811
+    import duckdb
+    path = tmp_path / "wide.parquet"
+    duckdb.sql(f"COPY (SELECT range AS id, repeat(md5(range::VARCHAR), 6) AS big, range % 7 AS sev "
+               f"FROM range(500000)) TO '{path}' (FORMAT parquet)")
+    data = path.read_bytes()
+    boto3.client("s3").put_object(Bucket="obs-data-test", Key="data/tenant=acme/logs/wide.parquet", Body=data)
+    fs = query.TenantS3(boto3.client("s3"), "obs-data-test", {"data/tenant=acme/logs/wide.parquet": len(data)})
+    con = duckdb.connect()
+    con.register_filesystem(fs)
+    got = con.execute("SELECT sev, count(*) FROM read_parquet('obsq://data/tenant=acme/logs/wide.parquet') "
+                      "GROUP BY 1 ORDER BY 1").fetchall()
+    assert got[0] == (0, 71429)
+    assert fs.bytes_read < len(data) / 10 and fs.requests < 20

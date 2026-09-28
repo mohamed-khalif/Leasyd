@@ -37,12 +37,14 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import boto3
 import botocore.config
+from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
 
 import compact
 import layout
@@ -52,6 +54,8 @@ WORKER_FUNCTION = os.environ.get("QUERY_WORKER_FUNCTION", "obs-query-worker")
 MAX_WORKERS = int(os.environ.get("QUERY_MAX_WORKERS", "64"))
 TARGET_BYTES_PER_WORKER = int(os.environ.get("QUERY_BYTES_PER_WORKER", str(256 * 1024 * 1024)))
 DOWNLOAD_THREADS = 32
+READ_MODE = os.environ.get("QUERY_READ_MODE", "ranges")   # or "download"
+RANGE_BLOCK_BYTES = 256 * 1024   # read-ahead per S3 range request (small: column chunks can be tiny)
 MAX_ROWS = 10_000          # search results and aggregate groups returned
 HIST_BASE = 1.05           # percentile buckets: relative error <= 2.5%
 
@@ -185,17 +189,24 @@ def worker(event, context):
 
 
 def run_worker(event):
-    """Download this chunk's files as the tenant, load them, run the query."""
+    """Read this chunk's files as the tenant, load them, run the query.
+
+    Parquet is read in place ("ranges", the default): DuckDB asks for the
+    footer and just the column chunks the query needs, fetched as S3 range
+    requests. "download" fetches whole files first (the Phase 4 baseline).
+    Raw files are always downloaded: gzipped JSON has to be read in full."""
     t0 = time.perf_counter()
     q = event["query"]
     tenant = layout.check_tenant(q["tenant"])
     signal = q.get("signal", "logs")
     sql, params, kind = compile_query(q)
+    mode = q.get("read", READ_MODE)
     _, s3 = lookup._clients_for(tenant)
     work = tempfile.mkdtemp(dir="/tmp")
     try:
         files = sorted({f["file_path"]: f for f in event["files"]}.values(), key=lambda f: f["file_path"])
         prefix = f"s3://{lookup.BUCKET}/"
+        in_place = [f for f in files if f["kind"] == "parquet" and mode == "ranges"]
 
         def fetch(i_f):
             i, f = i_f
@@ -204,12 +215,16 @@ def run_worker(event):
             s3.download_file(lookup.BUCKET, f["file_path"][len(prefix):], local)
             return f, local
         with ThreadPoolExecutor(DOWNLOAD_THREADS) as pool:
-            local = list(pool.map(fetch, enumerate(files)))
+            local = list(pool.map(fetch, [(i, f) for i, f in enumerate(files) if f not in in_place]))
         t_dl = time.perf_counter()
         con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
+        ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for f in in_place})
         try:
             parts = []
             pq = [p for f, p in local if f["kind"] == "parquet"]
+            if in_place:
+                con.register_filesystem(ranges)
+                pq += [f"{TenantS3.protocol}://{f['file_path'][len(prefix):]}" for f in in_place]
             if pq:
                 # Our own local paths (views can't take parameters).
                 paths = ", ".join("'" + p.replace("'", "''") + "'" for p in pq)
@@ -233,11 +248,47 @@ def run_worker(event):
             con.close()
         return {"kind": kind, "columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:MAX_ROWS]],
                 "truncated": len(rows) > MAX_ROWS,
-                "stats": {"files": len(files), "bytes": sum(os.path.getsize(p) for _, p in local),
+                "stats": {"files": len(files), "read_mode": mode,
+                          "bytes": sum(os.path.getsize(p) for _, p in local) + ranges.bytes_read,
+                          "range_requests": ranges.requests,
                           "download_ms": round((t_dl - t0) * 1000), "query_ms": round((time.perf_counter() - t_dl) * 1000),
                           "rows_scanned": scanned}}
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+class _RangeFile(AbstractBufferedFile):
+    def _fetch_range(self, start, end):
+        body = self.fs.s3.get_object(Bucket=self.fs.bucket, Key=self.path, Range=f"bytes={start}-{end - 1}")["Body"].read()
+        with self.fs.lock:
+            self.fs.requests += 1
+            self.fs.bytes_read += len(body)
+        return body
+
+
+class TenantS3(AbstractFileSystem):
+    """Lets DuckDB read S3 objects in place, as byte ranges, through a
+    tenant-scoped client (so IAM still refuses other tenants' objects). File
+    sizes come from the index, so no HEAD request per file."""
+    protocol = "obsq"
+
+    def __init__(self, s3, bucket, sizes, **kw):
+        super().__init__(skip_instance_cache=True, **kw)
+        self.s3, self.bucket, self.sizes = s3, bucket, sizes
+        self.lock = threading.Lock()
+        self.requests = self.bytes_read = 0
+
+    def info(self, path, **kw):
+        path = self._strip_protocol(path)
+        return {"name": path, "size": self.sizes[path], "type": "file"}
+
+    def modified(self, path):
+        return datetime(2000, 1, 1)   # files are immutable once written
+
+    def _open(self, path, mode="rb", block_size=None, **kw):
+        path = self._strip_protocol(path)
+        return _RangeFile(self, path, mode, block_size=block_size or RANGE_BLOCK_BYTES,
+                          cache_type="readahead", size=self.sizes[path])
 
 
 def _jsonable(v):

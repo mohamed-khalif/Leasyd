@@ -15,8 +15,15 @@ Parameters:
     Description: Most workers one query fans out to.
   BytesPerWorker:
     Type: Number
-    Default: 268435456
-    Description: Target bytes of files per worker (256 MB); fewer bytes, more workers.
+    Default: 67108864
+    Description: >
+      Target bytes of files per worker (64 MB). Fewer bytes, more workers in
+      parallel: faster, at about the same total cost (billed per GB-second).
+  ReadMode:
+    Type: String
+    Default: ranges
+    AllowedValues: [ranges, download]
+    Description: ranges reads only the Parquet columns a query needs, in place; download fetches whole files.
 
 Resources:
   CoordinatorLogGroup:
@@ -76,6 +83,7 @@ Resources:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
           INDEX_TABLE: obs-index
           TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+          QUERY_READ_MODE: !Ref ReadMode
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "4" }

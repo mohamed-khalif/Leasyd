@@ -197,7 +197,7 @@ Built together (T6 showed the write path holds at 50 GB/h, so the read path was 
 - Search, 50 newest "timeout" lines: 3.4 s.
 - **Trace ID across 30 days: 1.5 s** (target < 3 s): 255 files in range, 1 day filter and 1 hour filter consulted, 2 files read.
 - Error counts identical to Athena for a compacted hour (592,728 errors).
-- Next: smaller chunks per worker (more parallelism; 1 day was only just under 5 s with 5 workers), then read only the needed columns from S3 instead of whole files.
+- Next (built, to measure): 64 MB per worker instead of 256 MB (about 4x the workers), and workers read Parquet in place, fetching only the footer and the column chunks a query needs as S3 range requests through a tenant-scoped client (fsspec filesystem registered in DuckDB). Locally a one-column query read 4% of a 24 MB file. Whole-file download stays available (`"read": "download"`).
 
 ## Phase 4: Single-worker query path
 
