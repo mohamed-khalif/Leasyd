@@ -441,3 +441,9 @@ infra/deploy-phaseT2.sh      # adds /v1/app/* (reads the pool from obs-phaseU1)
 infra/deploy-phaseT5.sh      # tenant admin: invite-user / remove-user / users
 python3 infra/login-test.py
 ```
+
+Tested on AWS (2026-09-29): an invited user signs in; `/v1/app/me` names their tenant;
+`/v1/app/query` gives the engine's counts for that tenant only (~1.8 s for a day of the largest
+tenant), ignoring a tenant in the body; no token -> 401, a token edited to claim another tenant ->
+refused, an API key -> 401; the user can't change their tenant; after remove-user they can neither
+sign in nor refresh.
