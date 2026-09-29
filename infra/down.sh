@@ -57,6 +57,7 @@ delete_stack obs-phaseT7
 delete_stack obs-phaseT5
 delete_stack obs-phaseT2
 delete_stack obs-phaseS1          # synthetic checks (their settings stay in obs-tenants)
+delete_stack obs-phaseS1-build    # the browser image (rebuilt by up.sh)
 delete_stack obs-phase4
 delete_stack obs-phase3
 empty_bucket "obs-athena-results-${ACCOUNT}-${REGION}"

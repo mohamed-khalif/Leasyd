@@ -4,6 +4,7 @@ import http.server
 import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -21,7 +22,7 @@ os.environ.pop("AWS_SESSION_TOKEN", None)
 
 import synthetics  # noqa: E402
 
-REAL_PUBLIC = synthetics.public
+REAL_PUBLIC = synthetics.safety.public
 PASSWORD, TOKEN = "hunter2-very-secret", "tok_4f9a8b7c6d5e"
 
 
@@ -77,7 +78,7 @@ def site(monkeypatch):
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     # The local test site is on loopback: allow exactly that; everything else stays checked for real.
-    monkeypatch.setattr(synthetics, "public", lambda ip: ip.is_loopback or REAL_PUBLIC(ip))
+    monkeypatch.setattr(synthetics.safety, "public", lambda ip: ip.is_loopback or REAL_PUBLIC(ip))
     yield f"http://127.0.0.1:{srv.server_address[1]}"
     srv.shutdown()
 
@@ -369,3 +370,130 @@ def test_results_are_valid_telemetry_the_pipeline_accepts(tmp_path, site):
     (log,) = duckdb.sql(f"SELECT body FROM '{tmp_path}/bad/logs/**/*.parquet'").fetchall()
     assert log[0].startswith("Check 'Order lookup' failed at Log in: status 401") and "bad credentials" in log[0]
     assert "logs" not in synthetics.telemetry("abc123abc123", c, ok)
+
+
+# ------------------------------------------------------------------ browser checks (the browser itself: test_browser.py)
+
+def browser_settings(**kw):
+    return {"type": "browser", "name": "Shop", "frequency": 5, "steps": [
+        {"action": "navigate", "url": "https://shop.example.com/login"},
+        {"action": "type", "selector": "#email", "text": "ana@acme.io"},
+        {"action": "type", "selector": "#password", "text": "{password}"},
+        {"action": "press", "key": "Enter", "selector": "#password"},
+        {"action": "extract", "selector": "#order", "variable": "order"},
+        {"action": "navigate", "url": "https://shop.example.com/orders/{order}"},
+        {"action": "assert_text", "text": "Shipped"}], **kw}
+
+
+JPEG = base64.b64encode(b"\xff\xd8\xff fake jpeg").decode()
+
+
+def fake_browser(monkeypatch, ok=False):
+    calls = []
+
+    def invoke(**kw):
+        payload = json.loads(kw["Payload"])
+        calls.append(payload)
+        step = {"name": "Log in", "action": "navigate", "ok": ok, "failure": None if ok else "text 'Shipped' not found",
+                "status": 200, "url": "https://shop.example.com/", "started": time.time(), "timings": {"total_ms": 812.5},
+                "vitals": {"ttfb_ms": 80.0, "fcp_ms": 300.0, "lcp_ms": 950.0, "cls": 0.02, "load_ms": 700.0}, "extracted": [],
+                "console_errors": ["TypeError: x is undefined"], "failed_requests": [], "http_errors": ["404 https://shop.example.com/a.png"],
+                "blocked": ["10.0.0.9"], "screenshot": JPEG}
+        out = {"ok": ok, "failure": None if ok else "Log in: text 'Shipped' not found", "failed_step": None if ok else 0,
+               "steps": [step], "total_ms": 812.5, "tls_days": None, "started": time.time()}
+        return {"Payload": type("P", (), {"read": lambda self: json.dumps(out).encode()})()}
+    monkeypatch.setattr(synthetics, "_lambda", type("L", (), {"invoke": staticmethod(invoke)})())
+    return calls
+
+
+def test_frequencies():
+    for f in (1, 5, 15, 30, 45, 60):
+        assert synthetics.validate(settings(frequency=f))["frequency"] == f
+    with pytest.raises(synthetics.Refused, match="1, 5, 15, 30, 45 or 60"):
+        synthetics.validate(settings(frequency=10))
+    assert synthetics.due("000000000000", 45, 90) and not synthetics.due("000000000000", 45, 60)
+
+
+def test_browser_validation():
+    c = synthetics.validate({**browser_settings(), "secret_names": ["password"]})
+    assert c["type"] == "browser" and c["device"] == "desktop" and c["screenshots"] == "failure" and c["timeout_ms"] == 30000
+    assert c["steps"][4] == {"name": "Step 5", "action": "extract", "selector": "#order", "variable": "order"}
+    bad = [
+        ({"steps": [{"action": "click", "selector": "#a"}]}, "starts by opening a URL"),
+        ({"steps": [{"action": "navigate", "url": "http://169.254.169.254/"}]}, "public address"),
+        ({"steps": [{"action": "navigate", "url": "https://a.io"}, {"action": "type", "selector": "#p", "text": "{nope}"}]}, "uses {nope}"),
+        ({"steps": [{"action": "navigate", "url": "https://a.io"}, {"action": "press", "key": "Enter; rm"}]}, "key"),
+        ({"steps": [{"action": "navigate", "url": "https://a.io"}, {"action": "run_js", "script": "x"}]}, "action: one of"),
+        ({"steps": [{"action": "navigate", "url": "https://a.io"}, {"action": "wait", "ms": 60000}]}, "wait: 1-10000"),
+        ({"steps": [{"action": "navigate", "url": "https://a.io"}, {"action": "click"}]}, "selector: 1-512"),
+        ({"device": "fridge"}, "device"),
+        ({"timeout_ms": 90000}, "1000-60000"),
+    ]
+    for change, reason in bad:
+        with pytest.raises(synthetics.Refused, match=re.escape(reason)):
+            synthetics.validate({**browser_settings(), "secret_names": ["password"], **change})
+
+
+def test_browser_check_api_run_and_screenshots(aws, monkeypatch):
+    boto3.client("s3").create_bucket(Bucket="obs-data-test")
+    monkeypatch.setattr(synthetics, "DATA_BUCKET", "obs-data-test")
+    monkeypatch.setattr(synthetics, "_s3", None)
+    calls = fake_browser(monkeypatch)
+    s, a = call("acme", "POST", "/v1/app/checks", {**browser_settings(), "secrets": {"password": PASSWORD}})
+    assert s == 201 and a["type"] == "browser" and a["secret_names"] == ["password"]
+    # Test: runs unsaved settings with the typed secret; the screenshot comes back inline, nothing stored.
+    s, t = call("acme", "POST", "/v1/app/checks/test", {**browser_settings(), "secrets": {"password": PASSWORD}})
+    assert s == 200 and t["result"]["steps"][0]["screenshot"] == JPEG
+    assert calls[-1]["secrets"] == {"password": PASSWORD} and calls[-1]["budget_ms"] == synthetics.BROWSER_TEST_MS
+    assert "pk" not in calls[-1]["check"] and "secrets" not in calls[-1]["check"]
+    # Run now: recorded, screenshot stored under the tenant's prefix, shown through the API.
+    s, r = call("acme", "POST", "/v1/app/checks/{id}/run", None, a["id"])
+    assert s == 200 and not r["result"]["ok"]
+    assert "pk" not in calls[-1]["check"] and "secrets" not in calls[-1]["check"] and calls[-1]["secrets"] == {"password": PASSWORD}
+    run_id = r["result"]["run_id"]
+    keys = [o["Key"] for o in boto3.client("s3").list_objects_v2(Bucket="obs-data-test")["Contents"]]
+    assert keys == [f"synthetics/tenant=acme/{a['id']}/{run_id}/1.jpg"]
+    shot = lambda tenant, q: call_q(tenant, "/v1/app/checks/{id}/screenshot", a["id"], q)   # noqa: E731
+    s, img = shot("acme", {"run": run_id, "step": "1"})
+    assert s == 200 and img["image"] == JPEG
+    assert shot("globex", {"run": run_id, "step": "1"})[0] == 404                            # not their check
+    assert shot("acme", {"run": run_id, "step": "2"})[0] == 404
+    assert shot("acme", {"run": "../../x", "step": "1"})[0] == 400
+    # The recorded run: trace id = run id, browser details on the step, vitals as metrics, details in the log.
+    docs = {st.rsplit("-", 1)[1]: b"".join(gzip.decompress(x) if x[:2] == b"\x1f\x8b" else x for x in recs) for st, recs in aws}
+    assert run_id.encode() in docs["traces"] and b"step.lcp_ms" in docs["traces"] and b'"step.screenshot"' in docs["traces"]
+    for m in (b"synthetics.browser.lcp", b"synthetics.browser.cls", b"synthetics.browser.ttfb"):
+        assert m in docs["metrics"]
+    assert b"TypeError: x is undefined" in docs["logs"] and b"10.0.0.9" in docs["logs"]
+    assert PASSWORD.encode() not in b"".join(docs.values())
+
+
+def call_q(tenant, resource, check_id, query):
+    event = {"httpMethod": "GET", "resource": resource, "pathParameters": {"id": check_id}, "queryStringParameters": query,
+             "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant, "email": "x@y.io"}}}}
+    r = synthetics.api(event, None)
+    return r["statusCode"], json.loads(r["body"])
+
+
+def test_browser_function_failure_is_the_checks_failure(aws, monkeypatch):
+    def invoke(**kw):
+        return {"FunctionError": "Unhandled", "Payload": type("P", (), {"read": lambda self: json.dumps(
+            {"errorMessage": f"Task timed out; secret {PASSWORD}"}).encode()})()}
+    monkeypatch.setattr(synthetics, "_lambda", type("L", (), {"invoke": staticmethod(invoke)})())
+    c = synthetics.validate({**browser_settings(), "secret_names": ["password"]})
+    r = synthetics.run_any(c, {"password": PASSWORD})
+    assert not r["ok"] and "the browser could not run" in r["failure"] and PASSWORD not in r["failure"]
+
+
+def test_tick_sends_browser_checks_in_small_batches(aws, monkeypatch):
+    monkeypatch.setattr(synthetics, "MAX_CHECKS", 50)
+    for i in range(12):
+        call("acme", "POST", "/v1/app/checks", {**browser_settings(name=f"b{i}", frequency=1), "secrets": {"password": "x"}})
+    for i in range(3):
+        call("acme", "POST", "/v1/app/checks", settings(name=f"h{i}", frequency=1))
+    invoked = []
+    monkeypatch.setattr(synthetics.boto3, "client", lambda name: type("L", (), {
+        "invoke": lambda self, **kw: invoked.append(json.loads(kw["Payload"]))})())
+    assert synthetics.tick({}, None) == {"due": 15}
+    assert [(len(p["checks"]), {c.get("type", "http") for c in p["checks"]}) for p in invoked] == \
+        [(3, {"http"}), (5, {"browser"}), (5, {"browser"}), (2, {"browser"})]

@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Builds the browser-check image (services/synthetics/Dockerfile: Python + Playwright's headless
+  Chromium, arm64) in CodeBuild and keeps it in ECR, so deploying needs no Docker.
+  infra/deploy-phaseS1.sh deploys this, uploads the source, runs the build and passes the image
+  to obs-phaseS1.
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: obs-synthetics-browser
+      EmptyOnDelete: true          # images are rebuilt from the repo; nothing to keep
+      ImageScanningConfiguration: { ScanOnPush: true }
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: >
+          {"rules": [{"rulePriority": 1, "description": "keep the last 5 images",
+            "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5},
+            "action": {"type": "expire"}}]}
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-synthetics-build
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: codebuild.amazonaws.com }, Action: sts:AssumeRole }
+      Policies:
+        - PolicyName: build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:aws:s3:::obs-artifacts-${AWS::AccountId}-${AWS::Region}/builds/*"
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:InitiateLayerUpload, ecr:UploadLayerPart,
+                         ecr:CompleteLayerUpload, ecr:PutImage, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt BuildLogGroup.Arn
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/codebuild/obs-synthetics-browser, RetentionInDays: 14 }
+
+  Build:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: obs-synthetics-browser
+      Description: Build and push the browser-check image
+      ServiceRole: !GetAtt BuildRole.Arn
+      Source:
+        Type: S3
+        Location: !Sub "obs-artifacts-${AWS::AccountId}-${AWS::Region}/builds/browser.zip"   # overridden per build
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password | docker login --username AWS --password-stdin "${REPOSITORY%%/*}"
+            build:
+              commands:
+                - docker build -t "$REPOSITORY:$IMAGE_TAG" .
+            post_build:
+              commands:
+                - docker push "$REPOSITORY:$IMAGE_TAG"
+      Artifacts: { Type: NO_ARTIFACTS }
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        PrivilegedMode: true       # docker build
+        EnvironmentVariables:
+          - { Name: REPOSITORY, Value: !GetAtt Repository.RepositoryUri }
+          - { Name: IMAGE_TAG, Value: set-per-build }
+      LogsConfig:
+        CloudWatchLogs: { Status: ENABLED, GroupName: !Ref BuildLogGroup }
+      TimeoutInMinutes: 30
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  Project:
+    Value: !Ref Build

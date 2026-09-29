@@ -164,6 +164,25 @@ Resources:
             Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
             Condition:
               ForAnyValue:StringEquals: { "kms:ResourceAliases": alias/obs-checks }
+          - Sid: ImageBuildSource      # CodeBuild reads the browser-check image's source (S1)
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::obs-artifacts-${AWS::AccountId}-${AWS::Region}/builds/*"
+          - Sid: ImageBuildLogin       # ... logs in to ECR (this action has no resource)
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: "*"
+          - Sid: ImageBuildPush        # ... and pushes the image to the platform's own repositories only
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+            Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/obs-*"
           - Sid: PlatformParameters    # e.g. the canary tenant's API key (SecureString)
             Effect: Allow
             Action: ssm:GetParameter

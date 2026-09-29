@@ -164,7 +164,8 @@ def seed_data(tenant):
     for k in (f"_incoming/tenant={tenant}/logs/dt=2026-09-26/hour=10/a.json.gz",
               f"_incoming/_errors/tenant={tenant}/logs/x/dt=2026-09-26/e.gz",
               f"data/tenant={tenant}/logs/dt=2026-09-26/hour=10/service=api/part-1-000.parquet",
-              f"data/tenant={tenant}/traces/_bloom/b.bloom"):
+              f"data/tenant={tenant}/traces/_bloom/b.bloom",
+              f"synthetics/tenant={tenant}/abc123abc123/{'0' * 32}/1.jpg"):
         s3.put_object(Bucket="obs-data-test", Key=k, Body=b"x")
     ddb = boto3.client("dynamodb")
     for pk, sk in ((f"{tenant}#logs#api", "2026-09-26T10:00:00.000000Z#b"), (f"{tenant}#_services#logs", "all"),
@@ -196,9 +197,9 @@ def test_delete_purges_only_that_tenant_and_finishes_after_a_clean_pass(adm, mon
     assert adm.invoked == [{"action": "purge", "tenant": "acme"}]
     assert "being deleted" in call(adm, "create", tenant="acme")["error"]
 
-    assert call(adm, "purge", tenant="acme")["deleted"] == 9
+    assert call(adm, "purge", tenant="acme")["deleted"] == 10
     assert remaining("acme") == ([], [])
-    assert len(remaining("acme-2")[0]) == 4 and len(remaining("acme-2")[1]) == 5
+    assert len(remaining("acme-2")[0]) == 5 and len(remaining("acme-2")[1]) == 5
     # A worker that was mid-flight writes after the first pass...
     boto3.client("s3").put_object(Bucket="obs-data-test", Key="data/tenant=acme/logs/late.parquet", Body=b"x")
     assert call(adm, "sweep")["purging"] == []  # not due yet
@@ -225,7 +226,7 @@ def test_purge_continues_when_out_of_time(adm, monkeypatch):
     short = types.SimpleNamespace(get_remaining_time_in_millis=lambda: 30_000)  # already past the deadline
     out = adm.handler({"action": "purge", "tenant": "acme"}, short)
     assert out["continuing"] is True and adm.invoked == [{"action": "purge", "tenant": "acme", "deleted": 0}]
-    assert call(adm, "purge", tenant="acme", deleted=0)["deleted"] == 9
+    assert call(adm, "purge", tenant="acme", deleted=0)["deleted"] == 10
 
 
 def test_delete_legacy_tenant_without_record(adm):

@@ -1,10 +1,18 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Synthetic HTTP checks (S1): customers set up uptime and API checks in the portal; they run from
+  Synthetic checks (S1): customers set up uptime, API and browser checks in the portal; they run from
   this region on a schedule, and each run becomes the tenant's own telemetry
   (services/synthetics/synthetics.py). obs-synthetics-api serves /v1/app/checks (routed by
   obs-phaseT2), obs-synthetics-tick runs every minute and hands due checks to obs-synthetics-run.
+  Browser checks run in obs-synthetics-browser (a Chromium container image built by
+  obs-phaseS1-build), which has no AWS permissions beyond its own logs: the runner (or the API, for
+  "test" and "run now") decrypts a check's secrets, invokes it, and records the result.
   Deploy with infra/deploy-phaseS1.sh, before obs-phaseT2 (whose routes invoke the API function).
+
+Parameters:
+  BrowserImageUri:
+    Type: String
+    Description: The browser-check image (repository@sha256:digest), from infra/deploy-phaseS1.sh
 
 Resources:
   # Encrypts the secrets of checks (passwords, tokens), each under the context {tenant, check}, so a
@@ -63,6 +71,12 @@ Resources:
               - Effect: Allow     # save secrets; decrypt them for "run now" and "test"
                 Action: [kms:Encrypt, kms:Decrypt]
                 Resource: !GetAtt SecretsKey.Arn
+              - Effect: Allow     # browser checks' "test" and "run now"
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt BrowserFunction.Arn
+              - Effect: Allow     # screenshots: save ("run now"), show (the tenant is checked in code)
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/synthetics/*"
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   # Finds the due checks and hands them to the runner.
@@ -111,6 +125,33 @@ Resources:
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: !GetAtt SecretsKey.Arn
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt BrowserFunction.Arn
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/synthetics/*"
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  # The browser opens customers' pages: it holds nothing but its own logs. (Its credentials are
+  # readable by a page that took over Chromium, so they must be worth nothing.)
+  BrowserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-synthetics-browser
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      Policies:
+        - PolicyName: own-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${BrowserLogGroup.Arn}"
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   ApiLogGroup:
@@ -122,6 +163,9 @@ Resources:
   RunLogGroup:
     Type: AWS::Logs::LogGroup
     Properties: { LogGroupName: /aws/lambda/obs-synthetics-run, RetentionInDays: 14 }
+  BrowserLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/obs-synthetics-browser, RetentionInDays: 14 }
 
   ApiFunction:
     Type: AWS::Lambda::Function
@@ -137,7 +181,13 @@ Resources:
       MemorySize: 512
       Timeout: 28          # under API Gateway's 29 s (a whole check takes at most 25 s)
       Environment:
-        Variables: { TENANTS_TABLE: obs-tenants, RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t-, KMS_KEY: alias/obs-checks }
+        Variables:
+          TENANTS_TABLE: obs-tenants
+          RECORD_COMPRESSION: gzip
+          STREAM_PREFIX: obs-t-
+          KMS_KEY: alias/obs-checks
+          BROWSER_FUNCTION: !Ref BrowserFunction
+          DATA_BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   TickFunction:
@@ -169,9 +219,29 @@ Resources:
       Code: ../services/synthetics/build
       Role: !GetAtt RunRole.Arn
       MemorySize: 512
-      Timeout: 90          # a check takes at most 25 s; a batch runs its checks in parallel
+      Timeout: 150         # an HTTP check takes at most 25 s, a browser check 60 s (+ the browser's start)
       Environment:
-        Variables: { RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t-, KMS_KEY: alias/obs-checks }
+        Variables:
+          RECORD_COMPRESSION: gzip
+          STREAM_PREFIX: obs-t-
+          KMS_KEY: alias/obs-checks
+          BROWSER_FUNCTION: !Ref BrowserFunction
+          DATA_BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  BrowserFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: BrowserLogGroup
+    Properties:
+      FunctionName: obs-synthetics-browser
+      Description: Run one browser check in headless Chromium (no AWS access; results go back to the caller)
+      PackageType: Image
+      Code: { ImageUri: !Ref BrowserImageUri }
+      Architectures: [arm64]
+      Role: !GetAtt BrowserRole.Arn
+      MemorySize: 2048
+      Timeout: 90          # a browser check takes at most 60 s
+      EphemeralStorage: { Size: 1024 }
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   # A batch that fails is not retried: the next scheduled run comes within minutes anyway.
@@ -222,6 +292,24 @@ Resources:
       Namespace: AWS/Lambda
       MetricName: Errors
       Dimensions: [{ Name: FunctionName, Value: !Ref RunFunction }]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  BrowserErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-synthetics-browser-errors
+      AlarmDescription: The browser for browser checks failed to run in 3 of the last 5 minutes (checks report "the browser could not run").
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref BrowserFunction }]
       Statistic: Sum
       Period: 60
       EvaluationPeriods: 5

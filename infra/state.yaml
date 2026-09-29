@@ -59,6 +59,11 @@ Resources:
             Transitions:
               - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
               - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
+          # Browser checks' screenshots (synthetics/tenant=<T>/...): kept 30 days.
+          - Id: synthetics-screenshots
+            Status: Enabled
+            Prefix: synthetics/
+            ExpirationInDays: 30
           - Id: abort-incomplete-uploads
             Status: Enabled
             AbortIncompleteMultipartUpload:

@@ -430,7 +430,8 @@ def purge(tenant, deleted=0, context=None):
         raise Refused(f"{tenant} is not being deleted")
     deadline = time.time() + (context.get_remaining_time_in_millis() / 1000 - 60 if context else 600)
     done = True
-    for prefix in (f"_incoming/tenant={tenant}/", f"_incoming/_errors/tenant={tenant}/", f"data/tenant={tenant}/"):
+    for prefix in (f"_incoming/tenant={tenant}/", f"_incoming/_errors/tenant={tenant}/", f"data/tenant={tenant}/",
+                   f"synthetics/tenant={tenant}/"):    # browser checks' screenshots
         n, finished = _purge_prefix(prefix, deadline)
         deleted += n
         done = done and finished

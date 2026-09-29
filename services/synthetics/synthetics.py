@@ -43,7 +43,6 @@ Checks are items of the obs-tenants registry: pk "check#<tenant>#<id>", attribut
 
 import base64
 import http.client
-import ipaddress
 import json
 import os
 import re
@@ -53,37 +52,52 @@ import ssl
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import boto3
 import regex
 from boto3.dynamodb.conditions import Attr, Key
 
 import ingest
+import safety  # noqa: F401  (tests patch safety.public through it)
+from safety import PLACEHOLDER as _PLACEHOLDER, Refused, mask as _mask, resolve, sub as _sub, target
 
 TABLE = os.environ.get("TENANTS_TABLE", "obs-tenants")
 RUN_FUNCTION = os.environ.get("RUN_FUNCTION", "obs-synthetics-run")
 KMS_KEY = os.environ.get("KMS_KEY", "alias/obs-checks")
 LOCATION = os.environ.get("AWS_REGION", "us-east-1")
 MAX_CHECKS = int(os.environ.get("MAX_CHECKS_PER_TENANT", "20"))
-FREQUENCIES = (1, 5, 15)                        # minutes
+FREQUENCIES = (1, 5, 15, 30, 45, 60)            # minutes
 METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
 MAX_STEPS, MAX_TOTAL_MS, MAX_STEP_MS = 10, 25_000, 20_000   # a whole check fits in an API call ("Test")
 MAX_BODY_READ, MAX_REQUEST_BODY, MAX_REDIRECTS, BODY_SAMPLE = 1 << 20, 16 << 10, 5, 2048
 REGEX_TIMEOUT_S, REGEX_TEXT = 0.2, 256 << 10
 BATCH = 25                                      # checks per runner invocation (run in parallel)
+BROWSER_BATCH = 5                               # browser checks per runner invocation (each waits on a browser)
+BROWSER_FUNCTION = os.environ.get("BROWSER_FUNCTION", "obs-synthetics-browser")
+DATA_BUCKET = os.environ.get("DATA_BUCKET", "")
+BROWSER_MAX_MS, BROWSER_TEST_MS = 60_000, 18_000   # a scheduled browser run; one from the portal (fits an API call)
+BROWSER_ACTIONS = {   # action: (required fields, optional fields)
+    "navigate": (("url",), ()), "click": (("selector",), ()), "hover": (("selector",), ()),
+    "type": (("selector", "text"), ()), "select": (("selector", "value"), ()), "press": (("key",), ("selector",)),
+    "wait_for": (("selector",), ()), "wait": (("ms",), ()), "assert_text": (("text",), ("selector",)),
+    "assert_no_text": (("text",), ()), "assert_element": (("selector",), ()), "assert_url": (("value",), ()),
+    "extract": (("selector", "variable"), ("attribute",)),
+}
+DEVICES, SCREENSHOTS = ("desktop", "mobile"), ("failure", "every_step")
+_KEY = re.compile(r"^(?:(?:Control|Shift|Alt|Meta)\+){0,3}[A-Za-z0-9]{1,12}$")
+_RUN = re.compile(r"^[0-9a-f]{32}$")
 DEFAULT_USER_AGENT = "Leasyd-Synthetics/1.0 (+https://leasyd.com)"
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 _ID = re.compile(r"^[a-z0-9]{12}$")
 _HEADER = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$")
 _VAR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}$")
-_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]{0,39})\}")
 _BLOCKED_HEADERS = {"host", "content-length", "transfer-encoding", "connection", "cookie"}
 _STATUS_TERM = re.compile(r"^(?:([1-5])xx|([1-5]\d\d)\s*-\s*([1-5]\d\d)|(<=|>=|!=|<|>|=)?\s*([1-5]\d\d))$")
 JSON_OPS = ("exists", "equals", "not_equals", "contains", "lt", "gt")
 HEADER_OPS = ("exists", "equals", "contains")
 
-_table = _kms = None
+_table = _kms = _lambda = _s3 = None
 
 
 def table():
@@ -98,8 +112,17 @@ def kms():
     return _kms
 
 
-class Refused(ValueError):
-    """A request we won't carry out (bad input, or an address that isn't public)."""
+def lam():
+    global _lambda
+    from botocore.config import Config
+    _lambda = _lambda or boto3.client("lambda", config=Config(read_timeout=150, retries={"max_attempts": 0}))
+    return _lambda
+
+
+def s3():
+    global _s3
+    _s3 = _s3 or boto3.client("s3")
+    return _s3
 
 
 class StepFailed(Exception):
@@ -127,12 +150,16 @@ def validate(body):
     if not isinstance(body, dict):
         raise Refused("expected a JSON object")
     name = _text(str(body.get("name") or "").strip(), "name", 1, 80)
+    kind = body.get("type") or "http"
+    if kind not in ("http", "browser"):
+        raise Refused("type: http or browser")
     frequency = int(body.get("frequency") or 5)
     if frequency not in FREQUENCIES:
-        raise Refused("frequency: 1, 5 or 15 minutes")
-    timeout_ms = int(body.get("timeout_ms") or 20_000)
-    if not 1000 <= timeout_ms <= MAX_TOTAL_MS:
-        raise Refused(f"timeout_ms (the whole check): 1000-{MAX_TOTAL_MS}")
+        raise Refused(f"frequency: {', '.join(map(str, FREQUENCIES[:-1]))} or {FREQUENCIES[-1]} minutes")
+    most = BROWSER_MAX_MS if kind == "browser" else MAX_TOTAL_MS
+    timeout_ms = int(body.get("timeout_ms") or (30_000 if kind == "browser" else 20_000))
+    if not 1000 <= timeout_ms <= most:
+        raise Refused(f"timeout_ms (the whole check): 1000-{most}")
     variables = body.get("variables") or {}
     if not isinstance(variables, dict) or len(variables) > 20:
         raise Refused("variables: at most 20")
@@ -144,11 +171,68 @@ def validate(body):
     known = set(variables) | set(secret_names)
     out = []
     for i, s in enumerate(steps):
-        step = _validate_step(s, i + 1, known, known - set(variables))
-        known |= {e["name"] for e in step["extract"]}
+        if kind == "browser":
+            step = _validate_browser_step(s, i + 1, known)
+            known |= {step["variable"]} if step["action"] == "extract" else set()
+        else:
+            step = _validate_step(s, i + 1, known, known - set(variables))
+            known |= {e["name"] for e in step["extract"]}
         out.append(step)
-    return {"name": name, "frequency": frequency, "timeout_ms": timeout_ms, "variables": variables,
-            "steps": out, "enabled": bool(body.get("enabled", True))}
+    check = {"type": kind, "name": name, "frequency": frequency, "timeout_ms": timeout_ms, "variables": variables,
+             "steps": out, "enabled": bool(body.get("enabled", True))}
+    if kind == "browser":
+        if out[0]["action"] != "navigate":
+            raise Refused("step 1: a browser check starts by opening a URL (navigate)")
+        device, shots = body.get("device") or "desktop", body.get("screenshots") or "failure"
+        if device not in DEVICES or shots not in SCREENSHOTS:
+            raise Refused(f"device: {' or '.join(DEVICES)}; screenshots: {' or '.join(SCREENSHOTS)}")
+        check.update(device=device, screenshots=shots, verify_tls=bool(body.get("verify_tls", True)))
+    return check
+
+
+def _validate_browser_step(s, n, known):
+    where = f"step {n}"
+    if not isinstance(s, dict):
+        raise Refused(f"{where}: expected an object")
+    action = s.get("action")
+    if action not in BROWSER_ACTIONS:
+        raise Refused(f"{where} action: one of {', '.join(BROWSER_ACTIONS)}")
+    required, optional = BROWSER_ACTIONS[action]
+    step = {"name": _text(str(s.get("name") or f"Step {n}").strip(), f"{where} name", 1, 80), "action": action}
+    for f in required + optional:
+        v = s.get(f)
+        if v in (None, "") and f in optional:
+            continue
+        if f == "ms":
+            v = int(v or 0)
+            if not 1 <= v <= 10_000:
+                raise Refused(f"{where} wait: 1-10000 ms")
+        elif f == "url":
+            v = _text(str(v or "").strip(), f"{where} url", 1, 2048)
+            if not _PLACEHOLDER.search(v.split("://", 1)[-1].split("/", 1)[0]):
+                target(v)                             # a fixed host is checked now; with variables, at run time
+        elif f == "key":
+            v = str(v or "")
+            if not _KEY.match(v):
+                raise Refused(f"{where} key: a key such as Enter, Tab, ArrowDown or Control+A")
+        elif f == "variable":
+            v = _var_name(v, f"{where} variable")
+        elif f == "attribute":
+            v = str(v)
+            if not re.fullmatch(r"[A-Za-z_:][A-Za-z0-9_.:-]{0,63}", v):
+                raise Refused(f"{where} attribute: an attribute name such as href or data-id")
+        else:
+            v = _text(v, f"{where} {f}", 1, 512 if f == "selector" else 1024)
+        step[f] = v
+    timeout = s.get("timeout_ms")
+    if timeout not in (None, ""):
+        if not 100 <= int(timeout) <= 30_000:
+            raise Refused(f"{where} timeout: 100-30000 ms")
+        step["timeout_ms"] = int(timeout)
+    unknown = sorted(set(_PLACEHOLDER.findall(json.dumps([step.get(f) for f in ("url", "text", "value")]))) - known)
+    if unknown:
+        raise Refused(f"{where} uses {', '.join('{' + u + '}' for u in unknown)}: not a variable, secret or earlier extraction")
+    return step
 
 
 def _validate_step(s, n, known, hidden):
@@ -307,54 +391,6 @@ def json_get(doc, path):
     return True, cur
 
 
-# ------------------------------------------------------------------ where a step may go
-
-def target(url):
-    """(scheme, host, port, path) of a URL a check may request; raises Refused."""
-    try:
-        u = urlsplit(url)
-        port = u.port
-    except ValueError:
-        raise Refused("url: not a valid URL")
-    if u.scheme not in ("http", "https") or not u.hostname:
-        raise Refused("url: must start with http:// or https://")
-    if u.username or u.password:
-        raise Refused("url: credentials in the URL are not allowed; use authentication")
-    host = u.hostname.lower().rstrip(".")
-    if host == "localhost" or host.endswith((".localhost", ".internal", ".local")):
-        raise Refused("url: must be a public address")
-    try:   # an IP literal must be public too (names are checked after DNS)
-        literal = ipaddress.ip_address(host)
-    except ValueError:
-        literal = None
-    if literal is not None and not public(literal):
-        raise Refused("url: must be a public address")
-    path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-    return u.scheme, host, port or (443 if u.scheme == "https" else 80), path
-
-
-def public(ip):
-    """Only globally routable unicast addresses (not private, loopback, link-local such as the
-    169.254.169.254 metadata address, carrier-grade NAT, multicast or reserved)."""
-    if ip.version == 6 and ip.ipv4_mapped:
-        ip = ip.ipv4_mapped
-    return ip.is_global and not ip.is_multicast
-
-
-def resolve(host, port):
-    """The addresses to use for host, refusing it if any of them isn't public (a name that also
-    points inside must not be usable to reach inside)."""
-    try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        raise Refused(f"could not resolve {host}")
-    ips = list(dict.fromkeys(i[4][0] for i in infos))
-    for ip in ips:
-        if not public(ipaddress.ip_address(ip.split("%")[0])):
-            raise Refused(f"{host} resolves to a non-public address")
-    return ips
-
-
 # ------------------------------------------------------------------ running a check
 
 def run_check(check, secret_values):
@@ -374,10 +410,6 @@ def run_check(check, secret_values):
     tls = [s["tls_days"] for s in steps if s.get("tls_days") is not None]
     return {"ok": failure is None, "failure": failure, "failed_step": None if failure is None else len(steps) - 1,
             "steps": steps, "total_ms": round(total, 1), "tls_days": min(tls) if tls else None, "started": started}
-
-
-def _sub(text, values):
-    return _PLACEHOLDER.sub(lambda m: str(values[m[1]]) if m[1] in values else m[0], text)
 
 
 def _run_step(step, values, cookies, deadline, masked):
@@ -437,13 +469,6 @@ def _run_step(step, values, cookies, deadline, masked):
         reason = "timed out" if isinstance(e, (socket.timeout, TimeoutError)) else f"{type(e).__name__}: {e}"
     return {"name": step["name"], "ok": False, "failure": _mask(reason[:300], masked), "status": status,
             "url": _mask(url, masked), "timings": t, "tls_days": None, "extracted": [], "started": started, "body_sample": None}
-
-
-def _mask(text, masked):
-    for v in sorted(masked, key=len, reverse=True):
-        if v:
-            text = text.replace(v, "••••")
-    return text
 
 
 def _left(deadline):
@@ -573,6 +598,49 @@ def _extract(e, text, headers):
     return None if not found or v is None else (v if isinstance(v, str) else json.dumps(v))
 
 
+def run_any(check, secret_values, budget_ms=None):
+    """Run a check of either type -> result (never raises)."""
+    if check.get("type") == "browser":
+        return run_browser_check(check, secret_values, budget_ms)
+    return run_check(check, secret_values)
+
+
+def _settings(item):
+    return {k: v for k, v in item.items() if k not in ("pk", "tenant", "secrets", "created_at", "updated_at", "created_by")}
+
+
+def run_browser_check(check, secret_values, budget_ms=None):
+    """Run a browser check in the browser function (browser.py), which has no AWS permissions of
+    its own: it gets this check's settings and decrypted secrets only."""
+    started = time.time()
+    try:
+        resp = lam().invoke(FunctionName=BROWSER_FUNCTION, Payload=json.dumps(
+            {"check": _settings(check), "secrets": secret_values, "budget_ms": budget_ms or check["timeout_ms"]}, default=_json).encode())
+        out = json.loads(resp["Payload"].read() or b"null")
+        if resp.get("FunctionError") or not isinstance(out, dict) or "steps" not in out:
+            raise RuntimeError(out.get("errorMessage", "no result") if isinstance(out, dict) else "no result")
+        return out
+    except Exception as e:  # noqa: BLE001  report it as this check's failure
+        return {"ok": False, "failure": _mask(f"the browser could not run ({type(e).__name__}: {str(e)[:200]})", list(secret_values.values())),
+                "failed_step": None, "steps": [], "total_ms": 0.0, "tls_days": None, "started": started}
+
+
+def screenshot_key(tenant, check_id, run_id, step):
+    return f"synthetics/tenant={tenant}/{check_id}/{run_id}/{int(step)}.jpg"
+
+
+def store_screenshots(tenant, check_id, result):
+    """Save a run's screenshots under the tenant's own prefix (kept 30 days, see the bucket's
+    lifecycle); the step then records that it has one."""
+    result.setdefault("run_id", _secrets.token_hex(16))
+    for i, s in enumerate(result["steps"]):
+        if s.get("screenshot") and DATA_BUCKET:
+            s3().put_object(Bucket=DATA_BUCKET, Key=screenshot_key(tenant, check_id, result["run_id"], i + 1),
+                            Body=base64.b64decode(s["screenshot"]), ContentType="image/jpeg")
+            s["screenshot_saved"] = True
+    return result
+
+
 # ------------------------------------------------------------------ results as telemetry
 
 def _attrs(d):
@@ -594,9 +662,9 @@ def _attrs(d):
 def telemetry(check_id, check, r):
     """-> {signal: OTLP JSON doc} for one run: a trace with a span per step, metrics, a log on failure."""
     start = int(r["started"] * 1e9)
-    trace, root = _secrets.token_hex(16), _secrets.token_hex(8)
+    trace, root = r.get("run_id") or _secrets.token_hex(16), _secrets.token_hex(8)
     resource = {"attributes": _attrs({"service.name": "synthetics", "cloud.region": LOCATION, "synthetics.location": LOCATION})}
-    who = {"check.id": check_id, "check.name": check["name"]}
+    who = {"check.id": check_id, "check.name": check["name"], "check.type": check.get("type", "http")}
     spans, end = [], start
     for i, s in enumerate(r["steps"]):
         s_start = int(s["started"] * 1e9)
@@ -607,7 +675,8 @@ def telemetry(check_id, check, r):
                       "attributes": _attrs({**who, "step.index": i + 1, "step.name": s["name"], "url.full": s["url"],
                                             "http.response.status_code": s["status"], "step.result": "pass" if s["ok"] else "fail",
                                             "step.failure": s["failure"], "step.extracted": ",".join(s["extracted"]) or None,
-                                            **{f"step.{k}": float(v) for k, v in s["timings"].items()}}),
+                                            **{f"step.{k}": float(v) for k, v in s["timings"].items()},
+                                            **_browser_attrs(s)}),
                       "status": {} if s["ok"] else {"code": 2, "message": s["failure"]}})
     first = r["steps"][0] if r["steps"] else {"url": check["steps"][0]["url"], "status": None}
     spans.insert(0, {"traceId": trace, "spanId": root, "name": check["name"], "kind": 1,
@@ -627,6 +696,11 @@ def telemetry(check_id, check, r):
                 {**who, "step.index": i + 1, "step.name": s["name"]}) for i, s in enumerate(r["steps"]) if "total_ms" in s["timings"]]
     if r.get("tls_days") is not None:
         points.append(("synthetics.check.tls_days_remaining", "d", "Days until the soonest TLS certificate expires", float(r["tls_days"]), who))
+    for i, s in enumerate(r["steps"]):
+        for key, (metric, unit, desc) in VITALS.items():
+            v = (s.get("vitals") or {}).get(key)
+            if v is not None:
+                points.append((metric, unit, desc, float(v), {**who, "step.index": i + 1, "step.name": s["name"]}))
     by_name = {}
     for n, u, d, v, a in points:
         by_name.setdefault((n, u, d), []).append({"timeUnixNano": now, "asDouble": v, "attributes": _attrs(a)})
@@ -637,12 +711,34 @@ def telemetry(check_id, check, r):
         body = f"Check {check['name']!r} failed at {r['failure']}"
         if failed.get("body_sample"):
             body += f"\n--- response (first {BODY_SAMPLE} bytes) ---\n{failed['body_sample']}"
+        for key, title in (("console_errors", "browser console errors"), ("http_errors", "responses with errors"),
+                           ("failed_requests", "failed requests"), ("blocked", "blocked (not public)")):
+            if failed.get(key):
+                body += f"\n--- {title} ---\n" + "\n".join(failed[key])
         docs["logs"] = {"resourceLogs": [{"resource": resource, "scopeLogs": [{"scope": {"name": "leasyd.synthetics"}, "logRecords": [{
             "timeUnixNano": now, "severityNumber": 17, "severityText": "ERROR", "traceId": trace, "spanId": root,
             "body": {"stringValue": body},
             "attributes": _attrs({**who, "step.name": failed.get("name"), "url.full": failed.get("url"),
                                   "http.response.status_code": failed.get("status")})}]}]}]}
     return docs
+
+
+VITALS = {   # browser step vitals -> metrics
+    "ttfb_ms": ("synthetics.browser.ttfb", "ms", "Time to first byte of the page"),
+    "fcp_ms": ("synthetics.browser.fcp", "ms", "First contentful paint"),
+    "lcp_ms": ("synthetics.browser.lcp", "ms", "Largest contentful paint"),
+    "cls": ("synthetics.browser.cls", "1", "Cumulative layout shift"),
+    "load_ms": ("synthetics.browser.load", "ms", "Time until the page's load event"),
+}
+
+
+def _browser_attrs(s):
+    if "action" not in s:
+        return {}
+    return {"step.action": s["action"], "step.screenshot": bool(s.get("screenshot_saved")) or None,
+            "step.console_errors": len(s.get("console_errors") or []) or None, "step.http_errors": len(s.get("http_errors") or []) or None,
+            "step.blocked": ",".join(s.get("blocked") or []) or None,
+            **{f"step.{k}": float(v) for k, v in (s.get("vitals") or {}).items() if v is not None}}
 
 
 def record(tenant, check_id, check, result):
@@ -749,7 +845,7 @@ def api(event, context):
             plain = {**(decrypt_secrets(tenant, body["id"], saved.get("secrets")) if saved else {}),
                      **{k: v for k, v in (body.get("secrets") or {}).items() if v is not None}}
             check = validate({**body, "secret_names": list(plain)})
-            return _http(200, {"result": _view_result(run_check(check, plain))})
+            return _http(200, {"result": _view_result(run_any(check, plain, BROWSER_TEST_MS))})
         item = get_check(tenant, check_id)
         if item is None:
             return _http(404, {"error": "no such check"})
@@ -765,9 +861,19 @@ def api(event, context):
             table().delete_item(Key={"pk": item["pk"]})
             return _http(200, {"deleted": check_id})
         if resource == "/v1/app/checks/{id}/run" and method == "POST":
-            result = run_check(item, decrypt_secrets(tenant, check_id, item.get("secrets")))
-            record(tenant, check_id, item, result)
+            result = run_any(item, decrypt_secrets(tenant, check_id, item.get("secrets")), BROWSER_TEST_MS)
+            record(tenant, check_id, item, store_screenshots(tenant, check_id, result))
             return _http(200, {"result": _view_result(result)})
+        if resource == "/v1/app/checks/{id}/screenshot" and method == "GET":
+            q = event.get("queryStringParameters") or {}
+            run_id, step = str(q.get("run") or ""), str(q.get("step") or "")
+            if not _RUN.match(run_id) or not step.isdigit() or not 1 <= int(step) <= MAX_STEPS:
+                raise Refused("run (a run's trace id) and step (1-10)")
+            try:
+                obj = s3().get_object(Bucket=DATA_BUCKET, Key=screenshot_key(tenant, check_id, run_id, step))
+            except s3().exceptions.NoSuchKey:
+                return _http(404, {"error": "no screenshot for that run and step (they are kept 30 days)"})
+            return _http(200, {"image": base64.b64encode(obj["Body"].read()).decode(), "content_type": "image/jpeg"})
     except Refused as e:
         return _http(400, {"error": str(e)})
     return _http(404, {"error": "unknown route"})
@@ -793,11 +899,14 @@ def tick(event, context):
         if "LastEvaluatedKey" not in page:
             break
         kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
-    lam = boto3.client("lambda")
-    for i in range(0, len(items), BATCH):
-        lam.invoke(FunctionName=RUN_FUNCTION, InvocationType="Event",
-                   Payload=json.dumps({"checks": items[i:i + BATCH]}, default=_json).encode())
-    print(json.dumps({"minute": minute, "due": len(items)}))
+    client = boto3.client("lambda")
+    http_ = [i for i in items if i.get("type", "http") != "browser"]
+    browser_ = [i for i in items if i.get("type") == "browser"]
+    for group, size in ((http_, BATCH), (browser_, BROWSER_BATCH)):
+        for i in range(0, len(group), size):
+            client.invoke(FunctionName=RUN_FUNCTION, InvocationType="Event",
+                          Payload=json.dumps({"checks": group[i:i + size]}, default=_json).encode())
+    print(json.dumps({"minute": minute, "due": len(items), "browser": len(browser_)}))
     return {"due": len(items)}
 
 
@@ -813,8 +922,8 @@ def run(event, context):
             result = {"ok": False, "failure": f"could not decrypt the check's secrets ({type(e).__name__})", "failed_step": None,
                       "steps": [], "total_ms": 0.0, "tls_days": None, "started": time.time()}
         else:
-            result = run_check(item, plain)
-        record(tenant, check_id, item, result)
+            result = run_any(item, plain)
+        record(tenant, check_id, item, store_screenshots(tenant, check_id, result))
         return {"tenant": tenant, "check": check_id, "ok": result["ok"], "ms": result["total_ms"]}
     with ThreadPoolExecutor(max(1, len(checks))) as pool:
         out = list(pool.map(one, checks))

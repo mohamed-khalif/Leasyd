@@ -413,6 +413,10 @@ Resources:
     Type: AWS::ApiGateway::Resource
     Condition: Logins
     Properties: { RestApiId: !Ref Api, ParentId: !Ref CheckResource, PathPart: run }
+  CheckScreenshotResource:   # a browser check's screenshot: ?run=<trace id>&step=<n>
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref CheckResource, PathPart: screenshot }
 
   ChecksMethod:
     Type: AWS::ApiGateway::Method
@@ -470,6 +474,20 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api/invocations"
         TimeoutInMillis: 29000
+  CheckScreenshotMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref CheckScreenshotResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api/invocations"
+        TimeoutInMillis: 29000
 
   ChecksApiPermission:
     Type: AWS::Lambda::Permission
@@ -482,20 +500,20 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV5:
+  DeploymentV6:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, QueryMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV5
+      DeploymentId: !Ref DeploymentV6
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"
