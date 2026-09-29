@@ -67,6 +67,7 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/*"
                   - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/*"
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/synthetics/*"   # browser checks' screenshots
               - Sid: ApiKeys
                 Effect: Allow
                 Action: [apigateway:GET, apigateway:POST, apigateway:PATCH, apigateway:PUT, apigateway:DELETE]
