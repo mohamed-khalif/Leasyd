@@ -71,7 +71,7 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
                       <span style={{ color: color(s.service) }}>{s.service}</span> <span className="muted">{s.name}</span>
                     </div>
                     <div className="wf-track">
-                      <div className="wf-bar" style={{ left: `${left}%`, width: `${width}%`, background: s.status === "STATUS_CODE_ERROR" ? "var(--sev-error)" : color(s.service) }} />
+                      <div className="wf-bar" style={{ left: `${left}%`, width: `${width}%`, background: isError(s.status) ? "var(--sev-error)" : color(s.service) }} />
                       <span className="wf-dur" style={left + width > 80 ? { right: `${100 - left + 0.5}%` } : { left: `calc(${left + width}% + 6px)` }}>{fmtMs(s.dur)}</span>
                     </div>
                   </div>
@@ -109,6 +109,9 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
     </>
   );
 }
+
+/** OTLP span status: stored as its number (2 = error); older data may hold the enum name. */
+export const isError = (status?: string) => status === "2" || status === "STATUS_CODE_ERROR";
 
 /** Spans in tree order (parents before children, siblings by start time) with their depth. */
 function layout(rows: Record<string, unknown>[]): Span[] {
