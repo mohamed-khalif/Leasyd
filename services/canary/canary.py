@@ -9,6 +9,11 @@ Each run, for logs and traces:
 An alarm on three consecutive misses means data is not becoming searchable
 within ~2 minutes, whatever the cause (ingest, Firehose, fast lane, index,
 lookup). The API key is read from SSM (SecureString KEY_PARAM).
+
+Each run also sends metrics about itself (so the metrics path is exercised,
+and the canary tenant's metrics explorer shows real data): canary.runs (a
+cumulative counter), canary.ingest.duration (a gauge: how long each send
+took, per signal) and canary.ingest.latency (a delta histogram of the same).
 """
 
 import hashlib
@@ -48,6 +53,32 @@ def record(signal, minute, now_ns):
         "startTimeUnixNano": str(now_ns), "endTimeUnixNano": str(now_ns + 1_000_000)}]}]}]}
 
 
+RUNS_SINCE_MINUTE = 29_280_000   # 2025-09-02: canary.runs counts minutes since then (one run a minute)
+
+
+def metrics(minute, now_ns, durations_ms):
+    """One OTLP JSON request: the canary's own metrics. durations_ms: {signal: send time in ms}."""
+    res = {"attributes": [{"key": "service.name", "value": {"stringValue": SERVICE}}]}
+    def point(**kw):
+        return {"timeUnixNano": str(now_ns), **kw}
+    def by_signal(s):
+        return [{"key": "signal", "value": {"stringValue": s}}]
+    ms = list(durations_ms.values())
+    return {"resourceMetrics": [{"resource": res, "scopeMetrics": [{"scope": {"name": "canary"}, "metrics": [
+        {"name": "canary.runs", "description": "Canary runs", "unit": "{run}", "sum": {
+            "aggregationTemporality": 2, "isMonotonic": True, "dataPoints": [point(
+                startTimeUnixNano=str(RUNS_SINCE_MINUTE * 60 * 10**9), asInt=str(minute - RUNS_SINCE_MINUTE))]}},
+        {"name": "canary.ingest.duration", "description": "Time to send one record to the ingest endpoint",
+         "unit": "ms", "gauge": {"dataPoints": [point(asDouble=d, attributes=by_signal(s)) for s, d in durations_ms.items()]}},
+        {"name": "canary.ingest.latency", "description": "Time to send one record to the ingest endpoint",
+         "unit": "ms", "histogram": {"aggregationTemporality": 1, "dataPoints": [point(
+             startTimeUnixNano=str(now_ns - 60 * 10**9), count=str(len(ms)), sum=sum(ms),
+             min=min(ms, default=0), max=max(ms, default=0),
+             bucketCounts=[str(sum(1 for d in ms if lo < d <= hi)) for lo, hi in zip([-1, 50, 100, 250, 500], [50, 100, 250, 500, 1e12])],
+             explicitBounds=[50, 100, 250, 500])]}},
+    ]}]}]}
+
+
 def _api_key():
     global _key
     if _key is None:
@@ -80,14 +111,20 @@ def handler(event, context):
     now = time.time()
     minute = int(now // 60)
     lam, cw = boto3.client("lambda"), boto3.client("cloudwatch")
-    result, data = {}, []
+    result, data, durations = {}, [], {}
     for signal in ("logs", "traces"):
+        t0 = time.perf_counter()
         status = _send(signal, record(signal, minute, time.time_ns()))
+        durations[signal] = round((time.perf_counter() - t0) * 1000, 1)
         missing = 0 if _found(lam, signal, minute - CHECK_AFTER_MIN) else 1
         result[signal] = {"sent": status, "missing": missing}
         dims = [{"Name": "signal", "Value": signal}]
         data += [{"MetricName": "CanaryMissing", "Dimensions": dims, "Value": missing},
                  {"MetricName": "CanarySendFailed", "Dimensions": dims, "Value": 0 if status == 200 else 1}]
+    status = _send("metrics", metrics(minute, time.time_ns(), durations))
+    result["metrics"] = {"sent": status}
+    data.append({"MetricName": "CanarySendFailed", "Dimensions": [{"Name": "signal", "Value": "metrics"}],
+                 "Value": 0 if status == 200 else 1})
     cw.put_metric_data(Namespace="obs", MetricData=data)
     print(json.dumps({"minute": minute, **result}))
     return result
