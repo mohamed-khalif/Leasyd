@@ -32,6 +32,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | One-command up/down (`infra/up.sh`, `infra/down.sh`); data in `obs-state` survives a down | P1 | written, not yet run: this account still has the old stack layout (the full down/up was postponed) |
 | Metrics explorer: every metric with its type; charts per kind (gauge avg/max/min/p95, counter rate per second from cumulative or delta points, histogram average and rate), split by service or any attribute. Query engine: `increase` aggregate (reset-aware, stitched across workers) | M1 | live; checked on AWS: a known counter sent through ingest reads back exactly (0.70/s, restart handled), histogram average and gauge exact; real load-test data split over 12 deployed workers equals 1 worker |
 | Demo tenant `leasyd-demo`: live, realistic shop telemetry every minute (`obs-demo`), 24 h backfill; the canary also sends metrics | D1 | live: 24 h backfilled (4,320 requests, all accepted), 12 services, ~670k spans, 264k logs, 143k metric points a day; queries 2.6-3.5 s |
+| Query engine: workers planned by file count too (a week of small files: 27 s -> 6 s, 1.7 s warm); counter increases never split inside a time overlap (was +7% on some days) | M1 | live; checked on the demo week against the generator's exact totals: every day equal |
 | Alerting on customer data, billing | - | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
