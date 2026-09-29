@@ -51,6 +51,7 @@ fi
 # ---- compute stacks, newest first (each depends only on stacks deleted after it)
 empty_bucket "obs-web-${ACCOUNT}-${REGION}"
 delete_stack obs-phaseT6          # test tools
+delete_stack obs-phaseD1          # demo tenant data
 delete_stack obs-phaseW1          # web app (CloudFront takes 5-15 minutes)
 delete_stack obs-phaseT7
 delete_stack obs-phaseT5

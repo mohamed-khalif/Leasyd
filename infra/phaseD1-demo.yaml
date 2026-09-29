@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Demo tenant data (D1): obs-demo sends a realistic online shop's traces, logs and metrics for the
+  "leasyd-demo" tenant through the real ingest endpoint every minute (services/demo/demo.py), so
+  the product can be shown with live data. Deploy with infra/deploy-phaseD1.sh, which also creates
+  the tenant, keeps its key in SSM and backfills the last 24 hours on the first run. About 50 MB a
+  day at peak traffic: cents a day.
+
+Parameters:
+  IngestEndpoint:
+    Type: String
+    Description: OTLP/HTTP base URL (obs-phaseT2 output IngestEndpoint).
+  KeyParameter:
+    Type: String
+    Default: /obs/demo/api-key
+  State:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: DISABLED pauses the demo data (the tenant and its history stay).
+
+Resources:
+  DemoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-demo
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: demo
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${KeyParameter}"
+              - Effect: Allow          # backfill: one async invocation per hour of history
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-demo"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: D1 }
+
+  DemoLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-demo
+      RetentionInDays: 7
+
+  DemoFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: DemoLogGroup
+    Properties:
+      FunctionName: obs-demo
+      Description: Demo tenant data (a realistic online shop), every minute
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: demo.handler
+      Code: ../services/demo/build
+      Role: !GetAtt DemoRole.Arn
+      MemorySize: 512
+      Timeout: 900
+      Environment:
+        Variables:
+          INGEST_ENDPOINT: !Ref IngestEndpoint
+          KEY_PARAM: !Ref KeyParameter
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: D1 }
+
+  # Backfill invocations are asynchronous: don't retry a failed hour (the next run would repeat it).
+  DemoInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref DemoFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+  DemoSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-demo-schedule
+      Description: Send the previous minute of demo data
+      ScheduleExpression: rate(1 minute)
+      State: !Ref State
+      Targets:
+        - Id: demo
+          Arn: !GetAtt DemoFunction.Arn
+
+  DemoSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DemoFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DemoSchedule.Arn
+
+Outputs:
+  DemoFunction:
+    Value: !Ref DemoFunction

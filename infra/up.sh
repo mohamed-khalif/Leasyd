@@ -7,6 +7,7 @@
 #   ALERT_EMAIL=you@example.com infra/up.sh   where alarms and budget alerts go (first run; kept after)
 #   DOMAIN=leasyd.com infra/up.sh           also the product's domain (see infra/deploy-dns.sh)
 #   TEST_TOOLS=1 infra/up.sh                also the load generator and Athena workgroup (dev accounts)
+#   DEMO=1 infra/up.sh                      also the "leasyd-demo" tenant's live demo data (obs-phaseD1)
 #
 # infra/down.sh takes it down again. Tenants, keys, data and logins live in obs-state and survive
 # a down/up: the "restore" step below reconnects them to the recreated API.
@@ -57,6 +58,11 @@ step "canary and alarms (obs-phaseT7)"
 infra/deploy-phaseT7.sh --no-fail-on-empty-changeset
 step "web app (obs-phaseW1)"
 infra/deploy-phaseW1.sh --no-fail-on-empty-changeset
+
+if [[ -n "${DEMO:-}" ]] || exists obs-phaseD1; then
+  step "demo tenant data (obs-phaseD1)"
+  infra/deploy-phaseD1.sh --no-fail-on-empty-changeset
+fi
 
 if [[ -n "${TEST_TOOLS:-}" ]]; then
   step "test tools: load generator and Athena (obs-phase1, obs-phaseT6)"

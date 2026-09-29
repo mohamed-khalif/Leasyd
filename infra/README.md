@@ -26,6 +26,7 @@ workgroup, for dev accounts). On a first run, confirm the alarm subscription ema
 | `obs-phaseT2`, `T5`, `T7` | ingest API, tenant operations, canary and alarms | deleted | deleted |
 | `obs-phaseW1` | web app (S3 + CloudFront) | deleted | deleted |
 | `obs-phase1`, `obs-phaseT6` | test tools (`TEST_TOOLS=1`) | deleted | deleted |
+| `obs-phaseD1` | live demo data for the `leasyd-demo` tenant (`DEMO=1`) | deleted | deleted |
 
 Outside CloudFormation, by design: each tenant's Firehose streams and API keys (made by the tenant
 admin Lambda when a tenant is created) and the canary's key (SSM `/obs/canary/api-key`). `down.sh`
@@ -502,3 +503,17 @@ infra/tenant.sh invite-user <tenant> <your email>    # a login; the email has a 
 
 Local work without AWS: `cd services/web && npm install && npm run mock` (a seeded fake backend,
 no sign-in) at http://localhost:5173. Placeholder prices for Usage & Cost: `services/web/src/pricing.ts`.
+
+## Phase D1: demo tenant
+
+`obs-demo` (`services/demo/demo.py`) sends a realistic online shop's telemetry for the `leasyd-demo`
+tenant through the real ingest endpoint every minute: a dozen services calling each other (one
+trace per request), logs tied to spans, metrics of every kind, daily traffic, ~3% declined
+payments and a 12-minute shipping incident every 3 hours. About 50 MB a day at peak.
+
+```bash
+infra/deploy-phaseD1.sh                             # first run: tenant, key in SSM, 24 h backfill
+infra/tenant.sh invite-user leasyd-demo <email>     # a login to look at it
+BACKFILL_HOURS=6 infra/deploy-phaseD1.sh            # backfill again (e.g. after a pause)
+infra/deploy-phaseD1.sh --parameter-overrides State=DISABLED   # pause
+```
