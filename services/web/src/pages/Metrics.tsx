@@ -55,10 +55,11 @@ function MetricList({ ctx }: { ctx: Ctx }) {
         <input className="input grow mono" placeholder="Filter metrics by name…" value={filter} onChange={(e) => setFilter(e.target.value)}
                aria-label="Filter metrics" />
       </div>
-      <Panel title="Metrics" flush right={list.data && <span className="faint">{rows.length} metrics · click one to chart it</span>}>
+      <Panel title="Metrics" flush
+             right={list.data && <span className="faint">{rows.length} metrics · open one to chart it, filter by service and split by attribute</span>}>
         <Loads q={list} empty={!rows.length} height={240}>
           {() => <RankTable head={["metric", "type", "unit", "services", "data points"]} numCols={2} maxHeight={640}
-                            rows={rows.map((r) => [String(r.metric_name), typeLabel(info(r)), unitLabel(String(r.unit ?? "")) || "—",
+                            rows={rows.map((r) => [<span className="link">{String(r.metric_name)} ›</span>, typeLabel(info(r)), unitLabel(String(r.unit ?? "")) || "—",
                                                    fmtNum(services.get(String(r.metric_name)) ?? 0), fmtNum(Number(r.count))])}
                             onRow={(i) => ctx.go(`/metrics?m=${encodeURIComponent(String(rows[i].metric_name))}`)} />}
         </Loads>
