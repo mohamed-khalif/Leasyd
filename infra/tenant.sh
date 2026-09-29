@@ -4,6 +4,9 @@
 #   infra/tenant.sh create <tenant> [standard|test-tiny]  streams + first API key (key printed once, on stdout)
 #   infra/tenant.sh rotate <tenant> [grace-hours]         new key (stdout); old keys work for grace-hours (default 24)
 #   infra/tenant.sh read-key <tenant>                     an extra key that may only query (POST /v1/query), shown once
+#   infra/tenant.sh invite-user <tenant> <email>          a person who signs in to the product; emailed a temporary password
+#   infra/tenant.sh remove-user <tenant> <email>          sign them out everywhere and delete the login
+#   infra/tenant.sh users <tenant>                        the tenant's users
 #   infra/tenant.sh revoke <tenant> [key-id]              refuse one key, or all of the tenant's keys
 #   infra/tenant.sh delete <tenant>                       refuse all keys, delete streams, purge all data and index
 #   infra/tenant.sh tune <tenant> <buffer-seconds>        Firehose buffer before a file is written (default 30;
@@ -52,6 +55,15 @@ case "$cmd" in
     admin "{\"action\":\"read-key\",\"tenant\":\"${tenant}\"}"
     echo "read key id $(field "['key_id']") (may only query; fully active within ~10 minutes). api key (shown once):" >&2
     field "['api_key']"
+    ;;
+  invite-user)
+    admin "{\"action\":\"invite-user\",\"tenant\":\"${tenant}\",\"email\":\"${3:?email}\"}"; pretty
+    ;;
+  remove-user)
+    admin "{\"action\":\"remove-user\",\"tenant\":\"${tenant}\",\"email\":\"${3:?email}\"}"; pretty
+    ;;
+  users)
+    admin "{\"action\":\"users\",\"tenant\":\"${tenant}\"}"; pretty
     ;;
   revoke)
     if [[ -n "${3:-}" ]]; then admin "{\"action\":\"revoke\",\"tenant\":\"${tenant}\",\"key_id\":\"$3\"}"

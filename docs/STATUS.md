@@ -24,6 +24,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Fast lane writes Parquet; per-tenant Firehose buffer (`tune`) | T6 | live, tested at 50 GB/h: freshness p99 38 s, queries pass |
 | Failure visibility: fast-lane dead-letter queue + redrive, compaction/ingest/query alarms, freshness canary | T7 | live, each alarm proven by an injected failure |
 | Customer query API: `POST /v1/query` with read-scoped keys (`infra/tenant.sh read-key`) | Q1 | live, tested on AWS (`infra/query-api-test.py`) |
+| Customer logins: Cognito users per tenant (invite/remove), `/v1/app/me`, `/v1/app/query` | U1 | live, tested on AWS (`infra/login-test.py`) |
 | Faults, soak | T6 | crash safety covered by tests and a real stuck-chunk recovery; soak not run |
 | UI, alerting on customer data | 6+ | not started |
 
@@ -58,6 +59,8 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 - A new API key is accepted by some API Gateway nodes and refused (403) by others for up to ~10
   minutes (measured 2026-09-28; ~1 min earlier the same day). Existing keys are unaffected. Fix if it
   matters: enforce per-tenant rate limits in the authorizer instead of API Gateway usage plans.
+- Invitation emails use Cognito's built-in sender (~50/day); move to Amazon SES before real volume.
+- `/v1/app/*` (signed-in users) has no per-tenant rate limit, only the stage throttle.
 - Queries over 29 s time out at API Gateway (504). Today: 2-4 s. Fix when needed: asynchronous
   queries (job id, poll for the result).
 

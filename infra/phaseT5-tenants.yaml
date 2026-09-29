@@ -12,6 +12,10 @@ Parameters:
     Description: obs-phaseT2 output StandardPlanId (deploy-phaseT5.sh passes it).
   TestTinyPlanId:
     Type: String
+  UserPoolId:
+    Type: String
+    Default: ""
+    Description: obs-phaseU1 output UserPoolId (customer logins); empty = no invite-user.
   SettleMinutes:
     Type: Number
     Default: 20
@@ -83,6 +87,11 @@ Resources:
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-firehose"
                 Condition:
                   StringEquals: { "iam:PassedToService": firehose.amazonaws.com }
+              - Sid: UserLogins     # invite-user / remove-user, and tenant deletion
+                Effect: Allow
+                Action: [cognito-idp:AdminCreateUser, cognito-idp:AdminDeleteUser,
+                         cognito-idp:AdminUserGlobalSignOut]
+                Resource: !Sub "arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*"
               - Sid: ContinuePurge
                 Effect: Allow
                 Action: lambda:InvokeFunction
@@ -119,6 +128,7 @@ Resources:
           FIREHOSE_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-firehose"
           USAGE_PLANS: !Sub '{"standard": "${StandardPlanId}", "test-tiny": "${TestTinyPlanId}"}'
           SETTLE_MINUTES: !Ref SettleMinutes
+          USER_POOL_ID: !Ref UserPoolId
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T5" }

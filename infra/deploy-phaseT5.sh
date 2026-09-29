@@ -7,6 +7,8 @@ cd "$(dirname "$0")/.."
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 t2() { aws cloudformation describe-stacks --stack-name obs-phaseT2 \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+u1() { aws cloudformation describe-stacks --stack-name obs-phaseU1 \
+  --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
 
 infra/build-tenants.sh
 aws cloudformation package \
@@ -16,4 +18,5 @@ aws cloudformation package \
 aws cloudformation deploy --stack-name obs-phaseT5 \
   --template-file infra/phaseT5-tenants.packaged.yaml \
   --capabilities CAPABILITY_NAMED_IAM --tags project=obs phase=T5 \
-  --parameter-overrides "StandardPlanId=$(t2 StandardPlanId)" "TestTinyPlanId=$(t2 TestTinyPlanId)" "$@"
+  --parameter-overrides "StandardPlanId=$(t2 StandardPlanId)" "TestTinyPlanId=$(t2 TestTinyPlanId)" \
+                        "UserPoolId=$(u1 UserPoolId)" "$@"
