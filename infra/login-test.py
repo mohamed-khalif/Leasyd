@@ -106,7 +106,7 @@ def main():
         claims["custom:tenant"] = a.other
         forged = ".".join([head, base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("="), sig])
         status, _, _ = call(f"{endpoint}/v1/app/query", "POST", forged, q)
-        check(status == 401, f"token edited to claim {a.other} -> {status}")
+        check(status in (401, 403), f"token edited to claim {a.other} -> refused ({status})")
         status, _, _ = call(f"{endpoint}/v1/app/me", headers={"x-api-key": "obs_notauserkey"})
         check(status == 401, f"API key instead of a login -> {status}")
 

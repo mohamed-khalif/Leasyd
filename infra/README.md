@@ -436,6 +436,7 @@ Deploy: attach `infra/iam/deployer-phaseU1.json` to `obs-deployer`; Phase 0 with
 
 ```bash
 infra/deploy-phaseU1.sh
+infra/deploy-phase4.sh --parameter-overrides BytesPerWorker=67108864   # obs-query-api: tenant from the login
 infra/deploy-phaseT2.sh      # adds /v1/app/* (reads the pool from obs-phaseU1)
 infra/deploy-phaseT5.sh      # tenant admin: invite-user / remove-user / users
 python3 infra/login-test.py
