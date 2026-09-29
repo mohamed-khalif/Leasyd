@@ -24,7 +24,8 @@ workgroup, for dev accounts). On a first run, confirm the alarm subscription ema
 | `obs-phase0` | IAM roles and boundary, artifacts bucket, budget | deleted | deleted |
 | `obs-phase2`, `3`, `4` | compaction and fast lane, index lookups, query engine and API | deleted | deleted |
 | `obs-phaseT2`, `T5`, `T7` | ingest API, tenant operations, canary and alarms | deleted | deleted |
-| `obs-phaseS1` | synthetic HTTP checks (scheduler, runner, portal API) | deleted | deleted |
+| `obs-phaseS1` | synthetic checks (scheduler, runner, browser, portal API) | deleted | deleted |
+| `obs-phaseS1-build` | the browser-check image (ECR, CodeBuild) | deleted | deleted |
 | `obs-phaseW1` | web app (S3 + CloudFront) | deleted | deleted |
 | `obs-phase1`, `obs-phaseT6` | test tools (`TEST_TOOLS=1`) | deleted | deleted |
 | `obs-phaseD1` | live demo data for the `leasyd-demo` tenant (`DEMO=1`) | deleted | deleted |
@@ -519,37 +520,67 @@ BACKFILL_HOURS=6 infra/deploy-phaseD1.sh            # backfill again (e.g. after
 infra/deploy-phaseD1.sh --parameter-overrides State=DISABLED   # pause
 ```
 
-## Phase S1: synthetic HTTP checks
+## Phase S1: synthetic checks (HTTP and browser)
 
-Customers set up checks in the portal (Monitoring > Synthetics). A check is 1-10 HTTP requests
-("steps") run in order every 1, 5 or 15 minutes from us-east-1; the first failing step ends the run.
+Customers set up checks in the portal (Monitoring > Synthetics). A check is 1-10 steps run in
+order every 1, 5, 15, 30, 45 or 60 minutes from us-east-1; the first failing step ends the run.
+At most 20 checks per tenant (`obs-tenants` items `check#<tenant>#<id>`).
 
+**HTTP checks** (`services/synthetics/synthetics.py`): each step is a request.
 - Variables: `{name}` in a step's URL, headers, body, auth or constraint values, from the check's
   variables, its secrets, or values extracted by earlier steps (JSON path such as
   `data.items[0].id`, a regex's first group, or a response header). Cookies carry over.
 - Auth: basic or bearer; the password or token must be a secret or an extracted value.
-- Secrets: encrypted with the KMS key `alias/obs-checks` under the context `{tenant, check}` (a
-  ciphertext only decrypts for its own check), write-only in the API, masked in every result.
 - Constraints: status (`<400`, `2xx`, `3xx, 404, 406-410, >=500`), response time, body contains /
   not contains / regex (time-limited), header, JSON value, TLS certificate days left. Options:
   follow redirects, accept any certificate, don't record the response when it fails.
-- Results are the tenant's own telemetry: a trace per run (the check, a span per step; service
-  `synthetics`), metrics `synthetics.check.success` / `duration`, `synthetics.step.duration`,
-  `synthetics.check.tls_days_remaining`, and an ERROR log when it fails (first 2 KB of the
-  response, secrets and extracted values masked).
-- `obs-synthetics-api` serves `/v1/app/checks` (routed by `obs-phaseT2`, Cognito: the tenant is the
-  user's). Checks are `obs-tenants` items `check#<tenant>#<id>`, at most 20 per tenant.
-  `obs-synthetics-tick` (every minute) hands due checks to `obs-synthetics-run` in batches.
-- Safety: only public addresses are requested (each step's final URL is resolved and that address
-  used; private, loopback, link-local such as 169.254.169.254 and other non-public addresses are
-  refused, redirects and variables included). No customer code runs. The runner's role can only
-  decrypt check secrets and put records on tenant streams.
+
+**Browser checks** (`services/synthetics/browser.py`): headless Chromium (Playwright) in one tab.
+- Steps: open a URL (fails on a 4xx/5xx page), click, hover, type (variables and secrets), choose
+  an option, press a key, wait for an element, wait, check text is / isn't shown, check an element,
+  check the URL, save an element's text or attribute as `{name}`. Elements by CSS selector or
+  `text=...`; each step waits up to 15 s (settable) for its element. Whole check: up to 60 s
+  (18 s for "Test" and "Run now", which must fit an API call).
+- Desktop (1366x768) or mobile (390x844, touch). Screenshots when a step fails, or after every
+  step: JPEGs under `synthetics/tenant=<T>/<check>/<run>/<step>.jpg` in the data bucket, kept 30
+  days, deleted with the tenant, shown through `GET /v1/app/checks/{id}/screenshot?run=&step=`.
+- Per page opened: first byte, first and largest contentful paint, load, layout shift; console
+  errors, responses with errors, failed and blocked requests, reported with the step.
+- `obs-synthetics-browser` is a container image (`services/synthetics/Dockerfile`, arm64) built by
+  CodeBuild (`obs-phaseS1-build`, ECR `obs-synthetics-browser`); `deploy-phaseS1.sh` rebuilds it
+  only when its source changes (about 5 minutes).
+
+**Results** are the tenant's own telemetry: a trace per run (the check, a span per step; service
+`synthetics`; trace id = run id), metrics `synthetics.check.success` / `duration`,
+`synthetics.step.duration`, `synthetics.check.tls_days_remaining`, `synthetics.browser.ttfb` /
+`fcp` / `lcp` / `load` / `cls`, and an ERROR log when it fails (first 2 KB of the response, or the
+browser's errors; secrets and extracted values masked).
+
+**Functions**: `obs-synthetics-api` serves `/v1/app/checks` (routed by `obs-phaseT2`, Cognito: the
+tenant is the user's). `obs-synthetics-tick` (every minute) hands due checks to
+`obs-synthetics-run` in batches (25 HTTP, 5 browser); for a browser check the runner decrypts its
+secrets and invokes `obs-synthetics-browser`, then records the result.
+
+**Safety**
+- Only public addresses. HTTP: each step's final URL is resolved and that address used; private,
+  loopback, link-local (169.254.169.254) and other non-public addresses are refused, redirects and
+  variables included. Browser: every connection the page makes (page, images, scripts, XHR,
+  WebSockets) goes through a proxy inside the browser function that does the same check;
+  Chromium sends loopback through it too, and QUIC and non-proxied WebRTC are off.
+- Secrets: encrypted with the KMS key `alias/obs-checks` under the context `{tenant, check}` (a
+  ciphertext only decrypts for its own check), write-only in the API, masked in every result
+  (in screenshots, fields and text showing one are painted over).
+- No customer code runs (browser steps are a fixed list of actions). The browser function's role
+  can only write its own logs: Chromium runs without its sandbox in Lambda, so a page that took it
+  over must find nothing worth taking. After each run every other process is killed and /tmp
+  emptied. The runner's role can decrypt check secrets, put records on tenant streams, invoke the
+  browser and save screenshots; the API's can also read them.
 
 ```bash
 aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
-  --capabilities CAPABILITY_NAMED_IAM      # the boundary now allows the checks' KMS key
-infra/deploy-phaseS1.sh      # before T2: the API routes invoke obs-synthetics-api
-infra/deploy-phaseT2.sh      # adds /v1/app/checks
-infra/deploy-phaseT5.sh      # deleting a tenant removes its checks
+  --capabilities CAPABILITY_NAMED_IAM      # boundary: the checks' KMS key and the image build
+infra/deploy-phaseS1.sh      # before T2: builds the browser image, then the functions
+infra/deploy-phaseT2.sh      # /v1/app/checks routes (and .../screenshot)
+infra/deploy-phaseT5.sh      # deleting a tenant removes its checks and screenshots
 infra/deploy-phaseW1.sh      # the Synthetics pages
 ```

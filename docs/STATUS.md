@@ -34,6 +34,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Demo tenant `leasyd-demo`: live, realistic shop telemetry every minute (`obs-demo`), 24 h backfill; the canary also sends metrics | D1 | live: 24 h backfilled (4,320 requests, all accepted), 12 services, ~670k spans, 264k logs, 143k metric points a day; queries 2.6-3.5 s |
 | Query engine: workers planned by file count too (a week of small files: 27 s -> 6 s, 1.7 s warm); counter increases never split inside a time overlap (was +7% on some days) | M1 | live; checked on the demo week against the generator's exact totals: every day equal |
 | Synthetic HTTP checks, configured by customers in the portal: 1-10 steps, variables, values captured from responses (JSON path, regex, header) for later steps, headers, basic/bearer auth, KMS-encrypted secrets, assertions; every 1/5/15 min from us-east-1; each run is the tenant's own trace, metrics and (on failure) an ERROR log | S1 | live; checked on AWS 2026-09-29: a 3-step login flow ran every minute (run now + 7 scheduled, all passed, ~0.4 s); another tenant got 404 on every route and saw no data; 7 internal-address tricks refused (metadata IP, 10.x, localhost, ::1, DNS name to 169.254, redirect inside, decimal IP); a secret echoed back 4 times came out masked, and no secret appears in the stored check or telemetry. Found and fixed: request bodies arrive base64-encoded (`5a596d6`) |
+| Browser checks: headless Chrome goes through the customer's site (open, click, type, choose, press, wait, check text/element/URL, save values); page speed (first byte, paints, load, layout shift), console and request errors, screenshots (on failure or every step, 30 days); desktop or mobile. Its own Lambda (container image built by CodeBuild) with no AWS access; every connection the page makes must go to a public address. Checks run every 1/5/15/30/45/60 min | S1 | built and tested locally (real Chromium: login journey, 5 ways to reach inside refused and a control proving the test catches leaks, masking, HTTPS; the image run under Lambda's emulator read-only as a non-root user); not yet deployed |
 | Alerting on customer data (incl. failing checks), billing | - | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
@@ -45,7 +46,7 @@ Everything is CloudFormation, brought up and taken down by one command each (`in
 `infra/down.sh`; see `infra/README.md`). `obs-state` holds data, tenants and logins and survives a
 plain `down.sh`; `obs-dns` holds the domain and is never deleted by the scripts. The rest is compute:
 `obs-phase0`, `obs-phase2`, `obs-phase3`, `obs-phase4`, `obs-phaseT2`, `obs-phaseT5`, `obs-phaseT7`,
-`obs-phaseW1`, `obs-phaseS1` (synthetics), `obs-phaseD1` (demo), plus test tools `obs-phase1` and `obs-phaseT6` (`TEST_TOOLS=1`). `up.sh`/`down.sh`
+`obs-phaseW1`, `obs-phaseS1` (synthetics) and `obs-phaseS1-build` (browser image), `obs-phaseD1` (demo), plus test tools `obs-phase1` and `obs-phaseT6` (`TEST_TOOLS=1`). `up.sh`/`down.sh`
 need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 1000.
 
 ## Key results (details in the plan)
