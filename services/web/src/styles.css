@@ -239,3 +239,6 @@ a:hover { text-decoration: underline; }
 .signin-card .input { padding: 9px 11px; }
 .signin-card .btn { justify-content: center; padding: 9px; }
 .form-error { color: var(--sev-error); font-size: 12.5px; }
+.form-note { color: var(--text-2); font-size: 12.5px; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; align-self: center; }
+.linkbtn:hover { text-decoration: underline; }
