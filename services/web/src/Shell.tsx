@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMoon, IconOut, IconRefresh, IconSun, IconTraces } from "./icons";
+import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconRefresh, IconSun, IconTraces } from "./icons";
 import { RANGES, Range } from "./time";
 
 type Props = {
@@ -28,6 +28,7 @@ export function Shell(p: Props) {
         <div className="nav-section">Explore</div>
         {link("/logs", "Logs", <IconLogs />, p.path.startsWith("/logs"))}
         {link("/traces", "Traces", <IconTraces />, p.path.startsWith("/traces"))}
+        {link("/metrics", "Metrics", <IconMetrics />, p.path.startsWith("/metrics"))}
         <div className="nav-foot">
           <div className="whoami" title={p.user.email}>{p.user.email}<div className="faint mono">{p.user.tenant}</div></div>
           <button className="btn ghost" onClick={p.onSignOut}><IconOut />Sign out</button>

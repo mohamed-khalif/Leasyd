@@ -149,7 +149,8 @@ export function Insights({ ctx }: { ctx: Ctx }) {
 
       <h2 className="section-title">Metrics</h2>
       <div className="grid">
-        <TopTable ctx={ctx} title="Top 20: Metrics by data points" signal="metrics" by={["metric_name", "service"]} head={["metric", "service", "points"]} span={7} />
+        <TopTable ctx={ctx} title="Top 20: Metrics by data points" signal="metrics" by={["metric_name", "service"]} head={["metric", "service", "points"]} span={7}
+                  onRow={(r) => ctx.go(`/metrics?m=${encodeURIComponent(String(r.metric_name))}&service=${encodeURIComponent(String(r.service))}`)} />
         <RatePanel ctx={ctx} title="Data point rate by service" signal="metrics" by="service" span={5} />
       </div>
     </>

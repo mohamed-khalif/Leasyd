@@ -253,3 +253,105 @@ def test_time_buckets_make_a_time_series(data, monkeypatch):
     with pytest.raises(query.BadQuery, match="time bucket"):
         query.compile_query({"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T01:00:00Z",
                              "group_by": ["ts:7"]})
+
+
+# ------------------------------------------------------------------ counters (metrics "increase")
+
+def metric_points(minute):
+    """One minute of points every 10 s: a cumulative counter per route (/a restarts at 5:00), a delta
+    counter, a gauge and a cumulative histogram. -> {(metric, route): [(ts_ns, value)]}, the OTLP doc."""
+    pts, a_start = {}, 100
+    for k in range(6):
+        i = minute * 6 + k
+        ts = H10 + i * 10 * 10**9
+        a = a_start + 5 * i if i < 30 else 3 + 5 * (i - 30)        # /a restarts from zero at 10:05:00
+        pts.setdefault(("reqs", "/a"), []).append((ts, a))
+        pts.setdefault(("reqs", "/b"), []).append((ts, 2 * i))
+        pts.setdefault(("jobs", None), []).append((ts, 4))
+        pts.setdefault(("mem", None), []).append((ts, 1000 + i))
+        pts.setdefault(("latency", None), []).append((ts, 10 * i))  # histogram count
+    def dp(ts, route=None, **kw):
+        return {"timeUnixNano": str(ts), "startTimeUnixNano": str(H10),
+                "attributes": [{"key": "route", "value": {"stringValue": route}}] if route else [], **kw}
+    metrics = [
+        {"name": "reqs", "sum": {"aggregationTemporality": 2, "isMonotonic": True, "dataPoints":
+            [dp(t, r, asInt=str(v)) for r in ("/a", "/b") for t, v in pts[("reqs", r)]]}},
+        {"name": "jobs", "sum": {"aggregationTemporality": 1, "isMonotonic": True, "dataPoints":
+            [dp(t, asInt=str(v)) for t, v in pts[("jobs", None)]]}},
+        {"name": "mem", "gauge": {"dataPoints": [dp(t, asDouble=v) for t, v in pts[("mem", None)]]}},
+        {"name": "latency", "histogram": {"aggregationTemporality": 2, "dataPoints":
+            [dp(t, count=str(v), sum=25.0 * v, bucketCounts=[str(v)], explicitBounds=[]) for t, v in pts[("latency", None)]]}},
+    ]
+    doc = {"resourceMetrics": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
+                                "scopeMetrics": [{"scope": {"name": "m"}, "metrics": metrics}]}]}
+    return pts, doc
+
+
+@pytest.fixture
+def counters(aws, monkeypatch):  # noqa: F811
+    """10 minutes of metrics: minutes 0-4 compacted to Parquet, 5-9 in fast-lane files (one per minute)."""
+    handler, lookup = aws
+    series = {}
+    for m in range(10):
+        pts, doc = metric_points(m)
+        for k, v in pts.items():
+            series.setdefault(k, []).extend(v)
+        key = f"_incoming/tenant=acme/metrics/dt={DAY}/hour=10/m{m}.json.gz"
+        boto3.client("s3").put_object(Bucket="obs-data-test", Key=key, Body=gzip.compress(json.dumps(doc).encode()))
+        if m == 4:
+            hour = {"tenant": "acme", "signal": "metrics", "dt": DAY, "hour": "10"}
+            for b in handler.dispatcher({"plan_only": hour}, ctx(0))["planned"]:
+                handler.worker({**hour, "batch_id": b}, ctx(1))
+        elif m > 4:
+            handler.recent_indexer({"detail": {"object": {"key": key}}}, None)
+    monkeypatch.setattr(query, "lookup", lookup)
+    return series
+
+
+def expected_rise(series, metric, route, bucket_s=60, cumulative=True):
+    out, prev = {}, None
+    for ts, v in series[(metric, route)]:
+        rise = v if not cumulative else (None if prev is None else (v - prev if v >= prev else v))
+        prev = v
+        if rise is not None:
+            b = time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime(ts // 10**9 // bucket_s * bucket_s))
+            out[b] = out.get(b, 0) + rise
+    return out
+
+
+def test_counter_increase_per_minute_matches_any_number_of_workers(counters, monkeypatch):
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1)   # one worker per file: series cross workers
+    q = dict(signal="metrics", where=[{"field": "metric_name", "op": "=", "value": "reqs"}],
+             group_by=["ts:60", "attributes.route"], aggs=[{"fn": "increase", "field": "value"}], limit=10000)
+    one, many = run(workers=1, **q), run(workers=8, **q)
+    assert many["stats"]["workers"] > 1 and one["stats"]["workers"] == 1
+    assert sorted(one["rows"]) == sorted(many["rows"])
+    for route in ("/a", "/b"):
+        got = {r[0]: r[2] for r in many["rows"] if r[1] == route}
+        assert got == expected_rise(counters, "reqs", route)
+    # /a restarted: the minute of the restart still counts its rise (3 + 5 * 5), not a negative jump
+    assert {r[0]: r[2] for r in many["rows"] if r[1] == "/a"}["2026-09-26T10:05:00.000000Z"] == 3 + 5 * 5
+
+
+def test_delta_counters_gauges_and_histograms(counters, monkeypatch):
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1)
+    def per_minute(metric, field="value", fn="increase"):
+        out = run(signal="metrics", workers=8, where=[{"field": "metric_name", "op": "=", "value": metric}],
+                  group_by=["ts:60"], aggs=[{"fn": fn, "field": field}], limit=10000)
+        return {r[0]: r[1] for r in out["rows"]}
+    assert per_minute("jobs") == expected_rise(counters, "jobs", None, cumulative=False)   # 6 points x 4 a minute
+    assert set(per_minute("mem").values()) == {None}                                       # a gauge has no increase
+    assert per_minute("mem", fn="avg")["2026-09-26T10:01:00.000000Z"] == 1000 + 8.5        # points 6..11
+    assert per_minute("latency", "count") == expected_rise(counters, "latency", None)
+    assert per_minute("latency", "sum") == {b: 25.0 * v for b, v in expected_rise(counters, "latency", None).items()}
+    with pytest.raises(query.BadQuery, match="increase"):
+        query.compile_query({"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T01:00:00Z",
+                             "aggs": [{"fn": "increase", "field": "value"}]})
+
+
+def test_contiguous_chunks_follow_time_order(monkeypatch):
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1000)
+    files = [{"file_path": f"s3://b/{i}", "size_bytes": s, "min_ts": f"2026-09-26T10:0{i}:00Z"}
+             for i, s in enumerate([900, 100, 500, 400, 300])]
+    chunks = query.plan_chunks(files, 8, contiguous=True)
+    assert [[f["file_path"][-1] for f in c] for c in chunks] == [["0"], ["1", "2"], ["3", "4"]]

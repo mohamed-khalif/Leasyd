@@ -18,7 +18,12 @@ Fields: a column of the signal's table (e.g. severity_number, body, name,
 duration_ns, metric_name, value), or attributes.<key> / resource.<key>.
 Ops: = != < <= > >= in contains exists. Aggregates: count, sum, min, max,
 avg, p50, p90, p95, p99 (percentiles from a log-bucket histogram, ~2.5%
-relative error, so they merge exactly across workers).
+relative error, so they merge exactly across workers), and for metrics
+increase (of value, count or sum): how much a counter went up. A delta point
+counts as it is; a cumulative point counts its rise since the series' previous
+point (a drop means the counter restarted from zero, so the whole value counts).
+A series is one metric of one service with one set of attributes and resource
+attributes. Divide by the bucket length for a rate per second.
 
 The query is never SQL from the caller: fields are checked against the
 signal's columns and every value is a bound parameter.
@@ -72,7 +77,9 @@ COLUMNS = {
                 "temporality", "is_monotonic", "value", "count", "sum", "min", "max", "flags", "scope_name"},
 }
 OPS = {"=": "=", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
-AGGS = {"count", "sum", "min", "max", "avg", "p50", "p90", "p95", "p99"}
+AGGS = {"count", "sum", "min", "max", "avg", "p50", "p90", "p95", "p99", "increase"}
+INCREASE_FIELDS = {"value", "count", "sum"}   # metrics columns a counter's rise can be taken of
+DELTA, CUMULATIVE = 1, 2                       # metrics "temporality" (OTLP AggregationTemporality)
 _ATTR_KEY = re.compile(r"^[A-Za-z0-9_.\-/:]{1,128}$")
 
 lam = boto3.client("lambda", config=botocore.config.Config(
@@ -119,8 +126,11 @@ def _num(expr):
     return f"TRY_CAST({expr} AS DOUBLE)"
 
 
-def compile_query(q):
-    """-> (sql, params, kind) for a worker. kind: "search" or "aggregate"."""
+def compile_query(q, edges=False):
+    """-> (sql, params, kind) for a worker. kind: "search" or "aggregate".
+    edges: instead (sql, params) of each counter series' first and last point in the worker's
+    files, for increase queries (None otherwise): merge() adds the rise between one worker's
+    last point and the next worker's first, which neither worker sees."""
     signal = q.get("signal", "logs")
     if signal not in COLUMNS:
         raise BadQuery(f"unknown signal {signal!r}")
@@ -164,6 +174,7 @@ def compile_query(q):
         return f"SELECT * FROM t WHERE {where_sql} ORDER BY ts DESC LIMIT {limit}", params, "search"
 
     aggs = q.get("aggs") or [{"fn": "count"}]
+    increases = []   # per-point rises, computed before grouping (they need each series' previous point)
     group_params, groups = [], []
     for g in q.get("group_by") or []:
         groups.append(_time_bucket(g) or _field(signal, g, group_params))
@@ -174,6 +185,12 @@ def compile_query(q):
             raise BadQuery(f"unknown aggregate {fn!r}; one of {sorted(AGGS)}")
         if fn == "count":
             select.append(f"count(*) AS a{i}")
+            continue
+        if fn == "increase":
+            if signal != "metrics" or a.get("field") not in INCREASE_FIELDS:
+                raise BadQuery(f"increase is for metrics, of one of {sorted(INCREASE_FIELDS)}")
+            increases.append(f"{_increase(_field(signal, a['field'], []))} AS _inc{i}")
+            select.append(f"sum(_inc{i}) AS a{i}")
             continue
         field_params = []
         x = _num(_field(signal, a.get("field"), field_params))
@@ -188,10 +205,41 @@ def compile_query(q):
         select += parts
         # The field appears several times; bind its parameters each time.
         agg_params += field_params * sum(p.count(x) for p in parts)
+    if edges:
+        if not increases:
+            return None
+        cols = [f"{SERIES} AS s", "min(ts) AS first_ts", "max(ts) AS last_ts"]
+        cols += [f"arg_min({g}, ts) AS g{j}" for j, g in enumerate(groups)]
+        for i, a in enumerate(aggs):
+            if a.get("fn") == "increase":
+                x = _num(_field(signal, a["field"], []))
+                cols += [f"arg_min({x}, ts) AS f{i}", f"arg_max({x}, ts) AS l{i}"]
+        return (f"SELECT {', '.join(cols)} FROM t WHERE {where_sql} AND temporality = {CUMULATIVE} GROUP BY 1",
+                group_params + params)
     group_sql = f" GROUP BY {', '.join(str(i + 1) for i in range(len(groups)))}" if groups else ""
-    sql = f"SELECT {', '.join(select)} FROM t WHERE {where_sql}{group_sql}"
+    source = f"t WHERE {where_sql}"
+    if increases:
+        source = f"(SELECT *, {', '.join(increases)} FROM t WHERE {where_sql})"
+    sql = f"SELECT {', '.join(select)} FROM {source}{group_sql}"
     # Parameters in text order: SELECT (groups, then aggs), then WHERE.
     return sql, group_params + agg_params + params, "aggregate"
+
+
+SERIES = "concat_ws('|', service, metric_name, attributes::VARCHAR, resource_attributes::VARCHAR)"
+
+
+def _rise(x, prev):
+    """A cumulative counter's rise from prev to x; a drop means it restarted from zero."""
+    return x - prev if x >= prev else x
+
+
+def _increase(x):
+    """SQL: how much counter column x rose at each point (NULL for gauges and a series' first point)."""
+    x = _num(x)
+    prev = f"lag({x}) OVER (PARTITION BY {SERIES} ORDER BY ts)"
+    return (f"CASE WHEN temporality = {DELTA} THEN {x} "
+            f"WHEN temporality = {CUMULATIVE} THEN CASE WHEN {prev} IS NULL THEN NULL "
+            f"WHEN {x} >= {prev} THEN {x} - {prev} ELSE {x} END END")
 
 
 def _naive(ts):
@@ -267,11 +315,16 @@ def run_worker(event):
             cur = con.execute(sql, params)
             cols = [d[0] for d in cur.description]
             rows = cur.fetchmany(MAX_ROWS + 1)
+            edges = compile_query(q, edges=True) if kind == "aggregate" else None
+            if edges:
+                cur = con.execute(*edges)
+                edges = {"columns": [d[0] for d in cur.description],
+                         "rows": [[_jsonable(v) for v in r] for r in cur.fetchall()]}
             scanned = con.execute("SELECT count(*) FROM t").fetchone()[0] if event.get("count_scanned") else None
         finally:
             con.close()
         return {"kind": kind, "columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:MAX_ROWS]],
-                "truncated": len(rows) > MAX_ROWS,
+                "truncated": len(rows) > MAX_ROWS, **({"edges": edges} if edges else {}),
                 "stats": {"files": len(files), "read_mode": mode,
                           "bytes": sum(os.path.getsize(p) for _, p in local) + ranges.bytes_read,
                           "range_requests": ranges.requests,
@@ -401,7 +454,10 @@ def run(q, invoke_worker=None):
     found = lookup.lookup(tenant=q["tenant"], start=q["start"], end=q["end"], signal=q.get("signal", "logs"),
                           services=q.get("services"), match=q.get("match"))
     t_lookup = time.perf_counter()
-    chunks = plan_chunks(found["files"], int(q.get("workers", MAX_WORKERS)))
+    # A counter's rise is taken between consecutive points, so each worker needs an unbroken
+    # stretch of time: otherwise the rise over a stretch another worker holds is counted twice.
+    contiguous = any(a.get("fn") == "increase" for a in q.get("aggs") or [])
+    chunks = plan_chunks(found["files"], int(q.get("workers", MAX_WORKERS)), contiguous)
     invoke_worker = invoke_worker or _invoke_worker
     if len(chunks) <= 1:
         partials = [run_worker({"query": q, "files": chunks[0] if chunks else []})]
@@ -422,13 +478,22 @@ def run(q, invoke_worker=None):
     return result
 
 
-def plan_chunks(files, max_workers):
-    """Split files into <= max_workers chunks of similar total size (largest first)."""
+def plan_chunks(files, max_workers, contiguous=False):
+    """Split files into <= max_workers chunks of similar total size (largest first). contiguous:
+    each chunk is instead a run of files in time order (by min_ts), cut at about equal sizes."""
     files = sorted({f["file_path"]: f for f in files}.values(), key=lambda f: -f["size_bytes"])
     if not files:
         return []
     total = sum(f["size_bytes"] for f in files)
     n = max(1, min(max_workers, MAX_WORKERS, len(files), math.ceil(total / TARGET_BYTES_PER_WORKER)))
+    if contiguous:
+        chunks, size = [[]], 0
+        for f in sorted(files, key=lambda f: (f.get("min_ts", ""), f["file_path"])):
+            if chunks[-1] and size >= total * len(chunks) / n and len(chunks) < n:
+                chunks.append([])
+            chunks[-1].append(f)
+            size += f["size_bytes"]
+        return chunks
     bins = [[0, []] for _ in range(n)]
     for f in files:
         b = min(bins, key=lambda x: x[0])
@@ -485,12 +550,13 @@ def merge(q, partials):
                         continue
                     if acc[i] is None:
                         acc[i] = v
-                    elif fn in ("count", "sum"):
+                    elif fn in ("count", "sum", "increase"):
                         acc[i] += v
                     elif fn == "min":
                         acc[i] = min(acc[i], v)
                     elif fn == "max":
                         acc[i] = max(acc[i], v)
+    _stitch(groups, aggs, partials, merged)
     rows = []
     for key, acc in merged.items():
         out = list(key)
@@ -509,6 +575,28 @@ def merge(q, partials):
         rows.sort(key=lambda r: (r[i] is None, r[i] or 0))
     cols = list(groups) + [a["fn"] if a["fn"] == "count" else f"{a['fn']}({a.get('field')})" for a in aggs]
     return {"columns": cols, "rows": rows[:min(int(q.get("limit", 100)), MAX_ROWS)]}
+
+
+def _stitch(groups, aggs, partials, merged):
+    """Counters: add each series' rise between consecutive workers (partials are in time order,
+    see plan_chunks), to the group of the later worker's first point."""
+    inc = [i for i, a in enumerate(aggs) if a["fn"] == "increase"]
+    last = {}   # series -> (ts, {agg index: value}) of its latest point so far
+    for p in partials:
+        e = p.get("edges")
+        if not e:
+            continue
+        idx = {c: i for i, c in enumerate(e["columns"])}
+        for r in e["rows"]:
+            s = r[idx["s"]]
+            if s in last and r[idx["first_ts"]] > last[s][0]:
+                acc = merged.setdefault(tuple(r[idx[f"g{j}"]] for j in range(len(groups))), [None] * len(aggs))
+                for i in inc:
+                    x, prev = r[idx[f"f{i}"]], last[s][1][i]
+                    if x is not None and prev is not None:
+                        acc[i] = (acc[i] or 0) + _rise(x, prev)
+            if s not in last or r[idx["last_ts"]] > last[s][0]:
+                last[s] = (r[idx["last_ts"]], {i: r[idx[f"l{i}"]] for i in inc})
 
 
 def _percentile(hist, p):

@@ -15,8 +15,6 @@ const OPS: Record<string, string[]> = {
   payment: ["oteldemo.PaymentService/Charge", "charge"],
   shipping: ["oteldemo.ShippingService/GetQuote", "oteldemo.ShippingService/ShipOrder"],
 };
-const METRICS = ["http.server.request.duration", "rpc.server.duration", "process.runtime.memory", "db.client.connections.usage",
-  "kafka.consumer.lag", "system.cpu.utilization", "jvm.gc.duration", "http.client.request.duration"];
 const MESSAGES = [
   ["INFO", 9, "request completed"], ["INFO", 9, "cart updated for user"], ["INFO", 9, "order placed successfully"],
   ["DEBUG", 5, "cache hit for product catalog"], ["DEBUG", 5, "resolved 12 recommendations"],
@@ -46,6 +44,7 @@ function answer(q: Q) {
     * (q.signal === "logs" ? Object.keys(sevShare).filter(sevOk).reduce((a, s) => a + sevShare[s], 0) : 1)
     * (text ? 0.04 : 1);
 
+  if (q.signal === "metrics") return metrics(q, t0, t1, svcs);
   if (q.search) return search(q, r, t0, t1, svcs, sevOk, text);
 
   const by = q.group_by ?? [];
@@ -81,8 +80,83 @@ function values(g: string, _q: Q, t0: number, t1: number, svcs: string[], sevOk:
   if (g === "severity_text") return [["INFO", .72], ["DEBUG", .14], ["WARN", .09], ["ERROR", .05]].filter(([s]) => sevOk(String(s))).map(([v, s]) => ({ value: v, share: Number(s) }));
   if (g === "kind") return [["SPAN_KIND_SERVER", .46], ["SPAN_KIND_CLIENT", .38], ["SPAN_KIND_INTERNAL", .12], ["SPAN_KIND_PRODUCER", .04]].map(([v, s]) => ({ value: v, share: Number(s) }));
   if (g === "name") return Object.values(OPS).flat().map((v, i) => ({ value: v, share: 1 / (i + 2) / 3 }));
-  if (g === "metric_name") return METRICS.map((v, i) => ({ value: v, share: 1 / (i + 1.5) / 2.2 }));
   return [{ value: null, share: 1 }];
+}
+
+// ------------------------------------------------------------------ metrics
+
+type Def = { name: string; type: string; temporality: number | null; mono: boolean | null; unit: string; base: number;
+  svcs: string[]; description: string };
+const DEFS: Def[] = [
+  { name: "http.server.request.duration", type: "histogram", temporality: 2, mono: null, unit: "ms", base: 38,
+    svcs: ["frontend", "checkout", "cart", "product-catalog"], description: "Duration of HTTP server requests" },
+  { name: "http.server.requests", type: "sum", temporality: 2, mono: true, unit: "{request}", base: 42,
+    svcs: ["frontend", "checkout", "cart", "product-catalog"], description: "HTTP requests handled" },
+  { name: "rpc.server.duration", type: "histogram", temporality: 1, mono: null, unit: "ms", base: 12,
+    svcs: ["checkout", "payment", "shipping", "currency"], description: "Duration of inbound RPCs" },
+  { name: "system.cpu.utilization", type: "gauge", temporality: null, mono: null, unit: "1", base: 0.42,
+    svcs: SERVICES.slice(0, 8), description: "CPU in use, 0-1" },
+  { name: "process.runtime.memory", type: "sum", temporality: 2, mono: false, unit: "MiBy", base: 310,
+    svcs: SERVICES.slice(0, 8), description: "Memory in use by the runtime" },
+  { name: "kafka.consumer.lag", type: "gauge", temporality: null, mono: null, unit: "{message}", base: 1200,
+    svcs: ["accounting", "fraud-detection"], description: "Messages behind the head of the partition" },
+  { name: "db.client.connections.usage", type: "sum", temporality: 2, mono: false, unit: "{connection}", base: 14,
+    svcs: ["cart", "product-catalog", "accounting"], description: "Connections in use" },
+  { name: "jvm.gc.duration", type: "histogram", temporality: 1, mono: null, unit: "s", base: 0.018,
+    svcs: ["ad", "fraud-detection"], description: "Time spent in garbage collection" },
+];
+const ATTRS: Record<string, string[]> = {
+  "attributes.http.route": ["/api/cart", "/api/checkout", "/api/products", "/api/recommendations"],
+  "attributes.http.request.method": ["GET", "POST"],
+  "resource.host.name": ["ip-10-1-4-17", "ip-10-1-9-201", "ip-10-1-22-8"],
+};
+
+function metrics(q: Q, t0: number, t1: number, svcs: string[]) {
+  const name = q.where?.find((w) => w.field === "metric_name")?.value;
+  const defs = DEFS.filter((d) => !name || d.name === name);
+  if (q.search) {
+    const rows = defs.flatMap((d) => d.svcs.filter((s) => svcs.includes(s)).slice(0, 3).map((svc, i) => ({
+      ts: new Date(t1 - i * 10000).toISOString(), service: svc, metric_name: d.name, metric_type: d.type, unit: d.unit,
+      description: d.description, value: d.base, attributes: { "http.route": ATTRS["attributes.http.route"][i], "http.request.method": "GET" },
+      resource_attributes: { "service.name": svc, "host.name": ATTRS["resource.host.name"][i % 3] },
+    }))).slice(0, q.search!.limit);
+    const cols = rows.length ? Object.keys(rows[0]) : ["ts"];
+    return { columns: cols, rows: rows.map((x) => cols.map((c) => (x as Record<string, unknown>)[c])) };
+  }
+  const by = q.group_by ?? [], aggs = q.aggs ?? [{ fn: "count" }];
+  const tsg = by.find((g) => g.startsWith("ts:")), b = tsg ? Number(tsg.slice(3)) : (t1 - t0) / 1000;
+  const times = tsg ? Array.from({ length: Math.floor((t1 - t0) / 1000 / b) + 1 }, (_, i) => (Math.floor(t0 / 1000 / b) + i) * b * 1000) : [t0];
+  const attrKey = by.find((g) => ATTRS[g]);
+  const groups = new Map<string, { key: unknown[]; vals: number[][] }>();
+  for (const d of defs) for (const svc of d.svcs.filter((s) => svcs.includes(s))) for (const t of times)
+    for (const [ai, av] of (attrKey ? ATTRS[attrKey] : [null]).entries()) {
+      const h = (SERVICES.indexOf(svc) + 1) * (ai + 1.7);
+      const wave = 1 + 0.18 * Math.sin(t / 1.8e6 + h) + 0.07 * Math.sin(t / 2.3e5 + h * 3);
+      const level = d.base * (0.6 + (h % 1.3)) * wave, share = attrKey ? 1 / ATTRS[attrKey].length : 1;
+      const vals = aggs.map((a) => {
+        if (a.fn === "count") return Math.round((b / 10) * share);
+        if (a.fn === "increase" && a.field === "count") return level * 0.9 * b * share;          // histogram: observations
+        if (a.fn === "increase" && a.field === "sum") return level * 0.9 * b * share * d.base * wave;
+        if (a.fn === "increase") return level * b * share;                                         // counter
+        if (a.field === "sum") return d.base * 40;
+        if (a.field === "count") return 40;
+        return a.fn === "max" ? level * 1.25 : a.fn === "min" ? level * 0.8 : a.fn === "p95" ? level * 1.15 : level;
+      });
+      const key = by.map((g) => g === "metric_name" ? d.name : g === "metric_type" ? d.type : g === "temporality" ? d.temporality
+        : g === "is_monotonic" ? d.mono : g === "unit" ? d.unit : g === "service" ? svc
+        : g.startsWith("ts:") ? new Date(t).toISOString().replace("Z", "000Z") : g === attrKey ? av : null);
+      const k = JSON.stringify(key);
+      if (!groups.has(k)) groups.set(k, { key, vals: [] });
+      groups.get(k)!.vals.push(vals);
+    }
+  const rows = [...groups.values()].map(({ key, vals }) => [...key, ...aggs.map((a, i) => {
+    const xs = vals.map((v) => v[i]);
+    if (a.fn === "count" || a.fn === "increase") return xs.reduce((x, y) => x + y, 0);
+    if (a.fn === "max") return Math.max(...xs);
+    if (a.fn === "min") return Math.min(...xs);
+    return xs.reduce((x, y) => x + y, 0) / xs.length;
+  })]);
+  return { columns: [...by, ...aggs.map((a) => (a.fn === "count" ? "count" : `${a.fn}(${a.field})`))], rows: rows.slice(0, q.limit ?? 100) };
 }
 
 function search(q: Q, r: () => number, t0: number, t1: number, svcs: string[], sevOk: (s: string) => boolean, text: string) {

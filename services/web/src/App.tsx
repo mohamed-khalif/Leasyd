@@ -9,6 +9,7 @@ import { Insights } from "./pages/Insights";
 import { Usage } from "./pages/Usage";
 import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
+import { Metrics } from "./pages/Metrics";
 import { RANGES, Range } from "./time";
 
 export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
@@ -47,6 +48,9 @@ export function App() {
     const id = path.split("/")[2];
     page = <Traces ctx={ctx} traceId={id} />;
     crumb = ["Traces", id ? `${id.slice(0, 16)}…` : "Explorer"];
+  } else if (path.startsWith("/metrics")) {
+    page = <Metrics ctx={ctx} params={params} />;
+    crumb = ["Metrics", params.get("m") ?? "Explorer"];
   } else if (path.startsWith("/logs")) {
     page = <Logs ctx={ctx} params={params} />;
     crumb = ["Logs", "Explorer"];

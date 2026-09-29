@@ -32,7 +32,8 @@ export function fmtNum(n: number): string {
   if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
   if (n >= 1e4) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + "K";
-  return Math.round(n).toLocaleString();
+  if (Number.isInteger(n) || Math.abs(n) >= 100) return Math.round(n).toLocaleString();
+  return Number(n.toPrecision(3)).toLocaleString();   // e.g. 0.372, 12.5
 }
 
 export function fmtMs(ns: number): string {

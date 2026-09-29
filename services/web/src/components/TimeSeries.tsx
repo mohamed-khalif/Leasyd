@@ -22,7 +22,8 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
   const now = Date.now();
   const x0 = Math.min(now - props.range.minutes * 60_000, ...(xs.length ? xs : [now]));
   const x1 = now;
-  const ymax = niceMax(Math.max(1, ...props.series.flatMap((s) => s.points.map((p) => p[1]))));
+  const top = Math.max(0, ...props.series.flatMap((s) => s.points.map((p) => p[1])));
+  const ymax = niceMax(top > 0 ? top : 1);   // small values (ratios, rates) get their own scale
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const Y = (v: number) => padT + (1 - v / ymax) * (h - padT - padB);
   const ticksY = [0, ymax / 2, ymax];
