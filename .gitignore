@@ -8,3 +8,6 @@ services/ingest/build/
 services/tenants/build/
 services/loadgen/build/
 services/canary/build/
+services/web/node_modules/
+services/web/dist/
+services/web/*.tsbuildinfo

@@ -1,7 +1,7 @@
 # Status
 
 Where the project stands, what is running on AWS, and how to pick it up.
-Last updated: 2026-09-28. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+Last updated: 2026-09-29. Detail: `docs/observability-plan.md` (the plan, with results per phase)
 and `infra/README.md` (deploy and test commands per phase).
 
 ## What exists
@@ -26,7 +26,9 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Customer query API: `POST /v1/query` with read-scoped keys (`infra/tenant.sh read-key`) | Q1 | live, tested on AWS (`infra/query-api-test.py`) |
 | Customer logins: Cognito users per tenant (invite/remove), `/v1/app/me`, `/v1/app/query` | U1 | live, tested on AWS (`infra/login-test.py`) |
 | Faults, soak | T6 | crash safety covered by tests and a real stuck-chunk recovery; soak not run |
-| UI, alerting on customer data | 6+ | not started |
+| Web app (Leasyd): overview dashboards, logs explorer, trace view, sign-in; S3 + CloudFront, `/v1/*` proxied to the API | W1 | live, checked with real data through the API |
+| Customer quick start (`docs/QUICKSTART.md`): any OpenTelemetry SDK over OTLP/HTTP; gRPC via the Collector | S1 | tested on AWS: Python, Node, Go, Java agent, Collector (gRPC in) |
+| Alerting on customer data, billing | - | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
 Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.*`.
@@ -34,7 +36,7 @@ Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`,
 ## Stacks on AWS
 
 `obs-phase0`, `obs-phase1`, `obs-phase2`, `obs-phase3`, `obs-phase4`, `obs-phaseT2`, `obs-phaseT5`,
-`obs-phaseT6` (test tooling only; delete after T6). Deploys run as the `obs-deployer` IAM user; Phase 0
+`obs-phaseT6` (test tooling only; delete after T6), `obs-phaseT7`, `obs-phaseU1`, `obs-phaseW1`. Deploys run as the `obs-deployer` IAM user; Phase 0
 needs admin credentials only when the `obs-boundary` policy changes. Lambda concurrency limit: 1000.
 
 ## Key results (details in the plan)
@@ -59,6 +61,8 @@ needs admin credentials only when the `obs-boundary` policy changes. Lambda conc
 - A new API key is accepted by some API Gateway nodes and refused (403) by others for up to ~10
   minutes (measured 2026-09-28; ~1 min earlier the same day). Existing keys are unaffected. Fix if it
   matters: enforce per-tenant rate limits in the authorizer instead of API Gateway usage plans.
+- Ingest is OTLP over HTTP only. gRPC senders and other agents' formats (Prometheus, Fluent Bit, ...)
+  go through an OpenTelemetry Collector (`docs/QUICKSTART.md`).
 - Invitation emails use Cognito's built-in sender (~50/day); move to Amazon SES before real volume.
 - `/v1/app/*` (signed-in users) has no per-tenant rate limit, only the stage throttle.
 - Queries over 29 s time out at API Gateway (504). Today: 2-4 s. Fix when needed: asynchronous

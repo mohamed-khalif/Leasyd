@@ -447,3 +447,22 @@ Tested on AWS (2026-09-29): an invited user signs in; `/v1/app/me` names their t
 tenant), ignoring a tenant in the body; no token -> 401, a token edited to claim another tenant ->
 refused, an API key -> 401; the user can't change their tenant; after remove-user they can neither
 sign in nor refresh.
+
+## Phase W1: Leasyd web app
+
+`services/web` (React + TypeScript + Vite; SVG charts, no chart library) is served by CloudFront
+from a private S3 bucket (`obs-phaseW1`). CloudFront also routes `/v1/*` to the API, so the app and
+the API share one origin: no CORS, same authorizers. Screens: Telemetry Insights and Usage & Cost
+dashboards, Logs explorer, Trace view, sign-in (Cognito SRP, first-login password change). The app
+reads its settings (`region`, `userPoolId`, `clientId`, `apiBase`) from `/config.json`, written by
+the deploy script.
+
+```bash
+# attach infra/iam/deployer-phaseW1.json to obs-deployer first
+infra/deploy-phase4.sh --parameter-overrides BytesPerWorker=67108864   # query API: time buckets for the charts
+infra/deploy-phaseW1.sh                              # prints the app's URL
+infra/tenant.sh invite-user <tenant> <your email>    # a login; the email has a temporary password
+```
+
+Local work without AWS: `cd services/web && npm install && npm run mock` (a seeded fake backend,
+no sign-in) at http://localhost:5173. Placeholder prices for Usage & Cost: `services/web/src/pricing.ts`.

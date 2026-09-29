@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import time
 
 import boto3
 import pytest
@@ -236,3 +237,19 @@ def test_signed_in_users_query_their_tenant_only(data, monkeypatch):
     assert http_user(ana, None, resource="/v1/app/me") == (200, {"tenant": "acme", "email": "ana@example.com"})
     for bad in ({}, {"email": "x@example.com"}, {"custom:tenant": "Acme#x"}):
         assert http_user(bad, q)[0] == 401
+
+
+def test_time_buckets_make_a_time_series(data, monkeypatch):
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1)   # several workers: buckets must merge
+    out = run(group_by=["ts:3600", "service"], aggs=[{"fn": "count"}], limit=10000, workers=8)
+    got = {(r[0], r[1]): r[2] for r in out["rows"]}
+    want = {}
+    for i, r in enumerate(data):
+        hour = int(r["timeUnixNano"]) // 10**9 // 3600 * 3600
+        svc = "web" if 150 <= i < 300 else "api"
+        k = (time.strftime("%Y-%m-%dT%H:00:00.000000Z", time.gmtime(hour)), svc)
+        want[k] = want.get(k, 0) + 1
+    assert got == want
+    with pytest.raises(query.BadQuery, match="time bucket"):
+        query.compile_query({"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T01:00:00Z",
+                             "group_by": ["ts:7"]})

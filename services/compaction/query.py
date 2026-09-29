@@ -8,7 +8,7 @@
                {"field": "attributes.http.route", "op": "=", "value": "/api/cart"},
                {"field": "body", "op": "contains", "value": "timeout"}],
      "match": {"trace_id": "4bf9..."},         # optional ID lookup (bloom-pruned, then filtered exactly)
-     "group_by": ["attributes.http.route"],    # aggregate mode ...
+     "group_by": ["attributes.http.route"],    # aggregate mode (or "ts:60": per-minute buckets) ...
      "aggs": [{"fn": "count"}, {"fn": "p95", "field": "attributes.duration_ms"}],
      "search": {"limit": 100},                 # ... or search mode: newest matching rows
      "order": "desc", "limit": 100,            # aggregate results: by the first agg
@@ -102,6 +102,19 @@ def _field(signal, name, params):
     return f'"{name}"'
 
 
+BUCKET_SECONDS = {10, 30, 60, 300, 900, 1800, 3600, 7200, 21600, 43200, 86400}
+
+
+def _time_bucket(name):
+    """group_by "ts:<seconds>": the start of each time bucket (a time series)."""
+    m = re.fullmatch(r"ts:(\d+)", name) if isinstance(name, str) else None
+    if not m:
+        return None
+    if int(m[1]) not in BUCKET_SECONDS:
+        raise BadQuery(f"time bucket must be one of {sorted(BUCKET_SECONDS)} seconds")
+    return f"time_bucket(INTERVAL '{int(m[1])} seconds', ts)"
+
+
 def _num(expr):
     return f"TRY_CAST({expr} AS DOUBLE)"
 
@@ -153,7 +166,7 @@ def compile_query(q):
     aggs = q.get("aggs") or [{"fn": "count"}]
     group_params, groups = [], []
     for g in q.get("group_by") or []:
-        groups.append(_field(signal, g, group_params))
+        groups.append(_time_bucket(g) or _field(signal, g, group_params))
     select, agg_params = [f"{g} AS g{i}" for i, g in enumerate(groups)], []
     for i, a in enumerate(aggs):
         fn = a.get("fn")
