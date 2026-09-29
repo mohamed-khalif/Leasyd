@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconRefresh, IconSun, IconTraces } from "./icons";
-import { RANGES, Range } from "./time";
+import { customRange, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow } from "./time";
 
 type Props = {
   path: string; crumb: [string, string]; user: { tenant: string; email: string }; range: Range;
@@ -64,13 +64,56 @@ function RangePicker(p: { range: Range; onRange: (r: Range) => void }) {
         <IconClock />{p.range.label}<span className="faint">▾</span>
       </button>
       {open && (
-        <div className="menu-list" role="listbox">
-          {RANGES.map((r) => (
-            <button key={r.key} className={r.key === p.range.key ? "on" : undefined}
-                    onClick={() => { p.onRange(r); setOpen(false); }}>{r.label}</button>
-          ))}
+        <div className="menu-list range-menu">
+          <div role="listbox" aria-label="Quick ranges">
+            {RANGES.map((r) => (
+              <button key={r.key} role="option" aria-selected={r.key === p.range.key} className={r.key === p.range.key ? "on" : undefined}
+                      onClick={() => { p.onRange(r); setOpen(false); }}>{r.label}</button>
+            ))}
+          </div>
+          <CustomRange range={p.range} onRange={(r) => { p.onRange(r); setOpen(false); }} />
         </div>
       )}
     </div>
+  );
+}
+
+/** "YYYY-MM-DDTHH:mm" in local time, as <input type="datetime-local"> wants it. */
+const toInput = (ms: number) => {
+  const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/** A fixed from/to, with calendar pickers and quick days. */
+function CustomRange(p: { range: Range; onRange: (r: Range) => void }) {
+  const w = rangeWindow(p.range);
+  const [from, setFrom] = useState(toInput(Date.parse(w.start)));
+  const [to, setTo] = useState(toInput(Date.parse(w.end)));
+  const [error, setError] = useState<string | null>(null);
+  const apply = (f: number, t: number) => {
+    if (!(f < t)) return setError("“From” must be before “To”.");
+    if (t - f > MAX_CUSTOM_DAYS * 86_400_000) return setError(`Choose at most ${MAX_CUSTOM_DAYS} days.`);
+    p.onRange(customRange(f, Math.min(t, Date.now())));
+  };
+  const day = (offset: number) => {          // a whole local day: 0 = today (until now), -1 = yesterday
+    const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() + offset);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    apply(start.getTime(), Math.min(end.getTime(), Date.now()));
+  };
+  return (
+    <form className="range-custom" onSubmit={(e) => { e.preventDefault(); setError(null); apply(new Date(from).getTime(), new Date(to).getTime()); }}>
+      <div className="faint">Custom range</div>
+      <label>From<input className="input" type="datetime-local" value={from} max={toInput(Date.now())} required
+                        onChange={(e) => setFrom(e.target.value)} /></label>
+      <label>To<input className="input" type="datetime-local" value={to} max={toInput(Date.now())} required
+                      onChange={(e) => setTo(e.target.value)} /></label>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="range-custom-row">
+        <button type="button" className="btn" onClick={() => day(0)}>Today</button>
+        <button type="button" className="btn" onClick={() => day(-1)}>Yesterday</button>
+        <span className="spacer" />
+        <button className="btn primary">Apply</button>
+      </div>
+    </form>
   );
 }

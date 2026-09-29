@@ -20,8 +20,8 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
   const h = props.height ?? 160, padL = 44, padR = 8, padT = 8, padB = 22;
   const xs = props.series.flatMap((s) => s.points.map((p) => p[0]));
   const now = Date.now();
-  const x0 = Math.min(now - props.range.minutes * 60_000, ...(xs.length ? xs : [now]));
-  const x1 = now;
+  const x1 = props.range.to ?? now;
+  const x0 = Math.min(props.range.from ?? x1 - props.range.minutes * 60_000, ...(xs.length ? xs : [x1]));
   const top = Math.max(0, ...props.series.flatMap((s) => s.points.map((p) => p[1])));
   const ymax = niceMax(top > 0 ? top : 1);   // small values (ratios, rates) get their own scale
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);

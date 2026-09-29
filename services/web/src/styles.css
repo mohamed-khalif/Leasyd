@@ -139,6 +139,17 @@ a:hover { text-decoration: underline; }
 }
 .menu-list button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 6px 10px; border-radius: 4px; cursor: pointer; }
 .menu-list button:hover, .menu-list button.on { background: var(--surface-3); }
+.range-menu { display: flex; gap: 4px; min-width: 0; }
+.range-menu [role=listbox] { min-width: 160px; }
+.range-custom { display: flex; flex-direction: column; gap: 8px; padding: 6px 10px 8px; border-left: 1px solid var(--border); width: 250px; }
+.range-custom label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-2); }
+.range-custom input { color-scheme: dark; }
+:root[data-theme="light"] .range-custom input { color-scheme: light; }
+.range-custom-row { display: flex; gap: 6px; align-items: center; }
+.range-custom-row .spacer { flex: 1; }
+.menu-list .range-custom-row .btn { display: inline-flex; width: auto; padding: 5px 10px; border: 1px solid var(--border-strong); }
+.menu-list .range-custom-row .btn.primary { border-color: transparent; }
+@media (max-width: 640px) { .range-menu { flex-direction: column; } .range-custom { border-left: 0; border-top: 1px solid var(--border); width: auto; } }
 
 /* ---------- dashboard grid & panels ---------- */
 .section-title { font-size: 24px; font-weight: 600; margin: 18px 4px 4px; letter-spacing: -.2px; }

@@ -10,7 +10,7 @@ import { Usage } from "./pages/Usage";
 import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
 import { Metrics } from "./pages/Metrics";
-import { RANGES, Range } from "./time";
+import { RANGES, Range, rangeFromKey } from "./time";
 
 export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
 
@@ -26,7 +26,7 @@ function useHash(): string {
 
 export function App() {
   const [user, setUser] = useState<{ tenant: string; email: string } | null | undefined>(undefined);
-  const [range, setRange] = useState<Range>(() => RANGES.find((r) => r.key === safeGet("leasyd.range")) ?? RANGES[1]);
+  const [range, setRange] = useState<Range>(() => rangeFromKey(safeGet("leasyd.range")) ?? RANGES[1]);
   const [tick, setTick] = useState(0);
   const hash = useHash();
   const go = useCallback((h: string) => { location.hash = h; }, []);
