@@ -5,13 +5,14 @@ traces, logs and metrics. There is no Leasyd library to install: you point the s
 Leasyd and add your API key.
 
 Every example below was run against the live service on 2026-09-29, and its data was read back
-through the query API (see [How this was tested](#how-this-was-tested)).
+through the query API (see [How this was tested](#how-this-was-tested)). A canary also sends a
+log and a trace through `https://ingest.leasyd.com` every minute and alarms if they can't be found.
 
 ## What you need
 
 | | |
 |---|---|
-| **Endpoint** | `https://2jiyjrkjv7.execute-api.us-east-1.amazonaws.com/ingest` |
+| **Endpoint** | `https://ingest.leasyd.com` |
 | **Ingest key** | Given to you when your account is created. It may only send data. A new key can take up to ~10 minutes to be fully active. |
 
 ## 1. Set four environment variables
@@ -19,7 +20,7 @@ through the query API (see [How this was tested](#how-this-was-tested)).
 The same four settings work in every language:
 
 ```sh
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://2jiyjrkjv7.execute-api.us-east-1.amazonaws.com/ingest
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.leasyd.com
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf          # http/json also works; grpc does not (see below)
 export OTEL_EXPORTER_OTLP_HEADERS=x-api-key=<your ingest key>
 export OTEL_SERVICE_NAME=checkout                         # how this service is named in Leasyd
@@ -217,7 +218,7 @@ processors:
 
 exporters:
   otlphttp/leasyd:
-    endpoint: https://2jiyjrkjv7.execute-api.us-east-1.amazonaws.com/ingest
+    endpoint: https://ingest.leasyd.com
     headers:
       x-api-key: ${env:LEASYD_API_KEY}
 
@@ -246,7 +247,7 @@ If nothing shows up, check the HTTP status your exporter logs:
 | Status | Meaning |
 |---|---|
 | `401` `Unauthorized` | The key is missing or wrong. Check `OTEL_EXPORTER_OTLP_HEADERS`. |
-| `403` `Missing Authentication Token` | The URL is wrong. Set the endpoint to the base URL above, ending in `/ingest`; the SDK adds `/v1/...` itself. |
+| `403` `Missing Authentication Token` | The URL is wrong. Set the endpoint to exactly `https://ingest.leasyd.com`; the SDK adds `/v1/...` itself. |
 | `403` `not authorized` | It is a read-only key, which can query but not send. Use your ingest key. |
 | `403` `Forbidden` | A brand-new key can be refused on some requests for up to ~10 minutes. The SDK retries; the data gets through. |
 | `400` / `415` | The body isn't OTLP. Use protocol `http/protobuf` or `http/json`. |
