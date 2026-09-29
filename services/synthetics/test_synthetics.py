@@ -257,7 +257,9 @@ def aws(monkeypatch):
 
 def call(tenant, method, resource, body=None, check_id=None):
     event = {"httpMethod": method, "resource": resource, "pathParameters": {"id": check_id} if check_id else None,
-             "body": json.dumps(body) if body is not None else None,
+             # as API Gateway delivers it: every body is binary (BinaryMediaTypes */*), so base64
+             "body": base64.b64encode(json.dumps(body).encode()).decode() if body is not None else None,
+             "isBase64Encoded": body is not None,
              "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant, "email": f"ana@{tenant}.io"}}}}
     r = synthetics.api(event, None)
     return r["statusCode"], json.loads(r["body"])

@@ -724,7 +724,10 @@ def api(event, context):
     method, resource = event.get("httpMethod"), event.get("resource") or ""
     check_id = (event.get("pathParameters") or {}).get("id")
     try:
-        body = json.loads(event.get("body") or "{}") if method in ("POST", "PUT") else {}
+        raw = event.get("body") or "{}"
+        if event.get("isBase64Encoded"):    # the API treats every body as binary (BinaryMediaTypes */*)
+            raw = base64.b64decode(raw)
+        body = json.loads(raw) if method in ("POST", "PUT") else {}
     except ValueError:
         return _http(400, {"error": "body must be JSON"})
     try:
