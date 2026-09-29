@@ -17,13 +17,15 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
     return () => ro.disconnect();
   }, []);
 
-  const h = props.height ?? 160, padL = 44, padR = 8, padT = 8, padB = 22;
+  const h = props.height ?? 160, padR = 8, padT = 8, padB = 22;
   const xs = props.series.flatMap((s) => s.points.map((p) => p[0]));
   const now = Date.now();
   const x1 = props.range.to ?? now;
   const x0 = Math.min(props.range.from ?? x1 - props.range.minutes * 60_000, ...(xs.length ? xs : [x1]));
   const top = Math.max(0, ...props.series.flatMap((s) => s.points.map((p) => p[1])));
   const ymax = niceMax(top > 0 ? top : 1);   // small values (ratios, rates) get their own scale
+  // Room for the longest axis label ("6,000 ms"): about 6 px per character of the 10 px mono font.
+  const padL = Math.max(44, 10 + 6.2 * Math.max(...[0, ymax / 2, ymax].map((v) => `${fmtNum(v)}${props.unit ?? ""}`.length)));
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const Y = (v: number) => padT + (1 - v / ymax) * (h - padT - padB);
   const ticksY = [0, ymax / 2, ymax];

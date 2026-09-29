@@ -686,7 +686,8 @@ def telemetry(check_id, check, r):
                                            "check.failed_step": None if r["failed_step"] is None else r["failed_step"] + 1,
                                            "url.full": first["url"], "http.response.status_code": first["status"],
                                            "check.total_ms": float(r["total_ms"]), "check.frequency_minutes": check["frequency"],
-                                           "check.tls_days_remaining": r.get("tls_days")}),
+                                           "check.tls_days_remaining": r.get("tls_days"),
+                                           "check.screenshots": ",".join(str(i + 1) for i, s in enumerate(r["steps"]) if s.get("screenshot_saved")) or None}),
                      "status": {} if r["ok"] else {"code": 2, "message": r["failure"]}})
     docs = {"traces": {"resourceSpans": [{"resource": resource, "scopeSpans": [{"scope": {"name": "leasyd.synthetics"}, "spans": spans}]}]}}
     now = str(max(end, start + 1))

@@ -280,3 +280,12 @@ a:hover { text-decoration: underline; }
 tr:hover .link { text-decoration: underline; }
 .linkbtn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; align-self: center; }
 .linkbtn:hover { text-decoration: underline; }
+
+/* synthetic checks: type choice, screenshots */
+.type-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.type-pick button { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); cursor: pointer; font: inherit; font-size: 12.5px; }
+.type-pick button b { color: var(--text); font-size: 13.5px; }
+.type-pick button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); }
+.shot { display: block; max-width: 100%; margin-top: 6px; border: 1px solid var(--border); border-radius: 6px; }
+.shot.small { max-width: min(360px, 100%); cursor: zoom-in; }

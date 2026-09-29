@@ -1,7 +1,10 @@
 // A fake /v1/app backend for `npm run mock`: realistic-looking answers to the
 // same queries the UI sends, so the UI can be built and screenshotted
 // without AWS. Deterministic (seeded) so screenshots are stable.
+import { readFileSync } from "node:fs";
 import type { Plugin } from "vite";
+
+const SHOT = readFileSync(new URL("./shot.jpg", import.meta.url)).toString("base64");   // a browser check's screenshot
 
 const SERVICES = ["frontend-proxy", "frontend", "checkout", "cart", "product-catalog", "payment", "shipping",
   "recommendation", "currency", "email", "ad", "quote", "fraud-detection", "accounting", "load-generator"];
@@ -48,9 +51,34 @@ const CHECKS: MockCheck[] = [
   ], 1, 0.981, 95],
   ["c3d4e5f6a1b2", "Product search", [step("Search", "GET", "https://api.shop.example.com/v1/search?q=shoes", { constraints: [{ type: "json", path: "results", op: "exists" }] })], 5, 1, 320],
   ["d4e5f6a1b2c3", "Status page", [step("Status", "GET", "https://status.shop.example.com/")], 15, 1, 140],
+  ["e5f6a1b2c3d4", "Checkout journey", [
+    { name: "Open the shop", action: "navigate", url: "https://shop.example.com/" },
+    { name: "Add shoes to cart", action: "click", selector: "text=Add to cart" },
+    { name: "Log in", action: "click", selector: "#login" },
+    { name: "Email", action: "type", selector: "#email", text: "monitor@shop.example.com" },
+    { name: "Password", action: "type", selector: "#password", text: "{password}" },
+    { name: "Submit", action: "press", selector: "#password", key: "Enter" },
+    { name: "Place order", action: "click", selector: "button:has-text('Place order')" },
+    { name: "Order confirmed", action: "assert_text", text: "Thank you for your order" },
+  ], 5, 0.972, 4200],
 ].map(([id, name, steps, frequency, up, ms]) => ({ id: id as string, name: name as string, steps, frequency: frequency as number,
-  timeout_ms: 20000, variables: id === "b2c3d4e5f6a1" ? { base: "https://api.shop.example.com" } : {}, enabled: id !== "d4e5f6a1b2c3",
-  secret_names: id === "b2c3d4e5f6a1" ? ["password"] : [], created_at: "2026-09-20T10:00:00Z", updated_at: "2026-09-20T10:00:00Z", up, ms }));
+  ...(id === "e5f6a1b2c3d4" ? { type: "browser", device: "desktop", screenshots: "failure", verify_tls: true } : { type: "http" }),
+  timeout_ms: id === "e5f6a1b2c3d4" ? 45000 : 20000, variables: id === "b2c3d4e5f6a1" ? { base: "https://api.shop.example.com" } : {}, enabled: id !== "d4e5f6a1b2c3",
+  secret_names: id === "b2c3d4e5f6a1" || id === "e5f6a1b2c3d4" ? ["password"] : [], created_at: "2026-09-20T10:00:00Z", updated_at: "2026-09-20T10:00:00Z", up, ms }));
+
+/** A browser check's result: every step passes but the last, which fails with a screenshot. */
+function browserResult(steps: { name: string; action: string; url?: string }[]) {
+  const n = steps.length;
+  return { ok: false, failure: `${steps[n - 1].name}: text 'Thank you for your order' not found`, failed_step: n - 1, tls_days: null, run_id: "f".repeat(32),
+    total_ms: 4180.4, steps: steps.map((st, i) => {
+      const last = i === n - 1, nav = st.action === "navigate";
+      return { name: st.name, action: st.action, ok: !last, failure: last ? "text 'Thank you for your order' not found" : null, status: nav ? 200 : null,
+        url: "https://shop.example.com/checkout", extracted: [], timings: { total_ms: nav ? 1320.5 : last ? 1500.2 : 180.4 },
+        vitals: nav ? { ttfb_ms: 212.4, fcp_ms: 640.1, lcp_ms: 1184.0, cls: 0.021, dom_ms: 890.3, load_ms: 1290.8, transfer_bytes: 48213 } : null,
+        console_errors: last ? ["POST https://pay.shop.example.com/v2/charge 503 (Service Unavailable)"] : [],
+        http_errors: last ? ["503 https://pay.shop.example.com/v2/charge"] : [], failed_requests: [], blocked: [], screenshot: last ? SHOT : null };
+    }) };
+}
 
 function synthetics(q: Q) {
   const t0 = Date.parse(q.start), t1 = Date.parse(q.end);
@@ -66,7 +94,8 @@ function synthetics(q: Q) {
       rows.push({ ts: new Date(t).toISOString(), service: "synthetics", name: c.name, trace_id: hex(r, 32), span_id: hex(r, 16),
         duration_ns: Math.round(ms * 1e6), status_code: bad ? 2 : 0,
         attributes: { "check.id": c.id, "check.name": c.name, "check.result": bad ? "fail" : "pass", "check.total_ms": Math.round(ms),
-          ...(bad ? { "check.failed_step": 2, "check.failure": "Create cart: status 503, expected 201" } : {}) } });
+          ...(bad && c.type === "browser" ? { "check.failed_step": 8, "check.failure": "Order confirmed: text 'Thank you for your order' not found", "check.screenshots": "8" }
+            : bad ? { "check.failed_step": 2, "check.failure": "Create cart: status 503, expected 201" } : {}) } });
     }
     const cols = rows.length ? Object.keys(rows[0]) : ["ts"];
     return { columns: cols, rows: rows.map((x) => cols.map((k) => (x as Record<string, unknown>)[k])) };
@@ -77,7 +106,12 @@ function synthetics(q: Q) {
   for (const c of cs) for (let t = Math.floor(t0 / b) * b; t <= t1; t += b) {
     const up = Number(c.up) + (tsg && fail(c, t) ? -0.3 : 0), ms = Number(c.ms) * (0.9 + 0.2 * Math.sin(t / 3e6 + c.frequency));
     const v = (a: { fn: string }) => a.fn === "count" ? Math.round((b / 60000) / c.frequency)
-      : metric.endsWith("success") ? up : metric.endsWith("tls_days_remaining") ? 58 + c.frequency : a.fn === "p95" ? ms * 1.6 : ms;
+      : metric.endsWith("success") ? up : metric.endsWith("tls_days_remaining") ? 58 + c.frequency
+      : metric.endsWith("browser.lcp") ? (a.fn === "p95" ? 1.5 : 1) * 1180 : a.fn === "p95" ? ms * 1.6 : ms;
+    if (by.includes("attributes.step.index") && metric.endsWith("browser.lcp")) {   // only pages opened have a largest paint
+      rows.push([1, ...aggs.map(() => 1180)]);
+      break;
+    }
     if (by.includes("attributes.step.index")) {
       (c.steps as unknown[]).forEach((_, i) => rows.push([i + 1, ...aggs.map((a) => (a.fn === "p95" ? 1.6 : 1) * Number(c.ms) / (c.steps as unknown[]).length * (1 + i * 0.3))]));
       break;
@@ -291,7 +325,9 @@ export function mockApi(): Plugin {
             const [, , , , id, sub] = req.url!.split("?")[0].split("/");   // /v1/app/checks[/id[/run]]
             const body = raw ? JSON.parse(raw) : {};
             const steps = (body.steps ?? CHECKS.find((x) => x.id === id)?.steps ?? []) as { name: string; url: string; extract?: { name: string }[] }[];
-            const result = { ok: true, failure: null, failed_step: null, total_ms: 150.3 * steps.length, tls_days: 61.4,
+            const isBrowser = (body.type ?? CHECKS.find((x) => x.id === id)?.type) === "browser";
+            const result = isBrowser ? browserResult(steps as unknown as { name: string; action: string; url?: string }[])
+              : { ok: true, failure: null, failed_step: null, total_ms: 150.3 * steps.length, tls_days: 61.4,
               steps: steps.map((st, i) => ({ name: st.name, ok: true, failure: null, status: 200, url: st.url, extracted: (st.extract ?? []).map((e) => e.name),
                 timings: { dns_ms: i ? 0.4 : 12.1, connect_ms: 31.6, tls_ms: 58.2, ttfb_ms: 141.7, total_ms: 150.3 }, body_sample: null })) };
             let out: unknown = { error: "no such check" }, status = 200;
@@ -301,6 +337,7 @@ export function mockApi(): Plugin {
             else if (id === "test") out = { result };
             else if (!c) status = 404;
             else if (sub === "run") out = { result };
+            else if (sub === "screenshot") out = { image: SHOT, content_type: "image/jpeg" };
             else if (req.method === "PUT") { Object.assign(c, body); out = c; }
             else if (req.method === "DELETE") { CHECKS.splice(CHECKS.indexOf(c), 1); out = { deleted: id }; }
             else out = c;

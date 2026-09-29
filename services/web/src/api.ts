@@ -43,17 +43,30 @@ export type Step = {
   user_agent?: string; follow_redirects: boolean; verify_tls: boolean; record_body: boolean;
   extract: Extraction[]; constraints: Constraint[];
 };
+export type BrowserAction = "navigate" | "click" | "hover" | "type" | "select" | "press" | "wait_for" | "wait"
+  | "assert_text" | "assert_no_text" | "assert_element" | "assert_url" | "extract";
+export type BrowserStep = {
+  name: string; action: BrowserAction; url?: string; selector?: string; text?: string; value?: string;
+  key?: string; ms?: number; variable?: string; attribute?: string; timeout_ms?: number;
+};
 export type CheckSettings = {
+  type?: "http" | "browser";
   name: string; frequency: number; timeout_ms: number; enabled: boolean;
-  variables: Record<string, string>; steps: Step[];
+  variables: Record<string, string>; steps: Step[] | BrowserStep[];
+  device?: "desktop" | "mobile"; screenshots?: "failure" | "every_step"; verify_tls?: boolean;   // browser checks
   secrets?: Record<string, string | null>;    // write-only: new values, or null to remove
 };
 export type Check = Omit<CheckSettings, "secrets"> & { id: string; secret_names: string[]; created_at: string; updated_at: string; created_by?: string };
 export type Timings = { dns_ms?: number; connect_ms?: number; tls_ms?: number; ttfb_ms?: number; total_ms?: number };
+export type Vitals = { ttfb_ms: number | null; fcp_ms: number | null; lcp_ms: number | null; cls: number | null;
+                       dom_ms: number | null; load_ms: number | null; transfer_bytes: number | null };
 export type StepResult = { name: string; ok: boolean; failure: string | null; status: number | null; url: string; timings: Timings;
-                           tls_days?: number | null; extracted: string[]; body_sample?: string | null };
+                           tls_days?: number | null; extracted: string[]; body_sample?: string | null;
+                           // browser steps
+                           action?: BrowserAction; vitals?: Vitals | null; console_errors?: string[]; http_errors?: string[];
+                           failed_requests?: string[]; blocked?: string[]; screenshot?: string | null };   // screenshot: base64 JPEG
 export type CheckResult = { ok: boolean; failure: string | null; failed_step: number | null; total_ms: number;
-                            tls_days?: number | null; steps: StepResult[] };
+                            tls_days?: number | null; steps: StepResult[]; run_id?: string };
 const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
 export const checks = {
   list: () => call<{ checks: Check[]; limit: number }>("/v1/app/checks"),
@@ -63,6 +76,8 @@ export const checks = {
   remove: (id: string) => call<{ deleted: string }>(`/v1/app/checks/${encodeURIComponent(id)}`, json("DELETE")),
   run: (id: string) => call<{ result: CheckResult }>(`/v1/app/checks/${encodeURIComponent(id)}/run`, json("POST")),
   test: (c: CheckSettings & { id?: string }) => call<{ result: CheckResult }>("/v1/app/checks/test", json("POST", c)),
+  screenshot: (id: string, run: string, step: number) =>
+    call<{ image: string; content_type: string }>(`/v1/app/checks/${encodeURIComponent(id)}/screenshot?run=${encodeURIComponent(run)}&step=${step}`),
 };
 
 /** Rows of a result as objects keyed by column name. */

@@ -462,6 +462,9 @@ def test_browser_check_api_run_and_screenshots(aws, monkeypatch):
     # The recorded run: trace id = run id, browser details on the step, vitals as metrics, details in the log.
     docs = {st.rsplit("-", 1)[1]: b"".join(gzip.decompress(x) if x[:2] == b"\x1f\x8b" else x for x in recs) for st, recs in aws}
     assert run_id.encode() in docs["traces"] and b"step.lcp_ms" in docs["traces"] and b'"step.screenshot"' in docs["traces"]
+    root = [sp for line in docs["traces"].splitlines() if line.strip()
+            for rs in json.loads(line)["resourceSpans"] for ss in rs["scopeSpans"] for sp in ss["spans"] if "parentSpanId" not in sp]
+    assert {a["key"]: a["value"] for a in root[0]["attributes"]}["check.screenshots"] == {"stringValue": "1"}
     for m in (b"synthetics.browser.lcp", b"synthetics.browser.cls", b"synthetics.browser.ttfb"):
         assert m in docs["metrics"]
     assert b"TypeError: x is undefined" in docs["logs"] and b"10.0.0.9" in docs["logs"]
