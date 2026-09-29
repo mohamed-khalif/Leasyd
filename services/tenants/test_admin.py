@@ -330,3 +330,63 @@ def test_deleting_a_tenant_removes_its_synthetic_checks(adm):
     call(adm, "delete", tenant="acme")
     left = {i["pk"] for i in ddb.scan()["Items"] if i["pk"].startswith("check#")}
     assert left == {"check#globex#aaaabbbbcccc"}
+
+
+# ------------------------------------------------------------------ retention
+
+def seed_days(tenant):
+    """Index entries and objects on 2026-09-14 (before the cutoff) and 2026-09-15 (kept)."""
+    s3, ddb = boto3.client("s3"), boto3.client("dynamodb")
+    put = lambda k: s3.put_object(Bucket="obs-data-test", Key=k, Body=b"x")   # noqa: E731
+    item = lambda pk, sk, **a: ddb.put_item(TableName="obs-index", Item={"pk": {"S": pk}, "sk": {"S": sk}, **{k: {"S": v} for k, v in a.items()}})  # noqa: E731
+    ddb.put_item(TableName="obs-index", Item={"pk": {"S": f"{tenant}#_services#logs"}, "sk": {"S": "all"}, "services": {"SS": ["api"]}})
+    for day, hour in (("2026-09-14", "10"), ("2026-09-15", "00")):
+        f = f"data/tenant={tenant}/logs/dt={day}/hour={hour}/service=api/part-b-000.parquet"
+        put(f)
+        item(f"{tenant}#logs#api", f"{day}T{hour}:00:00.000000Z#b-000", min_ts=f"{day}T{hour}:00:00.000000Z",
+             max_ts=f"{day}T{hour}:59:59.000000Z", file_path=f"s3://obs-data-test/{f}")
+        for k in (f"data/tenant={tenant}/logs/_bloom/day/dt={day}/v=1/g=00.bloom", f"data/tenant={tenant}/logs/_bloom/hour/dt={day}/hour={hour}/v=1/g=00.bloom",
+                  f"data/tenant={tenant}/logs/_ids/dt={day}/hour={hour}/g=00/b.bin", f"_incoming/tenant={tenant}/logs/dt={day}/hour={hour}/raw.gz"):
+            put(k)
+        item(f"{tenant}#_day#logs", day)
+        item(f"{tenant}#_hour#logs", f"{day}T{hour}")
+        item(f"{tenant}#_plan#logs#{day}#{hour}", "b")
+        item(f"{tenant}#_raw#logs#{day}#{hour}", "raw.gz")
+    # A fast-lane file from before midnight with rows after it: kept (its newest rows are in range).
+    put(f"data/tenant={tenant}/logs/_fast/late.parquet")
+    item(f"{tenant}#logs#api", "2026-09-14T23:30:00.000000Z#f-000", min_ts="2026-09-14T23:30:00.000000Z",
+         max_ts="2026-09-15T00:10:00.000000Z", file_path=f"s3://obs-data-test/data/tenant={tenant}/logs/_fast/late.parquet", kind="raw")
+    put(f"synthetics/tenant={tenant}/abc123abc123/{'0' * 32}/1.jpg")
+
+
+def test_retention_deletes_days_before_the_cutoff_only(adm, monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(adm, "_now", lambda: datetime(2026, 10, 15, 3, 0, tzinfo=timezone.utc))
+    assert adm.retention_cutoff() == "2026-09-15"                       # 30 full days before today are kept
+    call(adm, "create", tenant="acme")
+    seed_days("acme")
+    seed_days("acme-2")                                                 # no tenant record: never swept
+    out = call(adm, "retention")
+    assert out["cutoff"] == "2026-09-15" and out["tenants"] == ["acme"] and out["deleted"] > 0
+    objs = [o["Key"] for o in boto3.client("s3").list_objects_v2(Bucket="obs-data-test")["Contents"]]
+    mine = sorted(k for k in objs if "tenant=acme/" in k)
+    assert not [k for k in mine if "2026-09-14" in k], mine
+    assert len([k for k in mine if "2026-09-15" in k]) == 5
+    assert f"data/tenant=acme/logs/_fast/late.parquet" in mine          # straddles midnight: kept
+    assert any(k.startswith("synthetics/") for k in mine)                # screenshots: the lifecycle rule's job
+    assert len([k for k in objs if "tenant=acme-2/" in k]) == 12         # the other "tenant" untouched
+    items = {(i["pk"]["S"], i["sk"]["S"]) for i in boto3.client("dynamodb").scan(TableName="obs-index")["Items"] if i["pk"]["S"].startswith("acme#")}
+    assert not [i for i in items if "2026-09-14" in i[0] + i[1] and "T23:30" not in i[1]], items
+    assert ("acme#logs#api", "2026-09-14T23:30:00.000000Z#f-000") in items
+    assert {("acme#_day#logs", "2026-09-15"), ("acme#_plan#logs#2026-09-15#00", "b"), ("acme#logs#api", "2026-09-15T00:00:00.000000Z#b-000")} <= items
+    assert call(adm, "retention")["deleted"] == 0                        # nothing left to do
+
+
+def test_retention_carries_on_in_a_new_invocation(adm, monkeypatch):
+    for t in ("acme", "beta"):
+        call(adm, "create", tenant=t)
+    short = type("Ctx", (), {"get_remaining_time_in_millis": lambda self: 30_000})()
+    out = adm.handler({"action": "retention"}, short)                    # no time left: hand over at once
+    assert out["continuing"] and adm.invoked[-1] == {"action": "retention", "after": None}
+    out = adm.handler({"action": "retention", "after": "acme"}, CTX)
+    assert out["tenants"] == ["beta"]

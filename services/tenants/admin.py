@@ -24,6 +24,8 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
   usage   {tenant, start, end}   records and bytes compacted per day and signal
   list    {}                     every tenant
   sweep   {}                     scheduled: expire rotated keys, advance deletions
+  retention {}                   scheduled daily: delete every active tenant's data older than
+                                 RETENTION_DAYS (see below)
   restore {}                     after the API stack is recreated (infra/up.sh): every active
                                  tenant's streams exist and its live keys are in the current
                                  usage plans. Safe to repeat
@@ -47,6 +49,15 @@ Usage records are the platform's billing records and are kept. The tenant's
 users are signed out and their logins deleted (an ID token already issued
 stays valid until it expires, at most an hour, and can only reach the
 tenant's purged data).
+
+Retention: data is kept RETENTION_DAYS full days plus today (UTC): every event day before
+today - RETENTION_DAYS is deleted, for every signal, passes and failures of synthetic checks
+alike (they are the tenant's data). Index entries go first, so a query never lists a file that
+is about to disappear; then the day's Parquet files, filters, ID digests and any raw files that
+arrived that day, and the index items of those days. Queries never ask for earlier than the same
+day (query.py clamps the start), so what a customer sees doesn't change while a sweep runs. An
+S3 lifecycle rule expires anything under data/ and _incoming/ a few days later still, as a
+backstop. Usage records are kept.
 """
 
 import decimal
@@ -70,6 +81,7 @@ PLANS = json.loads(os.environ.get("USAGE_PLANS", "{}"))  # plan name -> API Gate
 SELF = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "obs-tenant-admin")
 BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
 SETTLE = timedelta(minutes=int(os.environ.get("SETTLE_MINUTES", "20")))
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 SIGNALS = ("logs", "traces", "metrics")
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 USER_POOL = os.environ.get("USER_POOL_ID", "")   # Cognito user pool of obs-state (empty: no logins)
@@ -98,7 +110,7 @@ def handler(event, context):
     if fn is None:
         return {"error": f"unknown action {action!r}; one of {sorted(ACTIONS)}"}
     args = {k: v for k, v in event.items() if k != "action"}
-    if action not in ("list", "sweep", "restore"):
+    if action not in ("list", "sweep", "restore", "retention"):
         args["tenant"] = check_tenant(args.get("tenant"))
     try:
         out = fn(context=context, **args)
@@ -397,6 +409,89 @@ def sweep(context=None):
     return {"expired_keys": expired, "purging": advanced, "deleted": finished}
 
 
+def retention_cutoff(now=None, days=None):
+    """The first event day kept (YYYY-MM-DD): today - RETENTION_DAYS, UTC. query.py uses the same."""
+    now = now or _now()
+    return (now - timedelta(days=RETENTION_DAYS if days is None else days)).strftime("%Y-%m-%d")
+
+
+def retention(after=None, context=None):
+    """Scheduled daily: delete each active tenant's data from before the cutoff day. Carries on
+    in a new invocation (after=<last tenant done>) if it runs short of time."""
+    cutoff = retention_cutoff()
+    deadline = time.time() + (context.get_remaining_time_in_millis() / 1000 - 60 if context else 600)
+    done, deleted = [], 0
+    for t in sorted(list_tenants()["tenants"], key=lambda t: t["tenant"]):
+        if t["status"] != "active" or (after and t["tenant"] <= after):
+            continue
+        if time.time() >= deadline:
+            _invoke_self({"action": "retention", "after": done[-1] if done else after})
+            return {"cutoff": cutoff, "tenants": done, "deleted": deleted, "continuing": True}
+        deleted += _expire_tenant(t["tenant"], cutoff)
+        done.append(t["tenant"])
+    return {"cutoff": cutoff, "tenants": done, "deleted": deleted}
+
+
+def _expire_tenant(tenant, cutoff):
+    """Everything of one tenant from before the cutoff day -> number of objects and items deleted."""
+    n, before = 0, f"{cutoff}T00:00:00"
+    for signal in SIGNALS:
+        # 1. Index entries of files whose rows are all older than the cutoff (then those files).
+        services = index.get_item(Key={"pk": f"{tenant}#_services#{signal}", "sk": "all"}).get("Item", {}).get("services", set())
+        files = []
+        for service in services:
+            kw = dict(KeyConditionExpression=Key("pk").eq(f"{tenant}#{signal}#{service}") & Key("sk").lt(before))
+            while True:
+                page = index.query(**kw)
+                old = [it for it in page["Items"] if str(it.get("max_ts", "9")) < before]
+                with index.batch_writer() as w:
+                    for it in old:
+                        w.delete_item(Key={"pk": it["pk"], "sk": it["sk"]})
+                files += [it["file_path"].split(f"s3://{BUCKET}/", 1)[-1] for it in old if "file_path" in it]
+                files += [it["bloom_s3_key"] for it in old if "bloom_s3_key" in it]
+                n += len(old)
+                if "LastEvaluatedKey" not in page:
+                    break
+                kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        for i in range(0, len(files), 1000):
+            s3.delete_objects(Bucket=BUCKET, Delete={"Objects": [{"Key": k} for k in files[i:i + 1000]], "Quiet": True})
+        n += len(files)
+        # 2. Whole days before the cutoff: files, filters, digests, raw arrivals.
+        days = set()
+        for base in (f"data/tenant={tenant}/{signal}/", f"data/tenant={tenant}/{signal}/_bloom/day/",
+                     f"data/tenant={tenant}/{signal}/_bloom/hour/", f"data/tenant={tenant}/{signal}/_ids/",
+                     f"_incoming/tenant={tenant}/{signal}/"):
+            for day in _day_folders(base):
+                if day < cutoff:
+                    days.add(day)
+                    n += _purge_prefix(f"{base}dt={day}/", time.time() + 600)[0]
+        # 3. Index items kept per day or hour: sealed-filter state, compaction plans, raw-file lists.
+        for pk, sk_before in ((f"{tenant}#_day#{signal}", cutoff), (f"{tenant}#_hour#{signal}", cutoff)):
+            items = index.query(KeyConditionExpression=Key("pk").eq(pk) & Key("sk").lt(sk_before))["Items"]
+            with index.batch_writer() as w:
+                for it in items:
+                    w.delete_item(Key={"pk": it["pk"], "sk": it["sk"]})
+            n += len(items)
+        for day in sorted(days):
+            for hour in range(24):
+                for pk in (f"{tenant}#_plan#{signal}#{day}#{hour:02d}", f"{tenant}#_raw#{signal}#{day}#{hour:02d}"):
+                    items = index.query(KeyConditionExpression=Key("pk").eq(pk), ProjectionExpression="pk, sk")["Items"]
+                    with index.batch_writer() as w:
+                        for it in items:
+                            w.delete_item(Key={"pk": it["pk"], "sk": it["sk"]})
+                    n += len(items)
+    # Browser checks' screenshots expire by the bucket's lifecycle rule (30 days).
+    return n
+
+
+def _day_folders(prefix):
+    """The YYYY-MM-DD of each dt=... folder directly under prefix."""
+    out = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=f"{prefix}dt=", Delimiter="/"):
+        out += [p["Prefix"][len(prefix) + 3:].rstrip("/") for p in page.get("CommonPrefixes", [])]
+    return out
+
+
 def restore(context=None):
     """Tenants, keys and streams outlive the compute stacks (infra/down.sh keeps them), but a
     recreated API has new usage plans, which hold none of the keys. Put every live key back in
@@ -452,7 +547,8 @@ def purge(tenant, deleted=0, context=None):
 
 ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key,
            "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
-           "usage": usage, "list": list_tenants, "sweep": sweep, "restore": restore, "purge": purge}
+           "usage": usage, "list": list_tenants, "sweep": sweep, "restore": restore, "purge": purge,
+           "retention": retention}
 
 
 # ------------------------------------------------------------------ helpers

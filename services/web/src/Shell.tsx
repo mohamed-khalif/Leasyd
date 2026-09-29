@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTraces } from "./icons";
-import { customRange, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow } from "./time";
+import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 
 type Props = {
   path: string; crumb: [string, string]; user: { tenant: string; email: string }; range: Range;
@@ -95,6 +95,7 @@ function CustomRange(p: { range: Range; onRange: (r: Range) => void }) {
   const apply = (f: number, t: number) => {
     if (!(f < t)) return setError("“From” must be before “To”.");
     if (t - f > MAX_CUSTOM_DAYS * 86_400_000) return setError(`Choose at most ${MAX_CUSTOM_DAYS} days.`);
+    if (f < keptFrom()) return setError(`Data is kept for ${RETENTION_DAYS} days: choose ${fmtDay(keptFrom())} or later.`);
     p.onRange(customRange(f, Math.min(t, Date.now())));
   };
   const day = (offset: number) => {          // a whole local day: 0 = today (until now), -1 = yesterday
@@ -105,11 +106,12 @@ function CustomRange(p: { range: Range; onRange: (r: Range) => void }) {
   return (
     <form className="range-custom" onSubmit={(e) => { e.preventDefault(); setError(null); apply(new Date(from).getTime(), new Date(to).getTime()); }}>
       <div className="faint">Custom range</div>
-      <label>From<input className="input" type="datetime-local" value={from} max={toInput(Date.now())} required
+      <label>From<input className="input" type="datetime-local" value={from} min={toInput(keptFrom())} max={toInput(Date.now())} required
                         onChange={(e) => setFrom(e.target.value)} /></label>
-      <label>To<input className="input" type="datetime-local" value={to} max={toInput(Date.now())} required
+      <label>To<input className="input" type="datetime-local" value={to} min={toInput(keptFrom())} max={toInput(Date.now())} required
                       onChange={(e) => setTo(e.target.value)} /></label>
       {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="faint">Data is kept for {RETENTION_DAYS} days.</div>
       <div className="range-custom-row">
         <button type="button" className="btn" onClick={() => day(0)}>Today</button>
         <button type="button" className="btn" onClick={() => day(-1)}>Yesterday</button>

@@ -46,7 +46,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
 from decimal import Decimal
 
@@ -60,6 +60,9 @@ import lookup
 
 WORKER_FUNCTION = os.environ.get("QUERY_WORKER_FUNCTION", "obs-query-worker")
 MAX_WORKERS = int(os.environ.get("QUERY_MAX_WORKERS", "64"))
+# Data is kept this many full days plus today (UTC); the tenant admin's daily retention job deletes
+# earlier days. Customers' queries start no earlier, so a sweep in progress never shows as gaps.
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 TARGET_BYTES_PER_WORKER = int(os.environ.get("QUERY_BYTES_PER_WORKER", str(256 * 1024 * 1024)))
 # Opening a file costs about as much as reading this many more bytes (footer and column-chunk
 # requests; ~9 ms a file measured on 3,000 small metrics files), so many small files also get
@@ -436,6 +439,11 @@ def api(event, context):
         return _http(400, {"error": "start and end are required (ISO-8601, e.g. 2026-09-28T00:00:00Z)"})
     q["tenant"] = tenant
     try:
+        kept = kept_from()
+        if lookup._parse(q["start"]) < kept:
+            q["start"] = kept.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if lookup._parse(q["end"]) < kept:
+                q["end"] = q["start"]          # entirely before what is kept: an empty answer
         out = run(q)
     except BadQuery as e:
         return _http(400, {"error": str(e)})
@@ -445,6 +453,16 @@ def api(event, context):
     if len(text) > MAX_RESPONSE_BYTES:
         return _http(413, {"error": "result too large; ask for fewer rows (search.limit / limit)"})
     return _http(200, text)
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def kept_from():
+    """The oldest moment kept: midnight UTC, RETENTION_DAYS days before today (as the tenant
+    admin's retention_cutoff)."""
+    return datetime.combine((_now() - timedelta(days=RETENTION_DAYS)).date(), dt_time(0), tzinfo=timezone.utc)
 
 
 def _http(status, body):

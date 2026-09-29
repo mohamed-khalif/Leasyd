@@ -13,7 +13,6 @@ cd "$(dirname "$0")/.."
 : "${AWS_DEFAULT_REGION:?set AWS_DEFAULT_REGION}"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 ARTIFACTS="obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}"
-DATA="obs-data-${ACCOUNT}-${AWS_DEFAULT_REGION}"
 out() { aws cloudformation describe-stacks --stack-name "$1" --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text; }
 
 # 1. Where the browser image is built and kept.
@@ -49,21 +48,8 @@ DIGEST="$(aws ecr describe-images --repository-name obs-synthetics-browser --ima
 IMAGE="${REPO}@${DIGEST}"
 echo "Browser image: ${TAG} (${IMAGE})"
 
-# Screenshots expire after 30 days. obs-state's bucket has this rule; in an account whose data
-# bucket isn't in obs-state yet, add it to the bucket's existing rules.
-if ! aws cloudformation describe-stacks --stack-name obs-state >/dev/null 2>&1; then
-  RULES="$(aws s3api get-bucket-lifecycle-configuration --bucket "$DATA" --output json 2>/dev/null || echo '{"Rules": []}')"
-  if ! grep -q '"synthetics-screenshots"' <<<"$RULES"; then
-    LC="$(mktemp)"
-    python3 -c '
-import json, sys
-rules = json.load(sys.stdin)["Rules"]
-rules.append({"ID": "synthetics-screenshots", "Status": "Enabled", "Filter": {"Prefix": "synthetics/"}, "Expiration": {"Days": 30}})
-print(json.dumps({"Rules": rules}))' <<<"$RULES" > "$LC"
-    aws s3api put-bucket-lifecycle-configuration --bucket "$DATA" --lifecycle-configuration "file://${LC}"
-    echo "Added the 30-day screenshot expiry to ${DATA}"
-  fi
-fi
+# Screenshots expire after 30 days (the data bucket's rules).
+infra/data-bucket-rules.sh
 
 # 3. The functions.
 rm -rf services/synthetics/build && mkdir -p services/synthetics/build

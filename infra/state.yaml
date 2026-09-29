@@ -50,15 +50,17 @@ Resources:
           EventBridgeEnabled: true
       LifecycleConfiguration:
         Rules:
-          # Compacted data only (data/tenant=<T>/<signal>/...). _incoming/
-          # gets no transitions or expiry: a stuck compaction must never
-          # silently lose data.
-          - Id: data-tiering
+          # Retention: the tenant admin deletes each tenant's data older than 30 days (plus
+          # today) every night, index first. This only catches what that job missed (a
+          # leftover file, a stuck raw file), a few days later.
+          - Id: retention-backstop-data
             Status: Enabled
             Prefix: data/
-            Transitions:
-              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
-              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
+            ExpirationInDays: 35
+          - Id: retention-backstop-incoming
+            Status: Enabled
+            Prefix: _incoming/
+            ExpirationInDays: 35
           # Browser checks' screenshots (synthetics/tenant=<T>/...): kept 30 days.
           - Id: synthetics-screenshots
             Status: Enabled

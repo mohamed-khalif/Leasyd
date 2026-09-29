@@ -59,3 +59,12 @@ export function fmtMs(ns: number): string {
   if (ms >= 1) return ms.toFixed(1) + " ms";
   return ms.toFixed(2) + " ms";
 }
+
+/** Data is kept this many full days plus today (UTC); the API never reads earlier. */
+export const RETENTION_DAYS = 30;
+/** The oldest moment kept: midnight UTC, RETENTION_DAYS days ago. */
+export function keptFrom(now = Date.now()): number {
+  const d = new Date(now - RETENTION_DAYS * 86_400_000);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+export const fmtDay = (t: number) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });

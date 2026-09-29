@@ -13,6 +13,7 @@ u1() { aws cloudformation describe-stacks --stack-name "$LOGINS" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
 
 infra/build-tenants.sh
+infra/data-bucket-rules.sh      # retention backstop (and screenshots) on the data bucket
 aws cloudformation package \
   --template-file infra/phaseT5-tenants.yaml \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phaseT5 \

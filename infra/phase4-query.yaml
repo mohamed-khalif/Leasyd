@@ -9,6 +9,11 @@ Description: >
   Deploy with infra/deploy-phase4.sh.
 
 Parameters:
+  RetentionDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: Full days of data kept (plus today); the query API never reads earlier. Same as obs-phaseT5's.
   MaxWorkers:
     Type: Number
     Default: 64
@@ -118,6 +123,7 @@ Resources:
           QUERY_WORKER_FUNCTION: obs-query-worker
           QUERY_MAX_WORKERS: !Ref MaxWorkers
           QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker
+          RETENTION_DAYS: !Ref RetentionDays
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "Q1" }

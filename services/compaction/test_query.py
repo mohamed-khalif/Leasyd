@@ -3,6 +3,7 @@
 
 import gzip
 import json
+from datetime import date, datetime, timedelta
 import math
 import os
 import random
@@ -187,6 +188,12 @@ def test_search_reading_in_place_has_only_the_files_columns(data):
 
 
 # ---- HTTP API (POST /v1/query) ----
+
+@pytest.fixture(autouse=True)
+def today_is_day_after(monkeypatch):
+    # The API keeps RETENTION_DAYS of data: pin "today" so the test day is always within it.
+    monkeypatch.setattr(query, "_now", lambda: datetime.fromisoformat(f"{DAY}T12:00:00+00:00") + timedelta(days=1))
+
 
 def http(tenant, body, b64=False):
     import base64 as b
@@ -409,3 +416,15 @@ def test_contiguous_chunks_never_cut_inside_an_overlap(monkeypatch):
     assert [[x["file_path"][-1] for x in c] for c in query.plan_chunks(files, 8, contiguous=True)] == [["0", "4", "1", "2", "3"]]
     files = [f(0, 0, 9), f(1, 5, 14), f(2, 15, 20), f(3, 21, 30), f(4, 25, 26)]
     assert [[x["file_path"][-1] for x in c] for c in query.plan_chunks(files, 8, contiguous=True)] == [["0", "1"], ["2"], ["3", "4"]]
+
+
+def test_api_never_reaches_before_retention(data, monkeypatch):
+    monkeypatch.setattr(query, "_invoke_worker", query.run_worker)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    assert http("acme", q)[1]["rows"] == [[len(data)]]
+    monkeypatch.setattr(query, "RETENTION_DAYS", 0)                 # today only: the test day is gone
+    assert query.kept_from().isoformat().startswith(str(date.fromisoformat(DAY) + timedelta(days=1)))
+    status, out = http("acme", q)
+    assert status == 200 and out["rows"] == []                      # nothing older is read
+    status, out = http("acme", {**q, "end": f"{DAY}T23:59:59Z", "start": "2020-01-01T00:00:00Z"})
+    assert status == 200 and out["rows"] == []                      # nothing older is read

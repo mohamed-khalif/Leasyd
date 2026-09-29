@@ -16,6 +16,13 @@ Parameters:
     Type: String
     Default: ""
     Description: obs-state output UserPoolId (customer logins); empty = no invite-user.
+  RetentionDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: >
+      Full days of data kept (plus today, UTC). Keep equal to obs-phase4's RetentionDays (the
+      query API never reads earlier) and below the data bucket's 35-day backstop.
   SettleMinutes:
     Type: Number
     Default: 20
@@ -50,9 +57,9 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
                   - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
-              - Sid: PurgeIndex
+              - Sid: PurgeIndex        # tenant deletion, and retention (index entries by day)
                 Effect: Allow
-                Action: [dynamodb:Scan, dynamodb:BatchWriteItem, dynamodb:DeleteItem]
+                Action: [dynamodb:Scan, dynamodb:Query, dynamodb:GetItem, dynamodb:BatchWriteItem, dynamodb:DeleteItem]
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-index"
               - Sid: ReadUsage
                 Effect: Allow
@@ -130,6 +137,7 @@ Resources:
           FIREHOSE_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-firehose"
           USAGE_PLANS: !Sub '{"standard": "${StandardPlanId}", "test-tiny": "${TestTinyPlanId}"}'
           SETTLE_MINUTES: !Ref SettleMinutes
+          RETENTION_DAYS: !Ref RetentionDays
           USER_POOL_ID: !Ref UserPoolId
       Tags:
         - { Key: project, Value: obs }
@@ -155,6 +163,27 @@ Resources:
         - Id: admin
           Arn: !GetAtt AdminFunction.Arn
           Input: '{"action": "sweep"}'
+
+  # Daily, early UTC: delete every active tenant's data older than RetentionDays.
+  RetentionSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-tenant-retention
+      Description: Delete tenants' data older than the retention period
+      ScheduleExpression: cron(17 1 * * ? *)
+      State: ENABLED
+      Targets:
+        - Id: admin
+          Arn: !GetAtt AdminFunction.Arn
+          Input: '{"action": "retention"}'
+
+  RetentionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AdminFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RetentionSchedule.Arn
 
   SweepPermission:
     Type: AWS::Lambda::Permission
