@@ -1,10 +1,50 @@
 # Infrastructure
 
+## Bring it up, take it down
+
+The whole platform is CloudFormation: one stack per part, deployed in order by one script.
+Run these in CloudShell (admin credentials; Node.js and Python are already there):
+
+```bash
+export AWS_DEFAULT_REGION=us-east-1
+infra/up.sh                     # deploy or update everything; safe to re-run
+infra/down.sh                   # take it offline; data, tenants, keys and logins are kept
+infra/up.sh                     # back again: existing customers' keys work as before
+infra/down.sh --delete-data     # delete everything, data included (asks for the account id)
+```
+
+Options for `up.sh`: `ALERT_EMAIL=you@example.com` (alarms and budget; kept after the first run),
+`DOMAIN=leasyd.com` (the product's own names, below), `TEST_TOOLS=1` (load generator and Athena
+workgroup, for dev accounts). On a first run, confirm the alarm subscription email AWS sends.
+
+| Stack | What | `down.sh` | `down.sh --delete-data` |
+|---|---|---|---|
+| `obs-dns` | the domain's DNS zone and certificate | kept | kept |
+| `obs-state` | data bucket, index/usage/tenant tables, login pool | kept | deleted |
+| `obs-phase0` | IAM roles and boundary, artifacts bucket, budget | deleted | deleted |
+| `obs-phase2`, `3`, `4` | compaction and fast lane, index lookups, query engine and API | deleted | deleted |
+| `obs-phaseT2`, `T5`, `T7` | ingest API, tenant operations, canary and alarms | deleted | deleted |
+| `obs-phaseW1` | web app (S3 + CloudFront) | deleted | deleted |
+| `obs-phase1`, `obs-phaseT6` | test tools (`TEST_TOOLS=1`) | deleted | deleted |
+
+Outside CloudFormation, by design: each tenant's Firehose streams and API keys (made by the tenant
+admin Lambda when a tenant is created) and the canary's key (SSM `/obs/canary/api-key`). `down.sh`
+keeps them; `up.sh` reconnects them to the recreated API (`infra/tenant.sh restore`).
+`--delete-data` deletes them.
+
+### The product's domain
+
+`DOMAIN=leasyd.com infra/up.sh` (or `infra/deploy-dns.sh leasyd.com`) creates a DNS zone and
+prints its four name servers. Set them at the domain's registrar, once. When public DNS shows them
+(minutes to hours), run `infra/up.sh` again: it issues the certificate, then serves the API at
+`https://ingest.<domain>` and the web app at `https://app.<domain>`. These names stay the same
+across `down.sh`/`up.sh`; the AWS-generated URLs do not.
+
 ## Phase 0: foundation
 
-`phase0-foundation.yaml` creates the data bucket, the lifecycle rules, the `obs-boundary`
-permissions boundary, the `obs-collector` / `obs-compaction` / `obs-query` roles and a
-monthly budget.
+`phase0-foundation.yaml` creates the `obs-boundary` permissions boundary, the `obs-collector` /
+`obs-compaction` / `obs-query` roles, the artifacts bucket and a monthly budget. The data bucket and
+its lifecycle rules are in `obs-state` (`infra/state.yaml`).
 
 Deploy:
 
@@ -23,10 +63,10 @@ infra/phase0-test.sh obs-phase0              # IAM allow/deny checks + lifecycle
 infra/phase0-test.sh obs-phase0 lifecycle    # 1-2 days later: probe should be GLACIER_IR
 ```
 
-After the tests pass, redeploy with `AllowTestAssume=false EnableLifecycleTest=false`
-so the roles can only be assumed by their AWS services.
+The tests need `AllowTestAssume=true` on `obs-phase0` and `EnableLifecycleTest=true` on
+`obs-state`; both default to false, so the roles can only be assumed by their AWS services.
 
-The bucket is retained if the stack is deleted, so data is never removed by accident.
+The data bucket is retained if a stack is deleted, so data is never removed by accident.
 
 ## Phase 1: write path
 
@@ -412,7 +452,7 @@ python3 infra/query-api-test.py
 
 ## Phase U1: customer logins
 
-People sign in to the product with a login (Cognito user pool `obs-users`, stack `obs-phaseU1`);
+People sign in to the product with a login (Cognito user pool `obs-users`, now in `obs-state`);
 machines keep using API keys. Each user belongs to exactly one tenant, in the immutable attribute
 `custom:tenant` that only the tenant admin sets. There is no self sign-up.
 
@@ -431,16 +471,9 @@ Deleting a tenant removes its logins too. The web app signs users in with the `o
 
 These routes take no API key, so users are limited by the stage throttle, not a usage plan.
 
-Deploy: attach `infra/iam/deployer-phaseU1.json` to `obs-deployer`; Phase 0 with admin credentials
-(the boundary gains `cognito-idp:AdminCreateUser/AdminDeleteUser/AdminUserGlobalSignOut`); then
-
-```bash
-infra/deploy-phaseU1.sh
-infra/deploy-phase4.sh --parameter-overrides BytesPerWorker=67108864   # obs-query-api: tenant from the login
-infra/deploy-phaseT2.sh      # adds /v1/app/* (reads the pool from obs-phaseU1)
-infra/deploy-phaseT5.sh      # tenant admin: invite-user / remove-user / users
-python3 infra/login-test.py
-```
+Deployed by `infra/up.sh` (the pool is in `obs-state`; `obs-phaseT2` adds `/v1/app/*`, `obs-phaseT5`
+invite-user / remove-user / users). Test: `python3 infra/login-test.py` (as `obs-deployer`, with
+`infra/iam/deployer-phaseU1.json` attached for its test users).
 
 Tested on AWS (2026-09-29): an invited user signs in; `/v1/app/me` names their tenant;
 `/v1/app/query` gives the engine's counts for that tenant only (~1.8 s for a day of the largest

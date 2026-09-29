@@ -15,7 +15,7 @@ Parameters:
   UserPoolId:
     Type: String
     Default: ""
-    Description: obs-phaseU1 output UserPoolId (customer logins); empty = no invite-user.
+    Description: obs-state output UserPoolId (customer logins); empty = no invite-user.
   SettleMinutes:
     Type: Number
     Default: 20

@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # Leasyd web app (W1): deploys obs-phaseW1 (S3 + CloudFront, /v1/* routed to the API), builds
 # services/web, writes its config.json from the other stacks, uploads it and refreshes CloudFront.
-# Needs Node.js 18+ (CloudShell has it) and obs-phaseT2 + obs-phaseU1 deployed.
+# Needs Node.js 18+ (CloudShell has it) and obs-state + obs-phaseT2 deployed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${AWS_DEFAULT_REGION:?set AWS_DEFAULT_REGION}"
 out() { aws cloudformation describe-stacks --stack-name "$1" \
   --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text; }
 
-ENDPOINT="$(out obs-phaseT2 IngestEndpoint)"            # https://<api>.execute-api.<region>.amazonaws.com/<stage>
-API_DOMAIN="$(echo "$ENDPOINT" | sed -E 's#https://([^/]+)/.*#\1#')"
-STAGE_PATH="/$(echo "$ENDPOINT" | sed -E 's#https://[^/]+/##')"
+API_URL="$(out obs-phaseT2 ApiUrl)"                     # https://<api>.execute-api.<region>.amazonaws.com/<stage>
+API_DOMAIN="$(echo "$API_URL" | sed -E 's#https://([^/]+)/.*#\1#')"
+STAGE_PATH="/$(echo "$API_URL" | sed -E 's#https://[^/]+/##')"
+# The public name app.<domain>, once obs-dns has its certificate (infra/deploy-dns.sh).
+DOMAIN_ARGS=()
+CERT="$(out obs-dns CertificateArn 2>/dev/null || true)"
+if [[ -n "$CERT" && "$CERT" != None ]]; then
+  DOMAIN_ARGS=("AppHostName=app.$(out obs-dns DomainName)" "CertificateArn=${CERT}" "HostedZoneId=$(out obs-dns HostedZoneId)")
+fi
 aws cloudformation deploy --stack-name obs-phaseW1 --template-file infra/phaseW1-web.yaml \
-  --tags project=obs phase=W1 --parameter-overrides "ApiDomain=${API_DOMAIN}" "ApiStagePath=${STAGE_PATH}" "$@"
+  --tags project=obs phase=W1 --parameter-overrides "ApiDomain=${API_DOMAIN}" "ApiStagePath=${STAGE_PATH}" \
+  "${DOMAIN_ARGS[@]}" "$@"
 
 BUCKET="$(out obs-phaseW1 WebBucketName)"
 DIST="$(out obs-phaseW1 DistributionId)"
@@ -20,8 +27,8 @@ URL="$(out obs-phaseW1 WebUrl)"
 
 (cd services/web && npm ci --no-audit --no-fund && npm run build)
 cat > services/web/dist/config.json <<JSON
-{ "region": "${AWS_DEFAULT_REGION}", "userPoolId": "$(out obs-phaseU1 UserPoolId)",
-  "clientId": "$(out obs-phaseU1 AppClientId)", "apiBase": "" }
+{ "region": "${AWS_DEFAULT_REGION}", "userPoolId": "$(out obs-state UserPoolId)",
+  "clientId": "$(out obs-state AppClientId)", "apiBase": "" }
 JSON
 
 # Hashed assets can be cached for a year; the page and its settings never.

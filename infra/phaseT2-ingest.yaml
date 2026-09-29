@@ -23,48 +23,35 @@ Parameters:
   UserPoolArn:
     Type: String
     Default: ""
-    Description: Cognito user pool of obs-phaseU1 (customer logins). Empty = no /v1/app routes.
+    Description: Cognito user pool of obs-state (customer logins). Empty = no /v1/app routes.
   RecordCompression:
     Type: String
-    Default: none
+    Default: gzip
     AllowedValues: [none, gzip]
     Description: >
       gzip: ingest compresses each record before Firehose, which bills the bytes
       it receives (~5x less). Set it only after every tenant stream passes
       records through (infra/migrate-stream-compression.py); readers accept both.
 
+  ApiHostName:
+    Type: String
+    Default: ""
+    Description: Public host name of the API, e.g. ingest.leasyd.com (obs-dns). Empty = AWS's own URL only.
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: obs-dns certificate covering ApiHostName.
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: obs-dns zone, where the ApiHostName record goes.
+
 Conditions:
   Logins: !Not [!Equals [!Ref UserPoolArn, ""]]
+  CustomDomain: !Not [!Equals [!Ref CertificateArn, ""]]
 
 Resources:
-  # ---------- Tenant registry ----------
-
-  # pk "key#<sha256 of API key>" -> tenant, status. API keys themselves are
-  # never stored here (API Gateway holds them for usage plans).
-  # pk "tenant#<T>" -> the tenant's status and plan (T5, obs-tenant-admin).
-  TenantsTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TableName: obs-tenants
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - { AttributeName: pk, AttributeType: S }
-        - { AttributeName: tenant, AttributeType: S }
-      KeySchema:
-        - { AttributeName: pk, KeyType: HASH }
-      # A tenant's keys (and its tenant record), for rotation, revocation and deletion (T5).
-      GlobalSecondaryIndexes:
-        - IndexName: by-tenant
-          KeySchema:
-            - { AttributeName: tenant, KeyType: HASH }
-            - { AttributeName: pk, KeyType: RANGE }
-          Projection: { ProjectionType: ALL }
-      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
-      Tags:
-        - { Key: project, Value: obs }
-        - { Key: phase, Value: "T2" }
+  # The obs-tenants registry lives in obs-state (infra/state.yaml).
 
   # ---------- Authorizer ----------
 
@@ -88,7 +75,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: dynamodb:GetItem
-                Resource: !GetAtt TenantsTable.Arn
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T2" }
@@ -114,7 +101,7 @@ Resources:
       Timeout: 5
       Environment:
         Variables:
-          TENANTS_TABLE: !Ref TenantsTable
+          TENANTS_TABLE: obs-tenants
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T2" }
@@ -463,16 +450,53 @@ Resources:
         RateLimit: 1
         BurstLimit: 1
 
+  # ---------- Public name ----------
+
+  # https://<ApiHostName>/v1/... is the stage: the address customers configure. It stays the same
+  # when this stack is recreated (the API's own URL does not).
+  ApiDomain:
+    Type: AWS::ApiGateway::DomainName
+    Condition: CustomDomain
+    Properties:
+      DomainName: !Ref ApiHostName
+      RegionalCertificateArn: !Ref CertificateArn
+      EndpointConfiguration: { Types: [REGIONAL] }
+      SecurityPolicy: TLS_1_2
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T2" }
+
+  ApiMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Condition: CustomDomain
+    DependsOn: Stage
+    Properties:
+      DomainName: !Ref ApiDomain
+      RestApiId: !Ref Api
+      Stage: !Ref StageName
+
+  ApiRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ApiHostName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt ApiDomain.RegionalHostedZoneId
+
 Outputs:
   IngestEndpoint:
-    Description: OTLP/HTTP base URL; SDKs append /v1/logs, /v1/traces, /v1/metrics.
+    Description: OTLP/HTTP base URL customers use; SDKs append /v1/logs, /v1/traces, /v1/metrics.
+    Value: !If [CustomDomain, !Sub "https://${ApiHostName}", !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"]
+  ApiUrl:
+    Description: The API's own URL (stage included); CloudFront's origin for the web app's /v1/* calls.
     Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
   StandardPlanId:
     Value: !Ref StandardPlan
   TestTinyPlanId:
     Value: !Ref TestTinyPlan
-  TenantsTable:
-    Value: !Ref TenantsTable
   FirehoseRoleArn:
     Description: Delivery role for tenant streams (used by infra/tenant.sh).
     Value: !GetAtt FirehoseRole.Arn

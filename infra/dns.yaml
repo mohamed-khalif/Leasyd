@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Leasyd domain (obs-dns): the DNS zone for the product's domain and the TLS certificate for
+  ingest.<domain> (the API) and app.<domain> (the web app). Deployed by infra/deploy-dns.sh. Never
+  deleted by infra/down.sh: deleting the zone would change its name servers, and the domain's
+  registrar would have to be updated again.
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: The product's domain, e.g. leasyd.com (registered anywhere).
+    AllowedPattern: "^[a-z0-9-]+(\\.[a-z0-9-]+)+$"
+  IssueCertificate:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      true once the registrar points the domain at this zone's name servers. The certificate is
+      validated through this zone, so it can only be issued after that.
+
+Conditions:
+  Certificate: !Equals [!Ref IssueCertificate, "true"]
+
+Resources:
+  Zone:
+    Type: AWS::Route53::HostedZone
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig: { Comment: Leasyd }
+      HostedZoneTags:
+        - { Key: project, Value: obs }
+
+  # One certificate for both names. CloudFront needs it in us-east-1; the regional API needs it in
+  # the API's region: the platform runs in us-east-1, so one covers both.
+  Cert:
+    Type: AWS::CertificateManager::Certificate
+    Condition: Certificate
+    Properties:
+      DomainName: !Sub "ingest.${DomainName}"
+      SubjectAlternativeNames: [!Sub "app.${DomainName}"]
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - { DomainName: !Sub "ingest.${DomainName}", HostedZoneId: !Ref Zone }
+        - { DomainName: !Sub "app.${DomainName}", HostedZoneId: !Ref Zone }
+      Tags:
+        - { Key: project, Value: obs }
+
+Outputs:
+  DomainName:
+    Value: !Ref DomainName
+  HostedZoneId:
+    Value: !Ref Zone
+  NameServers:
+    Description: Set these as the domain's name servers at its registrar.
+    Value: !Join [" ", !GetAtt Zone.NameServers]
+  CertificateArn:
+    Condition: Certificate
+    Value: !Ref Cert

@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 t2() { aws cloudformation describe-stacks --stack-name obs-phaseT2 \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
-u1() { aws cloudformation describe-stacks --stack-name obs-phaseU1 \
+u1() { aws cloudformation describe-stacks --stack-name obs-state \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
 
 infra/build-tenants.sh

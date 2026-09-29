@@ -33,7 +33,7 @@ t2() { aws cloudformation describe-stacks --stack-name obs-phaseT2 \
 cleanup() { for t in "$A" "$B" "$TINY"; do "$HERE/tenant.sh" delete "$t" >/dev/null 2>&1; done; }
 trap cleanup EXIT
 
-ENDPOINT="$(t2 IngestEndpoint)"; HOST="${ENDPOINT#https://}"; HOST="${HOST%%/*}"; STAGE="/${ENDPOINT##*/}"
+ENDPOINT="$(t2 IngestEndpoint)"; HOST="${ENDPOINT#https://}"; STAGE=""; [[ "$HOST" == */* ]] && STAGE="/${HOST#*/}"; HOST="${HOST%%/*}"
 info "endpoint ${ENDPOINT}"
 
 # ---- 1. Tenants and their streams ----

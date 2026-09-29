@@ -14,6 +14,8 @@
 #   infra/tenant.sh status <tenant>                       status, plan, keys (ids and states only)
 #   infra/tenant.sh usage <tenant> [start] [end]          records and bytes per day and signal (YYYY-MM-DD)
 #   infra/tenant.sh list                                  all tenants
+#   infra/tenant.sh restore                               after infra/up.sh recreates the API: live keys back in
+#                                                         their usage plans, streams for every active tenant
 #
 # See services/tenants/admin.py for what each does.
 set -euo pipefail
@@ -91,5 +93,10 @@ case "$cmd" in
 for t in json.loads(sys.argv[1])["tenants"]:
     print("%-42s %-9s %-10s %s" % (t["tenant"], t["status"], t.get("plan") or "", t.get("created_at") or ""))' "$RESULT"
     ;;
-  *) sed -n '2,12p' "$0"; exit 2 ;;
+  restore)
+    admin '{"action":"restore"}'
+    python3 -c 'import json,sys; r=json.loads(sys.argv[1])
+print("restored %d tenants; %d keys put back in their usage plans" % (len(r["tenants"]), len(r["keys_added_to_plans"])))' "$RESULT" >&2
+    ;;
+  *) sed -n '2,19p' "$0"; exit 2 ;;
 esac

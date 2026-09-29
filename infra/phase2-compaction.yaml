@@ -2,10 +2,9 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Phase 2 compaction for the S3-native observability platform: a scheduled
   dispatcher and per-chunk worker Lambdas that turn _incoming/ raw OTLP JSON
-  (logs, traces, metrics) into sorted Parquet under data/, the obs-index
-  DynamoDB table they write, the fast-lane indexer, alarms on stuck
-  compaction, and the obs.logs / obs.traces / obs.metrics Athena tables.
-  Requires obs-phase0 and obs-phase1. Deploy through infra/deploy-phase2.sh,
+  (logs, traces, metrics) into sorted Parquet under data/, the fast-lane
+  indexer, alarms on stuck compaction, and the obs.logs / obs.traces /
+  obs.metrics Athena tables. Requires obs-state and obs-phase0. Deploy through infra/deploy-phase2.sh,
   which builds and uploads the Lambda code.
 
 Parameters:
@@ -38,49 +37,12 @@ Parameters:
     Description: Signals the dispatcher compacts (T4 added traces and metrics).
   AllowCrashInjection:
     Type: String
-    Default: "true"
+    Default: "false"
     AllowedValues: ["true", "false"]
     Description: Lets the Phase 2 test make the worker crash between steps. Set false once tested.
 
 Resources:
-  # ---------- Index ----------
-
-  IndexTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TableName: obs-index
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - { AttributeName: pk, AttributeType: S }
-        - { AttributeName: sk, AttributeType: S }
-      KeySchema:
-        - { AttributeName: pk, KeyType: HASH }
-        - { AttributeName: sk, KeyType: RANGE }
-      Tags:
-        - { Key: project, Value: obs }
-        - { Key: phase, Value: "2" }
-
-  # One item per compacted chunk: records and bytes, per tenant, day and
-  # signal (T5 metering). Billing records: kept when a tenant is deleted.
-  UsageTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TableName: obs-usage
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - { AttributeName: tenant, AttributeType: S }
-        - { AttributeName: sk, AttributeType: S }
-      KeySchema:
-        - { AttributeName: tenant, KeyType: HASH }
-        - { AttributeName: sk, KeyType: RANGE }
-      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
-      Tags:
-        - { Key: project, Value: obs }
-        - { Key: phase, Value: "T5" }
+  # The obs-index and obs-usage tables live in obs-state (infra/state.yaml).
 
   # ---------- Lambdas ----------
 
@@ -113,9 +75,9 @@ Resources:
       Environment:
         Variables:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
-          INDEX_TABLE: !Ref IndexTable
+          INDEX_TABLE: obs-index
           WORKER_FUNCTION: obs-compaction-worker
-          USAGE_TABLE: !Ref UsageTable
+          USAGE_TABLE: obs-usage
           ALLOW_CRASH_INJECTION: !Ref AllowCrashInjection
           BLOOM_ATTRIBUTES: !Ref BloomAttributes
       Tags:
@@ -146,7 +108,7 @@ Resources:
       Environment:
         Variables:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
-          INDEX_TABLE: !Ref IndexTable
+          INDEX_TABLE: obs-index
           WORKER_FUNCTION: !Ref WorkerFunction
           COMPACT_SIGNALS: !Ref CompactSignals
           GRACE_MINUTES: !Ref GraceMinutes
@@ -199,7 +161,7 @@ Resources:
       Environment:
         Variables:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
-          INDEX_TABLE: !Ref IndexTable
+          INDEX_TABLE: obs-index
           BLOOM_ATTRIBUTES: !Ref BloomAttributes
       Tags:
         - { Key: project, Value: obs }
@@ -300,7 +262,7 @@ Resources:
       Environment:
         Variables:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
-          INDEX_TABLE: !Ref IndexTable
+          INDEX_TABLE: obs-index
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T6" }
@@ -464,11 +426,19 @@ Resources:
 
   # ---------- Athena tables over compacted data ----------
 
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: obs
+        Description: Observability platform tables
+
   LogsTable:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: obs
+      DatabaseName: !Ref GlueDatabase
       TableInput:
         Name: logs
         TableType: EXTERNAL_TABLE
@@ -515,7 +485,7 @@ Resources:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: obs
+      DatabaseName: !Ref GlueDatabase
       TableInput:
         Name: traces
         TableType: EXTERNAL_TABLE
@@ -568,7 +538,7 @@ Resources:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: obs
+      DatabaseName: !Ref GlueDatabase
       TableInput:
         Name: metrics
         TableType: EXTERNAL_TABLE
@@ -632,7 +602,3 @@ Outputs:
     Value: !Ref WorkerFunction
   DispatcherFunction:
     Value: !Ref DispatcherFunction
-  IndexTable:
-    Value: !Ref IndexTable
-  UsageTable:
-    Value: !Ref UsageTable

@@ -28,6 +28,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Faults, soak | T6 | crash safety covered by tests and a real stuck-chunk recovery; soak not run |
 | Web app (Leasyd): overview dashboards, logs explorer, trace view, sign-in; S3 + CloudFront, `/v1/*` proxied to the API | W1 | live, checked with real data through the API |
 | Customer quick start (`docs/QUICKSTART.md`): any OpenTelemetry SDK over OTLP/HTTP; gRPC via the Collector | S1 | tested on AWS: Python, Node, Go, Java agent, Collector (gRPC in) |
+| One-command up/down (`infra/up.sh`, `infra/down.sh`); data in `obs-state` survives a down; own domain (`obs-dns`: ingest./app.<domain>) | P1 | written; to be proven by a full down/up on the dev account |
 | Alerting on customer data, billing | - | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
@@ -35,9 +36,12 @@ Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`,
 
 ## Stacks on AWS
 
-`obs-phase0`, `obs-phase1`, `obs-phase2`, `obs-phase3`, `obs-phase4`, `obs-phaseT2`, `obs-phaseT5`,
-`obs-phaseT6` (test tooling only; delete after T6), `obs-phaseT7`, `obs-phaseU1`, `obs-phaseW1`. Deploys run as the `obs-deployer` IAM user; Phase 0
-needs admin credentials only when the `obs-boundary` policy changes. Lambda concurrency limit: 1000.
+Everything is CloudFormation, brought up and taken down by one command each (`infra/up.sh`,
+`infra/down.sh`; see `infra/README.md`). `obs-state` holds data, tenants and logins and survives a
+plain `down.sh`; `obs-dns` holds the domain and is never deleted by the scripts. The rest is compute:
+`obs-phase0`, `obs-phase2`, `obs-phase3`, `obs-phase4`, `obs-phaseT2`, `obs-phaseT5`, `obs-phaseT7`,
+`obs-phaseW1`, plus test tools `obs-phase1` and `obs-phaseT6` (`TEST_TOOLS=1`). `up.sh`/`down.sh`
+need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 1000.
 
 ## Key results (details in the plan)
 

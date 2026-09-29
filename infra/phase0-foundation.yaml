@@ -1,8 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Phase 0 foundation for the S3-native observability platform:
-  data bucket with lifecycle rules, per-component IAM roles under a
-  permissions boundary, and an account-wide cost budget.
+  per-component IAM roles under a permissions boundary, the Lambda
+  artifacts bucket and an account-wide cost budget. The data bucket is in
+  obs-state (infra/state.yaml).
   See docs/observability-plan.md.
 
 Parameters:
@@ -15,83 +16,19 @@ Parameters:
     Type: Number
     Default: 50
     Description: Monthly account-wide budget in USD.
-  EnableLifecycleTest:
-    Type: String
-    Default: "true"
-    AllowedValues: ["true", "false"]
-    Description: >
-      Adds a rule moving _lifecycle-test/ objects to Glacier Instant Retrieval
-      after 1 day, so the lifecycle mechanism can be verified quickly.
-      (Standard-IA transitions cannot be shorter than 30 days.)
   AllowTestAssume:
     Type: String
-    Default: "true"
+    Default: "false"
     AllowedValues: ["true", "false"]
     Description: >
       Lets IAM principals in this account assume the component roles,
       so the Phase 0 deny tests can run. Set to false once tests pass.
 
 Conditions:
-  LifecycleTest: !Equals [!Ref EnableLifecycleTest, "true"]
   TestAssume: !Equals [!Ref AllowTestAssume, "true"]
 
 Resources:
-  # ---------- Storage ----------
-
-  DataBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      # S3 request metrics in CloudWatch (incl. 5xx/503 SlowDown) for the
-      # write path. Billed as custom CloudWatch metrics, a few $/month.
-      MetricsConfigurations:
-        - Id: incoming
-          Prefix: _incoming/
-      # Object-created events go to EventBridge, where the fast-lane indexer
-      # (obs-phase2) picks up new raw files. Free for AWS service events.
-      NotificationConfiguration:
-        EventBridgeConfiguration:
-          EventBridgeEnabled: true
-      LifecycleConfiguration:
-        Rules:
-          # Compacted data only (data/tenant=<T>/<signal>/...). _incoming/
-          # gets no transitions or expiry: a stuck compaction must never
-          # silently lose data.
-          - Id: data-tiering
-            Status: Enabled
-            Prefix: data/
-            Transitions:
-              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
-              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
-          - Id: abort-incomplete-uploads
-            Status: Enabled
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 1
-          - !If
-            - LifecycleTest
-            - Id: lifecycle-test
-              Status: Enabled
-              Prefix: _lifecycle-test/
-              Transitions:
-                - { StorageClass: GLACIER_IR, TransitionInDays: 1 }
-            - !Ref AWS::NoValue
-      Tags:
-        - { Key: project, Value: obs }
-        - { Key: phase, Value: "0" }
+  # The data bucket lives in obs-state (infra/state.yaml).
 
   # Lambda bundles uploaded by `aws cloudformation package`.
   ArtifactsBucket:
@@ -119,23 +56,6 @@ Resources:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }
 
-  DataBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref DataBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: DenyInsecureTransport
-            Effect: Deny
-            Principal: "*"
-            Action: "s3:*"
-            Resource:
-              - !GetAtt DataBucket.Arn
-              - !Sub "${DataBucket.Arn}/*"
-            Condition:
-              Bool: { "aws:SecureTransport": "false" }
-
   # ---------- IAM ----------
 
   # Upper bound on what any platform role can ever do, whatever
@@ -158,8 +78,8 @@ Resources:
               - s3:GetBucketLocation            # Firehose delivery (T2)
               - s3:ListBucketMultipartUploads   # Firehose delivery (T2)
             Resource:
-              - !GetAtt DataBucket.Arn
-              - !Sub "${DataBucket.Arn}/*"
+              - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}"
+              - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/*"
           - Sid: PlatformTables
             Effect: Allow
             Action:
@@ -281,7 +201,7 @@ Resources:
                 Action:
                   - s3:PutObject
                   - s3:AbortMultipartUpload
-                Resource: !Sub "${DataBucket.Arn}/_incoming/*"
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/*"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }
@@ -315,20 +235,20 @@ Resources:
               - Sid: List
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: !GetAtt DataBucket.Arn
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}"
               - Sid: ConsumeIncoming
                 Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:DeleteObject
-                Resource: !Sub "${DataBucket.Arn}/_incoming/*"
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/*"
               - Sid: WriteCompacted
                 Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:AbortMultipartUpload
-                Resource: !Sub "${DataBucket.Arn}/data/*"
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/*"
               - Sid: WriteIndex
                 Effect: Allow
                 Action:
@@ -344,11 +264,11 @@ Resources:
                 Effect: Allow
                 Action: s3:DeleteObject
                 Resource:
-                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_fast/*"      # fast-lane Parquet and blooms
-                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/raw-*"  # blooms of the earlier fast lane
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_fast/*"      # fast-lane Parquet and blooms
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_bloom/raw-*"  # blooms of the earlier fast lane
                   # day filters (T6): old versions, and ID digests once no longer needed
-                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_bloom/day/*"
-                  - !Sub "${DataBucket.Arn}/data/tenant=*/*/_ids/*"
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_bloom/day/*"
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_ids/*"
               - Sid: MeterUsage       # one usage record per compacted chunk (T5)
                 Effect: Allow
                 Action: dynamodb:PutItem
@@ -412,7 +332,7 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub "${DataBucket.Arn}/_results/*"
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_results/*"
               - Sid: ResultCache
                 Effect: Allow
                 Action:
@@ -460,13 +380,13 @@ Resources:
                 Effect: Allow
                 Action: s3:GetObject
                 Resource:
-                  - !Sub "${DataBucket.Arn}/data/tenant=${!aws:PrincipalTag/tenant}/*"
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=${!aws:PrincipalTag/tenant}/*"
                   # Raw files not yet compacted (the fast lane, T3).
-                  - !Sub "${DataBucket.Arn}/_incoming/tenant=${!aws:PrincipalTag/tenant}/*"
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_incoming/tenant=${!aws:PrincipalTag/tenant}/*"
               - Sid: ListTenantData
                 Effect: Allow
                 Action: s3:ListBucket
-                Resource: !GetAtt DataBucket.Arn
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}"
                 Condition:
                   StringLike: { "s3:prefix": "data/tenant=${aws:PrincipalTag/tenant}/*" }
               - Sid: ReadTenantIndex
@@ -515,8 +435,6 @@ Resources:
             - { SubscriptionType: EMAIL, Address: !Ref BudgetEmail }
 
 Outputs:
-  BucketName:
-    Value: !Ref DataBucket
   ArtifactsBucketName:
     Value: !Ref ArtifactsBucket
   CollectorRoleArn:

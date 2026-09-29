@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Leasyd state (obs-state): everything that holds customer data or identity, kept apart from the
+  compute stacks so those can be deleted and recreated freely (infra/down.sh, infra/up.sh). The data
+  bucket, the index, usage and tenant tables, and the login pool. Every resource is retained if
+  this stack is deleted; only `infra/down.sh --delete-data` removes them.
+
+Parameters:
+  EnableLifecycleTest:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Adds a rule moving _lifecycle-test/ objects to Glacier Instant Retrieval after 1 day, so
+      infra/phase0-test.sh can verify the lifecycle mechanism quickly.
+
+Conditions:
+  LifecycleTest: !Equals [!Ref EnableLifecycleTest, "true"]
+
+Resources:
+  # ---------- Data ----------
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # S3 request metrics in CloudWatch (incl. 5xx/503 SlowDown) for the
+      # write path. Billed as custom CloudWatch metrics, a few $/month.
+      MetricsConfigurations:
+        - Id: incoming
+          Prefix: _incoming/
+      # Object-created events go to EventBridge, where the fast-lane indexer
+      # (obs-phase2) picks up new raw files. Free for AWS service events.
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      LifecycleConfiguration:
+        Rules:
+          # Compacted data only (data/tenant=<T>/<signal>/...). _incoming/
+          # gets no transitions or expiry: a stuck compaction must never
+          # silently lose data.
+          - Id: data-tiering
+            Status: Enabled
+            Prefix: data/
+            Transitions:
+              - { StorageClass: STANDARD_IA, TransitionInDays: 30 }
+              - { StorageClass: GLACIER_IR, TransitionInDays: 180 }
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - !If
+            - LifecycleTest
+            - Id: lifecycle-test
+              Status: Enabled
+              Prefix: _lifecycle-test/
+              Transitions:
+                - { StorageClass: GLACIER_IR, TransitionInDays: 1 }
+            - !Ref AWS::NoValue
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: state }
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub "${DataBucket.Arn}/*"
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+  # Which compacted and fast-lane files hold what (written by obs-phase2).
+  IndexTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-index
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: state }
+
+  # One item per compacted chunk: records and bytes, per tenant, day and
+  # signal (T5 metering). Billing records: kept when a tenant is deleted.
+  UsageTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-usage
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: tenant, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: tenant, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: state }
+
+  # ---------- Tenants and logins ----------
+
+  # pk "key#<sha256 of API key>" -> tenant, status. API keys themselves are
+  # never stored here (API Gateway holds them for usage plans).
+  # pk "tenant#<T>" -> the tenant's status and plan (T5, obs-tenant-admin).
+  TenantsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: obs-tenants
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: tenant, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+      # A tenant's keys (and its tenant record), for rotation, revocation and deletion (T5).
+      GlobalSecondaryIndexes:
+        - IndexName: by-tenant
+          KeySchema:
+            - { AttributeName: tenant, KeyType: HASH }
+            - { AttributeName: pk, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: state }
+
+  # People who use the product (the web app), separate from API keys (which machines use). Each
+  # user belongs to one tenant, held in the immutable attribute custom:tenant that only the tenant
+  # admin sets. No self sign-up: users are invited with obs-tenant-admin invite-user.
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: obs-users
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true          # invitations only
+        InviteMessageTemplate:
+          EmailSubject: Your Leasyd account
+          EmailMessage: "You have been invited to Leasyd. Username: {username} Temporary password: {####} (you will choose a new one when you first sign in)."
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
+      MfaConfiguration: "OFF"                  # optional per user later (TOTP)
+      Schema:
+        - Name: tenant
+          AttributeDataType: String
+          Mutable: false                       # set once, at invitation
+          StringAttributeConstraints: { MinLength: "3", MaxLength: "40" }
+      UserPoolTags:
+        project: obs
+        phase: state
+
+  # The web app: a public client (no secret). Users can read custom:tenant
+  # but never write it.
+  AppClient:
+    Type: AWS::Cognito::UserPoolClient
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ClientName: obs-app
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      IdTokenValidity: 60
+      AccessTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits: { IdToken: minutes, AccessToken: minutes, RefreshToken: days }
+      ReadAttributes: [email, email_verified, custom:tenant]
+      WriteAttributes: [email]
+
+Outputs:
+  BucketName:
+    Value: !Ref DataBucket
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolArn:
+    Value: !GetAtt UserPool.Arn
+  AppClientId:
+    Value: !Ref AppClient

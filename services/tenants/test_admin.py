@@ -297,3 +297,24 @@ def test_deleting_a_tenant_removes_its_logins(adm):
     call(adm, "delete", tenant="acme")
     assert login("a@example.com") is None and login("b@example.com") is None
     assert {u["status"] for u in call(adm, "users", tenant="acme")["users"]} == {"removed"}
+
+
+def test_restore_puts_live_keys_in_new_plans_and_recreates_streams(adm, monkeypatch):
+    """infra/down.sh keeps tenants and keys; infra/up.sh recreates the API with new usage plans."""
+    a = call(adm, "create", tenant="acme")
+    r = call(adm, "read-key", tenant="acme")
+    gone = call(adm, "create", tenant="gone")
+    call(adm, "delete", tenant="gone")
+    apigw = boto3.client("apigateway")
+    api = apigw.get_rest_apis()["items"][0]["id"]
+    new_plan = apigw.create_usage_plan(name="obs-standard-2", apiStages=[{"apiId": api, "stage": "ingest"}])["id"]
+    monkeypatch.setitem(adm.PLANS, "standard", new_plan)
+    boto3.client("firehose").delete_delivery_stream(DeliveryStreamName="obs-t-acme-traces")
+
+    out = call(adm, "restore")
+    assert out["tenants"] == ["acme"]
+    assert sorted(out["keys_added_to_plans"]) == sorted([a["key_id"], r["key_id"]])
+    in_plan = {k["id"] for k in apigw.get_usage_plan_keys(usagePlanId=new_plan)["items"]}
+    assert in_plan == {a["key_id"], r["key_id"]} and gone["key_id"] not in in_plan
+    assert streams() == ["obs-t-acme-logs", "obs-t-acme-metrics", "obs-t-acme-traces"]
+    assert call(adm, "restore")["keys_added_to_plans"] == []   # safe to repeat

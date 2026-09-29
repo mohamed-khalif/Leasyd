@@ -15,7 +15,8 @@ output() {
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
 }
 
-BUCKET="$(output BucketName)"
+BUCKET="$(aws cloudformation describe-stacks --stack-name obs-state \
+  --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)"   # the bucket is in obs-state
 PROBE_KEY="_lifecycle-test/probe.bin"
 
 if [[ "$MODE" == "lifecycle" ]]; then

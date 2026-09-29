@@ -24,6 +24,9 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
   usage   {tenant, start, end}   records and bytes compacted per day and signal
   list    {}                     every tenant
   sweep   {}                     scheduled: expire rotated keys, advance deletions
+  restore {}                     after the API stack is recreated (infra/up.sh): every active
+                                 tenant's streams exist and its live keys are in the current
+                                 usage plans. Safe to repeat
   purge   {tenant}               internal: one purge pass (re-invokes itself if long)
 
 Keys: only their SHA-256 is stored (obs-tenants, pk "key#<hash>"); the
@@ -69,7 +72,7 @@ BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
 SETTLE = timedelta(minutes=int(os.environ.get("SETTLE_MINUTES", "20")))
 SIGNALS = ("logs", "traces", "metrics")
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
-USER_POOL = os.environ.get("USER_POOL_ID", "")   # Cognito user pool of obs-phaseU1 (empty: no logins)
+USER_POOL = os.environ.get("USER_POOL_ID", "")   # Cognito user pool of obs-state (empty: no logins)
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
 SCOPES = {"ingest", "read"}   # see the authorizer: ingest sends, read queries
 _KEY_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -95,7 +98,7 @@ def handler(event, context):
     if fn is None:
         return {"error": f"unknown action {action!r}; one of {sorted(ACTIONS)}"}
     args = {k: v for k, v in event.items() if k != "action"}
-    if action not in ("list", "sweep"):
+    if action not in ("list", "sweep", "restore"):
         args["tenant"] = check_tenant(args.get("tenant"))
     try:
         out = fn(context=context, **args)
@@ -238,7 +241,7 @@ def delete(tenant, context=None):
 
 def invite_user(tenant, email, send_email=True, context=None):
     if not USER_POOL:
-        raise Refused("logins are not set up (no USER_POOL_ID; deploy obs-phaseU1, then obs-phaseT5)")
+        raise Refused("logins are not set up (no USER_POOL_ID; deploy obs-state, then obs-phaseT5)")
     _active(tenant)
     email = _email(email)
     rec = tenants.get_item(Key={"pk": f"user#{email}"}, ConsistentRead=True).get("Item")
@@ -392,6 +395,31 @@ def sweep(context=None):
     return {"expired_keys": expired, "purging": advanced, "deleted": finished}
 
 
+def restore(context=None):
+    """Tenants, keys and streams outlive the compute stacks (infra/down.sh keeps them), but a
+    recreated API has new usage plans, which hold none of the keys. Put every live key back in
+    its plan and make sure every active tenant has its streams."""
+    tenants_done, keys_added = [], []
+    in_plan = {plan_id: {k["id"] for page in apigw.get_paginator("get_usage_plan_keys").paginate(usagePlanId=plan_id)
+                         for k in page["items"]}
+               for plan_id in PLANS.values()}
+    for t in list_tenants()["tenants"]:
+        if t["status"] != "active":
+            continue
+        rec = _record(t["tenant"])
+        _provision_streams(t["tenant"], int(rec.get("buffer_seconds", BUFFER_SECONDS)))
+        for k in _keys(t["tenant"]):
+            if k["status"] not in ("active", "expiring"):
+                continue
+            plan_id = PLANS[k.get("plan", "standard")]
+            if k["api_key_id"] not in in_plan[plan_id]:
+                apigw.create_usage_plan_key(usagePlanId=plan_id, keyId=k["api_key_id"], keyType="API_KEY")
+                in_plan[plan_id].add(k["api_key_id"])
+                keys_added.append(k["api_key_id"])
+        tenants_done.append(t["tenant"])
+    return {"tenants": tenants_done, "keys_added_to_plans": keys_added}
+
+
 def purge(tenant, deleted=0, context=None):
     """One purge pass. Deletes until nothing is left or the invocation is
     nearly out of time, then re-invokes itself to carry on the same pass."""
@@ -421,7 +449,7 @@ def purge(tenant, deleted=0, context=None):
 
 ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key,
            "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
-           "usage": usage, "list": list_tenants, "sweep": sweep, "purge": purge}
+           "usage": usage, "list": list_tenants, "sweep": sweep, "restore": restore, "purge": purge}
 
 
 # ------------------------------------------------------------------ helpers

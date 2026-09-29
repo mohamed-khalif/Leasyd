@@ -228,21 +228,13 @@ Resources:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "1" }
 
-  GlueDatabase:
-    Type: AWS::Glue::Database
-    Properties:
-      CatalogId: !Ref AWS::AccountId
-      DatabaseInput:
-        Name: obs
-        Description: Observability platform tables
-
   # One row per collector batch file. Partition projection means no crawler
   # and no partition registration; queries must filter on dt.
   RawLogsTable:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref GlueDatabase
+      DatabaseName: obs   # created by obs-phase2
       TableInput:
         Name: raw_logs
         TableType: EXTERNAL_TABLE

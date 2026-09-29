@@ -12,6 +12,20 @@ Parameters:
     Type: String
     Default: /ingest
     Description: The API stage, as a path.
+  AppHostName:
+    Type: String
+    Default: ""
+    Description: Public host name of the web app, e.g. app.leasyd.com (obs-dns). Empty = CloudFront's own name only.
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: obs-dns certificate covering AppHostName (in us-east-1, as CloudFront requires).
+  HostedZoneId:
+    Type: String
+    Default: ""
+
+Conditions:
+  CustomDomain: !Not [!Equals [!Ref CertificateArn, ""]]
 
 Resources:
   WebBucket:
@@ -65,6 +79,11 @@ Resources:
         HttpVersion: http2and3
         PriceClass: PriceClass_100
         DefaultRootObject: index.html
+        Aliases: !If [CustomDomain, [!Ref AppHostName], !Ref AWS::NoValue]
+        ViewerCertificate: !If
+          - CustomDomain
+          - { AcmCertificateArn: !Ref CertificateArn, SslSupportMethod: sni-only, MinimumProtocolVersion: TLSv1.2_2021 }
+          - !Ref AWS::NoValue
         Origins:
           - Id: app
             DomainName: !GetAtt WebBucket.RegionalDomainName
@@ -96,9 +115,20 @@ Resources:
         - { Key: project, Value: obs }
         - { Key: phase, Value: W1 }
 
+  AppRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref AppHostName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FHNNFP5HVDDFJ   # CloudFront's zone, the same for every distribution
+
 Outputs:
   WebUrl:
-    Value: !Sub "https://${Distribution.DomainName}"
+    Value: !If [CustomDomain, !Sub "https://${AppHostName}", !Sub "https://${Distribution.DomainName}"]
   WebBucketName:
     Value: !Ref WebBucket
   DistributionId:

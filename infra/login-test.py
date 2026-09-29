@@ -65,7 +65,7 @@ def main():
     a = p.parse_args()
     cf, lam, idp = boto3.client("cloudformation"), boto3.client("lambda"), boto3.client("cognito-idp")
     lam = boto3.client("lambda", config=__import__("botocore.config").config.Config(read_timeout=300))
-    u1 = outputs(cf, "obs-phaseU1")
+    u1 = outputs(cf, "obs-state")
     endpoint = outputs(cf, "obs-phaseT2")["IngestEndpoint"]
 
     def admin(payload):
