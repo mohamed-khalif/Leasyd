@@ -158,6 +158,12 @@ Resources:
             Effect: Allow
             Action: sqs:SendMessage
             Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:obs-*"
+          - Sid: CheckSecrets          # synthetic checks' secrets (S1), by the key's alias
+            Effect: Allow
+            Action: [kms:Encrypt, kms:Decrypt]
+            Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+            Condition:
+              ForAnyValue:StringEquals: { "kms:ResourceAliases": alias/obs-checks }
           - Sid: PlatformParameters    # e.g. the canary tenant's API key (SecureString)
             Effect: Allow
             Action: ssm:GetParameter

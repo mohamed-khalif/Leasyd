@@ -7,6 +7,32 @@ Description: >
   Deploy with infra/deploy-phaseS1.sh, before obs-phaseT2 (whose routes invoke the API function).
 
 Resources:
+  # Encrypts the secrets of checks (passwords, tokens), each under the context {tenant, check}, so a
+  # ciphertext only decrypts for its own check. Kept if the stack is deleted: without it the stored
+  # secrets could never be read again.
+  SecretsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Leasyd synthetic checks' secrets
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountIamPolicies    # access is granted by the roles below (and bounded by obs-boundary)
+            Effect: Allow
+            Principal: { AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root" }
+            Action: kms:*
+            Resource: "*"
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  SecretsKeyAlias:
+    Type: AWS::KMS::Alias
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties: { AliasName: alias/obs-checks, TargetKeyId: !Ref SecretsKey }
+
   # Manages the tenants' check settings (obs-tenants items "check#...") and runs a check on demand.
   ApiRole:
     Type: AWS::IAM::Role
@@ -34,6 +60,9 @@ Resources:
               - Effect: Allow     # "run now": record the result on the tenant's streams
                 Action: [firehose:PutRecordBatch]
                 Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+              - Effect: Allow     # save secrets; decrypt them for "run now" and "test"
+                Action: [kms:Encrypt, kms:Decrypt]
+                Resource: !GetAtt SecretsKey.Arn
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   # Finds the due checks and hands them to the runner.
@@ -60,7 +89,7 @@ Resources:
                 Resource: !GetAtt RunFunction.Arn
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
-  # Requests customers' URLs: it can only put records on tenant streams. It reads nothing.
+  # Requests customers' URLs: it can decrypt check secrets and put records on tenant streams. It reads no data.
   RunRole:
     Type: AWS::IAM::Role
     Properties:
@@ -79,6 +108,9 @@ Resources:
               - Effect: Allow
                 Action: [firehose:PutRecordBatch]
                 Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !GetAtt SecretsKey.Arn
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   ApiLogGroup:
@@ -103,9 +135,9 @@ Resources:
       Code: ../services/synthetics/build
       Role: !GetAtt ApiRole.Arn
       MemorySize: 512
-      Timeout: 28          # under API Gateway's 29 s (a check's timeout is at most 20 s)
+      Timeout: 28          # under API Gateway's 29 s (a whole check takes at most 25 s)
       Environment:
-        Variables: { TENANTS_TABLE: obs-tenants, RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t- }
+        Variables: { TENANTS_TABLE: obs-tenants, RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t-, KMS_KEY: alias/obs-checks }
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   TickFunction:
@@ -137,9 +169,9 @@ Resources:
       Code: ../services/synthetics/build
       Role: !GetAtt RunRole.Arn
       MemorySize: 512
-      Timeout: 60
+      Timeout: 90          # a check takes at most 25 s; a batch runs its checks in parallel
       Environment:
-        Variables: { RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t- }
+        Variables: { RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t-, KMS_KEY: alias/obs-checks }
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   # A batch that fails is not retried: the next scheduled run comes within minutes anyway.

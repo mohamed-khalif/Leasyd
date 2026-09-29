@@ -33,15 +33,24 @@ const PER_MIN = { logs: 5200, traces: 9100, metrics: 14000 } as Record<string, n
 
 // ------------------------------------------------------------------ synthetic checks
 
-type MockCheck = Record<string, unknown> & { id: string; name: string; url: string; frequency: number; enabled: boolean };
+type MockCheck = Record<string, unknown> & { id: string; name: string; frequency: number; enabled: boolean };
+const step = (name: string, method: string, url: string, extra: Record<string, unknown> = {}) => ({ name, method, url, headers: {}, auth: { type: "none" },
+  follow_redirects: true, verify_tls: true, record_body: true, extract: [], constraints: [{ type: "status", expr: "<400" }], ...extra });
 const CHECKS: MockCheck[] = [
-  ["a1b2c3d4e5f6", "Homepage", "https://shop.example.com/", 1, 0.9993, 180],
-  ["b2c3d4e5f6a1", "Checkout API health", "https://api.shop.example.com/v1/health", 1, 0.981, 95],
-  ["c3d4e5f6a1b2", "Product search", "https://api.shop.example.com/v1/search?q=shoes", 5, 1, 320],
-  ["d4e5f6a1b2c3", "Status page", "https://status.shop.example.com/", 15, 1, 140],
-].map(([id, name, url, frequency, up, ms]) => ({ id: id as string, name: name as string, url: url as string, method: "GET",
-  frequency: frequency as number, timeout_ms: 10000, headers: {}, expect: { status: "2xx" }, follow_redirects: true,
-  enabled: id !== "d4e5f6a1b2c3", created_at: "2026-09-20T10:00:00Z", updated_at: "2026-09-20T10:00:00Z", up, ms }));
+  ["a1b2c3d4e5f6", "Homepage", [step("Load homepage", "GET", "https://shop.example.com/", { constraints: [{ type: "status", expr: "2xx" }, { type: "body_contains", value: "Add to cart" }, { type: "tls_days", value: 14 }] })], 1, 0.9993, 180],
+  ["b2c3d4e5f6a1", "Checkout API", [
+    step("Log in", "POST", "{base}/v1/login", { auth: { type: "basic", username: "monitor@shop.example.com", password: "{password}" },
+      extract: [{ name: "token", from: "json", expr: "access_token" }], constraints: [{ type: "status", expr: "200" }] }),
+    step("Create cart", "POST", "{base}/v1/carts", { auth: { type: "bearer", token: "{token}" }, body: '{"sku": "OLJCESPC7Z", "qty": 1}',
+      extract: [{ name: "cart_id", from: "json", expr: "cart.id" }], constraints: [{ type: "status", expr: "201" }, { type: "max_ms", value: 800 }] }),
+    step("Get cart", "GET", "{base}/v1/carts/{cart_id}", { auth: { type: "bearer", token: "{token}" },
+      constraints: [{ type: "status", expr: "2xx" }, { type: "json", path: "cart.items[0].sku", op: "equals", value: "OLJCESPC7Z" }] }),
+  ], 1, 0.981, 95],
+  ["c3d4e5f6a1b2", "Product search", [step("Search", "GET", "https://api.shop.example.com/v1/search?q=shoes", { constraints: [{ type: "json", path: "results", op: "exists" }] })], 5, 1, 320],
+  ["d4e5f6a1b2c3", "Status page", [step("Status", "GET", "https://status.shop.example.com/")], 15, 1, 140],
+].map(([id, name, steps, frequency, up, ms]) => ({ id: id as string, name: name as string, steps, frequency: frequency as number,
+  timeout_ms: 20000, variables: id === "b2c3d4e5f6a1" ? { base: "https://api.shop.example.com" } : {}, enabled: id !== "d4e5f6a1b2c3",
+  secret_names: id === "b2c3d4e5f6a1" ? ["password"] : [], created_at: "2026-09-20T10:00:00Z", updated_at: "2026-09-20T10:00:00Z", up, ms }));
 
 function synthetics(q: Q) {
   const t0 = Date.parse(q.start), t1 = Date.parse(q.end);
@@ -56,8 +65,8 @@ function synthetics(q: Q) {
       const bad = fail(c, t), ms = Number(c.ms) * (0.8 + r() * 0.5) * (bad ? 6 : 1);
       rows.push({ ts: new Date(t).toISOString(), service: "synthetics", name: c.name, trace_id: hex(r, 32), span_id: hex(r, 16),
         duration_ns: Math.round(ms * 1e6), status_code: bad ? 2 : 0,
-        attributes: { "check.id": c.id, "check.name": c.name, "check.result": bad ? "fail" : "pass", "url.full": c.url,
-          "http.response.status_code": bad ? 503 : 200, "check.total_ms": Math.round(ms), ...(bad ? { "check.failure": "status 503, expected 2xx" } : {}) } });
+        attributes: { "check.id": c.id, "check.name": c.name, "check.result": bad ? "fail" : "pass", "check.total_ms": Math.round(ms),
+          ...(bad ? { "check.failed_step": 2, "check.failure": "Create cart: status 503, expected 201" } : {}) } });
     }
     const cols = rows.length ? Object.keys(rows[0]) : ["ts"];
     return { columns: cols, rows: rows.map((x) => cols.map((k) => (x as Record<string, unknown>)[k])) };
@@ -69,6 +78,10 @@ function synthetics(q: Q) {
     const up = Number(c.up) + (tsg && fail(c, t) ? -0.3 : 0), ms = Number(c.ms) * (0.9 + 0.2 * Math.sin(t / 3e6 + c.frequency));
     const v = (a: { fn: string }) => a.fn === "count" ? Math.round((b / 60000) / c.frequency)
       : metric.endsWith("success") ? up : metric.endsWith("tls_days_remaining") ? 58 + c.frequency : a.fn === "p95" ? ms * 1.6 : ms;
+    if (by.includes("attributes.step.index")) {
+      (c.steps as unknown[]).forEach((_, i) => rows.push([i + 1, ...aggs.map((a) => (a.fn === "p95" ? 1.6 : 1) * Number(c.ms) / (c.steps as unknown[]).length * (1 + i * 0.3))]));
+      break;
+    }
     rows.push([...by.map((g) => g.startsWith("ts:") ? new Date(t).toISOString().replace("Z", "000Z") : c.id), ...aggs.map(v)]);
     if (!tsg) break;
   }
@@ -277,15 +290,17 @@ export function mockApi(): Plugin {
           req.on("end", () => {
             const [, , , , id, sub] = req.url!.split("?")[0].split("/");   // /v1/app/checks[/id[/run]]
             const body = raw ? JSON.parse(raw) : {};
-            const result = { ok: true, status: 200, failure: null, url: body.url ?? "", bytes: 5120, tls_days: 61.4,
-              timings: { dns_ms: 12.1, connect_ms: 31.6, tls_ms: 58.2, ttfb_ms: 141.7, total_ms: 150.3 } };
+            const steps = (body.steps ?? CHECKS.find((x) => x.id === id)?.steps ?? []) as { name: string; url: string; extract?: { name: string }[] }[];
+            const result = { ok: true, failure: null, failed_step: null, total_ms: 150.3 * steps.length, tls_days: 61.4,
+              steps: steps.map((st, i) => ({ name: st.name, ok: true, failure: null, status: 200, url: st.url, extracted: (st.extract ?? []).map((e) => e.name),
+                timings: { dns_ms: i ? 0.4 : 12.1, connect_ms: 31.6, tls_ms: 58.2, ttfb_ms: 141.7, total_ms: 150.3 }, body_sample: null })) };
             let out: unknown = { error: "no such check" }, status = 200;
             const c = CHECKS.find((x) => x.id === id);
             if (!id && req.method === "GET") out = { checks: CHECKS, limit: 20 };
             else if (!id && req.method === "POST") { const n = { ...body, id: hex(Math.random, 12), created_at: new Date().toISOString() }; CHECKS.push(n); out = n; status = 201; }
             else if (id === "test") out = { result };
             else if (!c) status = 404;
-            else if (sub === "run") out = { result: { ...result, url: c.url } };
+            else if (sub === "run") out = { result };
             else if (req.method === "PUT") { Object.assign(c, body); out = c; }
             else if (req.method === "DELETE") { CHECKS.splice(CHECKS.indexOf(c), 1); out = { deleted: id }; }
             else out = c;

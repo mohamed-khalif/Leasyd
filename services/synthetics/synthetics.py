@@ -1,34 +1,53 @@
-"""Synthetic HTTP checks: customers' own uptime and API checks, run from us-east-1.
+"""Synthetic HTTP checks: customers' own multi-step uptime and API monitors, run from us-east-1.
 
-A check (set up by a signed-in user in the portal) requests a URL on a schedule and asserts on the
-answer: status, response time, text in the body. Each run becomes the tenant's own telemetry, put
-on its Firehose streams exactly as ingest would (so it shows up in every screen, is isolated,
-metered and deleted like any data): a span (service "synthetics"), metrics synthetics.check.success
-(1/0), synthetics.check.duration (ms) and synthetics.check.tls_days_remaining, and an ERROR log
-when it fails.
+A check (set up by a signed-in user in the portal) is 1-10 HTTP requests ("steps") run in order on
+a schedule. Each step can use variables, take new ones from its response, and assert on it:
+
+  variables   {name} anywhere in a step's URL, headers, body, auth or constraint values is replaced
+              by: the check's plain variables; its secrets (write-only, encrypted with KMS, never
+              shown or recorded); or values extracted by earlier steps.
+  auth        none | basic (username, password) | bearer (token), usually from secrets
+  extract     from the JSON body (a path such as data.items[0].id), a regex (its first group) or
+              a response header, into a variable for the following steps
+  constraints status (e.g. "<400", "2xx", "3xx, 404, 406-410, >=500"), response time, body
+              contains / not contains / regex, header, JSON value, TLS certificate days left.
+              A step without constraints must return a status below 400.
+  options     follow redirects, verify TLS certificates, record the response body when it fails
+              (first 2 KB, secrets and extracted values masked); cookies carry over between steps.
+
+The first failing step ends the run. Each run becomes the tenant's own telemetry, put on its Firehose
+streams exactly as ingest would (so it is isolated, metered, deleted and shown like any data): a
+trace (the check, with one span per step; service "synthetics"), metrics synthetics.check.success
+(1/0), synthetics.check.duration (ms), synthetics.step.duration and
+synthetics.check.tls_days_remaining, and an ERROR log when it fails.
 
 Three Lambdas share this module:
   api   /v1/app/checks...  (Cognito: the tenant comes from the user's token, never the request)
-        GET list | POST create | POST test (run an unsaved check) | GET/PUT/DELETE one |
+        GET list | POST create | POST test (run unsaved settings) | GET/PUT/DELETE one |
         POST {id}/run (run now, recorded)
-  tick  every minute: runs the checks that are due (frequency 1, 5 or 15 minutes, spread over
-        the period by check id) in batches on the runner
-  run   probes a batch of checks in parallel and records the results
+  tick  every minute: hands the checks that are due (every 1, 5 or 15 minutes, spread over the
+        period by id) to the runner in batches
+  run   runs a batch in parallel and records the results
 
-Safety: a check may only reach the public internet. Hostnames are resolved once and the request
-goes to that address (so DNS can't be switched between the check and the request), and any
-private, loopback, link-local or otherwise non-public address is refused, redirects included.
-The runner's role can only put records on tenant streams: it can read nothing.
+Safety
+- Only public addresses: each step's final URL (after variables) is resolved once and requested at
+  that address; private, loopback, link-local (169.254.169.254), carrier-grade NAT and other
+  non-public addresses are refused, redirects included.
+- Secrets: encrypted with the checks KMS key under the context {tenant, check}, so a ciphertext only
+  decrypts for its own check. Values are never returned by the API or written to telemetry.
+- Customer regexes run with a time limit (a bad pattern can't stall the runner). No customer code runs.
+- The runner's role can decrypt check secrets and put records on tenant streams: it reads no data.
 
 Checks are items of the obs-tenants registry: pk "check#<tenant>#<id>", attribute tenant.
 """
 
+import base64
 import http.client
 import ipaddress
 import json
 import os
 import re
-import secrets
+import secrets as _secrets
 import socket
 import ssl
 import time
@@ -37,26 +56,34 @@ from datetime import datetime, timezone
 from urllib.parse import urljoin, urlsplit
 
 import boto3
+import regex
 from boto3.dynamodb.conditions import Attr, Key
 
 import ingest
 
 TABLE = os.environ.get("TENANTS_TABLE", "obs-tenants")
 RUN_FUNCTION = os.environ.get("RUN_FUNCTION", "obs-synthetics-run")
+KMS_KEY = os.environ.get("KMS_KEY", "alias/obs-checks")
 LOCATION = os.environ.get("AWS_REGION", "us-east-1")
 MAX_CHECKS = int(os.environ.get("MAX_CHECKS_PER_TENANT", "20"))
-FREQUENCIES = (1, 5, 15)                     # minutes
-METHODS = ("GET", "HEAD", "POST", "PUT", "OPTIONS")
-MAX_TIMEOUT_MS, MAX_BODY_READ, MAX_REQUEST_BODY, MAX_REDIRECTS = 20_000, 1 << 20, 16 << 10, 5
-BATCH = 25                                   # checks per runner invocation (run in parallel)
-USER_AGENT = "Leasyd-Synthetics/1.0 (+https://leasyd.com)"
+FREQUENCIES = (1, 5, 15)                        # minutes
+METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+MAX_STEPS, MAX_TOTAL_MS, MAX_STEP_MS = 10, 25_000, 20_000   # a whole check fits in an API call ("Test")
+MAX_BODY_READ, MAX_REQUEST_BODY, MAX_REDIRECTS, BODY_SAMPLE = 1 << 20, 16 << 10, 5, 2048
+REGEX_TIMEOUT_S, REGEX_TEXT = 0.2, 256 << 10
+BATCH = 25                                      # checks per runner invocation (run in parallel)
+DEFAULT_USER_AGENT = "Leasyd-Synthetics/1.0 (+https://leasyd.com)"
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 _ID = re.compile(r"^[a-z0-9]{12}$")
-_HEADER = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-_STATUS = re.compile(r"^([1-5]xx|[1-5][0-9][0-9])(,([1-5]xx|[1-5][0-9][0-9]))*$")
-_BLOCKED_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
+_HEADER = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$")
+_VAR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}$")
+_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]{0,39})\}")
+_BLOCKED_HEADERS = {"host", "content-length", "transfer-encoding", "connection", "cookie"}
+_STATUS_TERM = re.compile(r"^(?:([1-5])xx|([1-5]\d\d)\s*-\s*([1-5]\d\d)|(<=|>=|!=|<|>|=)?\s*([1-5]\d\d))$")
+JSON_OPS = ("exists", "equals", "not_equals", "contains", "lt", "gt")
+HEADER_OPS = ("exists", "equals", "contains")
 
-_table = None
+_table = _kms = None
 
 
 def table():
@@ -65,57 +92,222 @@ def table():
     return _table
 
 
+def kms():
+    global _kms
+    _kms = _kms or boto3.client("kms")
+    return _kms
+
+
 class Refused(ValueError):
     """A request we won't carry out (bad input, or an address that isn't public)."""
 
 
-# ------------------------------------------------------------------ checks: validation
+class StepFailed(Exception):
+    pass
+
+
+# ------------------------------------------------------------------ validation
+
+def _text(v, what, lo=0, hi=1024):
+    s = "" if v is None else str(v)
+    if not lo <= len(s) <= hi:
+        raise Refused(f"{what}: {lo}-{hi} characters")
+    return s
+
+
+def _var_name(v, what):
+    if not isinstance(v, str) or not _VAR.match(v):
+        raise Refused(f"{what}: letters, digits and _, starting with a letter or _ (at most 40)")
+    return v
+
 
 def validate(body):
-    """A check's settings from user input, normalized; raises Refused with a readable reason."""
+    """A check's settings from user input, normalized; raises Refused with a readable reason.
+    Secret values are not part of the settings (see _secret_values)."""
     if not isinstance(body, dict):
         raise Refused("expected a JSON object")
-    name = str(body.get("name") or "").strip()
-    if not 1 <= len(name) <= 80:
-        raise Refused("name: 1-80 characters")
-    url = str(body.get("url") or "").strip()
-    target(url)                                                    # scheme, host, port
-    method = str(body.get("method") or "GET").upper()
-    if method not in METHODS:
-        raise Refused(f"method: one of {', '.join(METHODS)}")
+    name = _text(str(body.get("name") or "").strip(), "name", 1, 80)
     frequency = int(body.get("frequency") or 5)
     if frequency not in FREQUENCIES:
         raise Refused("frequency: 1, 5 or 15 minutes")
-    timeout_ms = int(body.get("timeout_ms") or 10_000)
-    if not 1000 <= timeout_ms <= MAX_TIMEOUT_MS:
-        raise Refused(f"timeout_ms: 1000-{MAX_TIMEOUT_MS}")
-    headers = body.get("headers") or {}
-    if not isinstance(headers, dict) or len(headers) > 10:
-        raise Refused("headers: at most 10")
-    for k, v in headers.items():
-        if not _HEADER.match(k) or k.lower() in _BLOCKED_HEADERS or len(str(v)) > 1024 or "\n" in str(v) or "\r" in str(v):
-            raise Refused(f"header {k!r} is not allowed")
-    req_body = body.get("body")
-    if req_body is not None and (method not in ("POST", "PUT") or len(str(req_body)) > MAX_REQUEST_BODY):
-        raise Refused(f"body: only for POST or PUT, at most {MAX_REQUEST_BODY // 1024} KB")
-    expect = body.get("expect") or {}
-    status = str(expect.get("status") or "2xx").replace(" ", "")
-    if not _STATUS.match(status):
-        raise Refused('expect.status: e.g. "2xx", "200" or "200,204,3xx"')
-    max_ms = expect.get("max_ms")
-    if max_ms is not None and not 1 <= int(max_ms) <= MAX_TIMEOUT_MS:
-        raise Refused(f"expect.max_ms: 1-{MAX_TIMEOUT_MS}")
-    contains = expect.get("contains")
-    if contains is not None and not 1 <= len(str(contains)) <= 200:
-        raise Refused("expect.contains: 1-200 characters")
-    return {"name": name, "url": url, "method": method, "frequency": frequency, "timeout_ms": timeout_ms,
-            "headers": {str(k): str(v) for k, v in headers.items()},
-            **({"body": str(req_body)} if req_body is not None else {}),
-            "expect": {"status": status, **({"max_ms": int(max_ms)} if max_ms is not None else {}),
-                       **({"contains": str(contains)} if contains is not None else {})},
-            "follow_redirects": bool(body.get("follow_redirects", True)),
-            "enabled": bool(body.get("enabled", True))}
+    timeout_ms = int(body.get("timeout_ms") or 20_000)
+    if not 1000 <= timeout_ms <= MAX_TOTAL_MS:
+        raise Refused(f"timeout_ms (the whole check): 1000-{MAX_TOTAL_MS}")
+    variables = body.get("variables") or {}
+    if not isinstance(variables, dict) or len(variables) > 20:
+        raise Refused("variables: at most 20")
+    variables = {_var_name(k, "variable name"): _text(v, f"variable {k}", 0, 1024) for k, v in variables.items()}
+    secret_names = list(body.get("secret_names") or [])
+    steps = body.get("steps")
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
+        raise Refused(f"steps: 1-{MAX_STEPS}")
+    known = set(variables) | set(secret_names)
+    out = []
+    for i, s in enumerate(steps):
+        step = _validate_step(s, i + 1, known, known - set(variables))
+        known |= {e["name"] for e in step["extract"]}
+        out.append(step)
+    return {"name": name, "frequency": frequency, "timeout_ms": timeout_ms, "variables": variables,
+            "steps": out, "enabled": bool(body.get("enabled", True))}
 
+
+def _validate_step(s, n, known, hidden):
+    """hidden: the names whose values are never shown or recorded (secrets and earlier extractions)."""
+    where = f"step {n}"
+    if not isinstance(s, dict):
+        raise Refused(f"{where}: expected an object")
+    name = _text(str(s.get("name") or f"Step {n}").strip(), f"{where} name", 1, 80)
+    url = _text(str(s.get("url") or "").strip(), f"{where} url", 1, 2048)
+    if not _PLACEHOLDER.search(url.split("://", 1)[-1].split("/", 1)[0]):
+        target(url)                                   # a fixed host is checked now; with variables, at run time
+    method = str(s.get("method") or "GET").upper()
+    if method not in METHODS:
+        raise Refused(f"{where} method: one of {', '.join(METHODS)}")
+    headers = s.get("headers") or {}
+    if not isinstance(headers, dict) or len(headers) > 20:
+        raise Refused(f"{where} headers: at most 20")
+    for k, v in headers.items():
+        if not _HEADER.match(k) or k.lower() in _BLOCKED_HEADERS:
+            raise Refused(f"{where}: header {k!r} is not allowed")
+        if len(str(v)) > 4096 or "\n" in str(v) or "\r" in str(v):
+            raise Refused(f"{where}: header {k!r} value is not allowed")
+    req_body = s.get("body")
+    if req_body is not None and len(str(req_body)) > MAX_REQUEST_BODY:
+        raise Refused(f"{where} body: at most {MAX_REQUEST_BODY // 1024} KB")
+    auth = s.get("auth") or {"type": "none"}
+    if auth.get("type") not in ("none", "basic", "bearer"):
+        raise Refused(f"{where} auth: none, basic or bearer")
+    def secret_ref(v, what):   # passwords and tokens: a secret or an earlier step's extraction, never plain text
+        m = re.fullmatch(r"\{([A-Za-z_][A-Za-z0-9_]{0,39})\}", str(v or ""))
+        if not m or m[1] not in hidden:
+            raise Refused(f"{where} {what}: must be a secret or a value extracted by an earlier step, e.g. {{password}}")
+        return m[0]
+    auth = ({"type": "basic", "username": _text(auth.get("username"), f"{where} username", 1, 256),
+             "password": secret_ref(auth.get("password"), "password")} if auth["type"] == "basic" else
+            {"type": "bearer", "token": secret_ref(auth.get("token"), "token")} if auth["type"] == "bearer" else
+            {"type": "none"})
+    extract = []
+    for e in s.get("extract") or []:
+        src = e.get("from")
+        if src not in ("json", "regex", "header"):
+            raise Refused(f"{where} extract: from json, regex or header")
+        item = {"name": _var_name(e.get("name"), f"{where} extract name"), "from": src,
+                "expr": _text(e.get("expr"), f"{where} extract {e.get('name')}", 1, 256)}
+        if src == "json":
+            json_path(item["expr"])
+        if src == "regex":
+            _compile(item["expr"], f"{where} extract {item['name']}")
+        extract.append(item)
+    if len(extract) > 10:
+        raise Refused(f"{where}: at most 10 extractions")
+    constraints = [_validate_constraint(c, where) for c in (s.get("constraints") or [])]
+    if len(constraints) > 20:
+        raise Refused(f"{where}: at most 20 constraints")
+    used = set(_PLACEHOLDER.findall(json.dumps([url, headers, req_body, auth, constraints])))
+    unknown = sorted(used - known)
+    if unknown:
+        raise Refused(f"{where} uses {', '.join('{' + u + '}' for u in unknown)}: not a variable, secret or earlier extraction")
+    return {"name": name, "method": method, "url": url, "headers": {str(k): str(v) for k, v in headers.items()},
+            **({"body": str(req_body)} if req_body not in (None, "") else {}), "auth": auth,
+            "user_agent": _text(s.get("user_agent") or DEFAULT_USER_AGENT, f"{where} user agent", 1, 256),
+            "follow_redirects": bool(s.get("follow_redirects", True)), "verify_tls": bool(s.get("verify_tls", True)),
+            "record_body": bool(s.get("record_body", True)), "extract": extract,
+            "constraints": constraints or [{"type": "status", "expr": "<400"}]}
+
+
+def _validate_constraint(c, where):
+    t = c.get("type")
+    if t == "status":
+        expr = _text(c.get("expr"), f"{where} status", 1, 200)
+        status_matches(expr, 200)                     # parses, or raises Refused
+        return {"type": t, "expr": expr}
+    if t == "max_ms":
+        v = int(c.get("value") or 0)
+        if not 1 <= v <= MAX_STEP_MS:
+            raise Refused(f"{where} response time: 1-{MAX_STEP_MS} ms")
+        return {"type": t, "value": v}
+    if t in ("body_contains", "body_not_contains"):
+        return {"type": t, "value": _text(c.get("value"), f"{where} text", 1, 500)}
+    if t == "body_regex":
+        return {"type": t, "value": _text(_compile(c.get("value"), f"{where} regex").pattern, "", 1, 256)}
+    if t == "header":
+        op = c.get("op") or "exists"
+        if op not in HEADER_OPS or not _HEADER.match(str(c.get("name") or "")):
+            raise Refused(f"{where} header constraint: a header name and one of {', '.join(HEADER_OPS)}")
+        return {"type": t, "name": c["name"], "op": op, **({"value": _text(c.get("value"), f"{where} header value", 1, 500)} if op != "exists" else {})}
+    if t == "json":
+        op = c.get("op") or "exists"
+        if op not in JSON_OPS:
+            raise Refused(f"{where} JSON constraint: one of {', '.join(JSON_OPS)}")
+        path = _text(c.get("path"), f"{where} JSON path", 1, 256)
+        json_path(path)
+        return {"type": t, "path": path, "op": op, **({"value": _text(c.get("value"), f"{where} JSON value", 0, 500)} if op != "exists" else {})}
+    if t == "tls_days":
+        v = int(c.get("value") or 0)
+        if not 1 <= v <= 365:
+            raise Refused(f"{where} certificate: 1-365 days")
+        return {"type": t, "value": v}
+    raise Refused(f"{where}: unknown constraint {t!r}")
+
+
+def _compile(pattern, what):
+    try:
+        return regex.compile(_text(pattern, what, 1, 256))
+    except regex.error as e:
+        raise Refused(f"{what}: not a valid regular expression ({e})")
+
+
+def status_matches(expr, status):
+    """Whether a status matches an expression like "<400", "2xx", "200,204", "406-410", ">=500"
+    (comma-separated terms; any may match). Raises Refused if the expression is malformed."""
+    for term in (t.strip() for t in expr.split(",")):
+        m = _STATUS_TERM.match(term)
+        if not m:
+            raise Refused(f'status: {term!r} is not like 2xx, 200, 406-410 or >=500')
+        cls, lo, hi, op, n = m.groups()
+        if cls and status // 100 == int(cls):
+            return True
+        if lo and int(lo) <= status <= int(hi):
+            return True
+        if n and {"<": status < int(n), "<=": status <= int(n), ">": status > int(n), ">=": status >= int(n),
+                  "!=": status != int(n), "=": status == int(n), None: status == int(n)}[op]:
+            return True
+    return False
+
+
+_PATH_TOKEN = re.compile(r"""\.?([A-Za-z0-9_\-]+)|\[(\d+)\]|\[['"]([^'"\]]+)['"]\]""")
+
+
+def json_path(path):
+    """A simple JSON path -> keys: "data.items[0].id", "$.token", "items[2]['full name']"."""
+    p = path.strip()
+    p = p[1:] if p.startswith("$") else p
+    keys, pos = [], 0
+    while pos < len(p):
+        m = _PATH_TOKEN.match(p, pos)
+        if not m or m.end() == pos:
+            raise Refused(f"JSON path {path!r}: use keys and [index], e.g. data.items[0].id")
+        keys.append(int(m[2]) if m[2] is not None else (m[1] or m[3]))
+        pos = m.end()
+    if not keys:
+        raise Refused(f"JSON path {path!r} is empty")
+    return keys
+
+
+def json_get(doc, path):
+    """(found, value) at path in a parsed JSON document."""
+    cur = doc
+    for k in json_path(path):
+        if isinstance(k, int) and isinstance(cur, list) and -len(cur) <= k < len(cur):
+            cur = cur[k]
+        elif isinstance(k, str) and isinstance(cur, dict) and k in cur:
+            cur = cur[k]
+        else:
+            return False, None
+    return True, cur
+
+
+# ------------------------------------------------------------------ where a step may go
 
 def target(url):
     """(scheme, host, port, path) of a URL a check may request; raises Refused."""
@@ -127,9 +319,7 @@ def target(url):
     if u.scheme not in ("http", "https") or not u.hostname:
         raise Refused("url: must start with http:// or https://")
     if u.username or u.password:
-        raise Refused("url: credentials in the URL are not allowed; use a header")
-    if len(url) > 2048:
-        raise Refused("url: at most 2048 characters")
+        raise Refused("url: credentials in the URL are not allowed; use authentication")
     host = u.hostname.lower().rstrip(".")
     if host == "localhost" or host.endswith((".localhost", ".internal", ".local")):
         raise Refused("url: must be a public address")
@@ -165,56 +355,120 @@ def resolve(host, port):
     return ips
 
 
-# ------------------------------------------------------------------ probing
+# ------------------------------------------------------------------ running a check
 
-def probe(check):
-    """Run one check: -> result dict (never raises)."""
-    started = time.time()
-    deadline = time.perf_counter() + check["timeout_ms"] / 1000
-    url, method, t = check["url"], check["method"], {}
-    body = check.get("body")
+def run_check(check, secret_values):
+    """Run every step in order until one fails -> result dict (never raises).
+    secret_values: {name: plaintext} (decrypted for this run only)."""
+    started, deadline = time.time(), time.perf_counter() + check["timeout_ms"] / 1000
+    values = {**check.get("variables", {}), **secret_values}
+    masked = [v for v in secret_values.values() if v]          # never shown or recorded
+    cookies, steps, failure = {}, [], None
+    for i, step in enumerate(check["steps"]):
+        r = _run_step(step, values, cookies, deadline, masked)
+        steps.append(r)
+        if not r["ok"]:
+            failure = f"{step['name']}: {r['failure']}"
+            break
+    total = sum(s["timings"].get("total_ms", 0) for s in steps)
+    tls = [s["tls_days"] for s in steps if s.get("tls_days") is not None]
+    return {"ok": failure is None, "failure": failure, "failed_step": None if failure is None else len(steps) - 1,
+            "steps": steps, "total_ms": round(total, 1), "tls_days": min(tls) if tls else None, "started": started}
+
+
+def _sub(text, values):
+    return _PLACEHOLDER.sub(lambda m: str(values[m[1]]) if m[1] in values else m[0], text)
+
+
+def _run_step(step, values, cookies, deadline, masked):
+    started, t, status, content, url = time.time(), {}, None, b"", step["url"]
     try:
+        url = _sub(step["url"], values)
+        method, body = step["method"], _sub(step["body"], values) if "body" in step else None
+        headers = {"User-Agent": _sub(step["user_agent"], values), "Accept": "*/*"}
+        headers.update({k: _sub(v, values) for k, v in step["headers"].items()})
+        a = step["auth"]
+        if a["type"] == "basic":
+            pair = f"{_sub(a['username'], values)}:{_sub(a['password'], values)}".encode()
+            headers["Authorization"] = "Basic " + base64.b64encode(pair).decode()
+        elif a["type"] == "bearer":
+            headers["Authorization"] = "Bearer " + _sub(a["token"], values)
+        if any("\r" in v or "\n" in v for v in headers.values()):
+            raise StepFailed("a header value contains a line break (from a variable?)")
+        tls_days = None
         for hop in range(MAX_REDIRECTS + 1):
             scheme, host, port, path = target(url)
-            status, headers, content, t, cert_days = _request(scheme, host, port, path, method, check, body, deadline, t)
-            location = headers.get("location")
-            if check.get("follow_redirects", True) and status in (301, 302, 303, 307, 308) and location:
+            jar = "; ".join(f"{k}={v}" for k, v in cookies.get(host, {}).items())
+            status, resp_headers, content, t, cert = _request(scheme, host, port, path, method,
+                                                               {**headers, **({"Cookie": jar} if jar else {})},
+                                                               body, deadline, t, step["verify_tls"])
+            tls_days = cert if cert is not None else tls_days
+            for sc in resp_headers.get("set-cookie", []):
+                name, _, rest = sc.partition("=")
+                if name.strip():
+                    cookies.setdefault(host, {})[name.strip()] = rest.split(";", 1)[0]
+            location = (resp_headers.get("location") or [None])[0]
+            if step["follow_redirects"] and status in (301, 302, 303, 307, 308) and location:
                 if hop == MAX_REDIRECTS:
-                    raise Refused(f"more than {MAX_REDIRECTS} redirects")
+                    raise StepFailed(f"more than {MAX_REDIRECTS} redirects")
                 url = urljoin(url, location)
                 if status == 303 or (status in (301, 302) and method == "POST"):
                     method, body = "GET", None
                 continue
             break
-        failure = _assert(check["expect"], status, t["total_ms"], content)
-        return {"ok": failure is None, "status": status, "failure": failure, "timings": t, "url": url,
-                "bytes": len(content), "tls_days": cert_days, "started": started}
-    except Refused as e:
-        return {"ok": False, "status": None, "failure": str(e), "timings": t, "url": url, "started": started}
+        text = content.decode("utf-8", "replace")
+        failure = _check_constraints(step["constraints"], status, t.get("total_ms", 0), text, resp_headers, tls_days, values)
+        extracted = {}
+        if failure is None:
+            for e in step["extract"]:
+                v = _extract(e, text, resp_headers)
+                if v is None:
+                    failure = f"could not extract {{{e['name']}}} ({e['from']} {e['expr']})"
+                    break
+                extracted[e["name"]] = v
+            values.update(extracted)
+            masked += [v for v in extracted.values() if len(v) >= 4]   # tokens and ids: don't record them
+        return {"name": step["name"], "ok": failure is None, "failure": failure, "status": status, "url": _mask(url, masked),
+                "timings": t, "tls_days": tls_days, "extracted": sorted(extracted), "started": started,
+                "body_sample": _mask(text[:BODY_SAMPLE], masked) if failure and step["record_body"] else None}
+    except (Refused, StepFailed) as e:
+        reason = str(e)
     except (OSError, http.client.HTTPException, ssl.SSLError) as e:
         reason = "timed out" if isinstance(e, (socket.timeout, TimeoutError)) else f"{type(e).__name__}: {e}"
-        return {"ok": False, "status": None, "failure": reason[:300], "timings": t, "url": url, "started": started}
+    return {"name": step["name"], "ok": False, "failure": _mask(reason[:300], masked), "status": status,
+            "url": _mask(url, masked), "timings": t, "tls_days": None, "extracted": [], "started": started, "body_sample": None}
+
+
+def _mask(text, masked):
+    for v in sorted(masked, key=len, reverse=True):
+        if v:
+            text = text.replace(v, "••••")
+    return text
 
 
 def _left(deadline):
     left = deadline - time.perf_counter()
     if left <= 0:
         raise TimeoutError("timed out")
-    return left
+    return min(left, MAX_STEP_MS / 1000)
 
 
-def _request(scheme, host, port, path, method, check, body, deadline, t):
+def _request(scheme, host, port, path, method, headers, body, deadline, t, verify):
+    """One HTTP exchange at the address we checked. -> status, {header: [values]}, body, timings, cert days."""
     t0 = time.perf_counter()
     ips = resolve(host, port)
-    t = {**t, "dns_ms": round((time.perf_counter() - t0) * 1000, 1)}
-    sock = socket.create_connection((ips[0], port), timeout=_left(deadline))  # the address we checked
+    t = {"dns_ms": round((time.perf_counter() - t0) * 1000, 1)}
+    sock = socket.create_connection((ips[0], port), timeout=_left(deadline))
     try:
         t["connect_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         cert_days = None
         if scheme == "https":
-            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+            ctx = ssl.create_default_context()
+            if not verify:
+                ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+            sock = ctx.wrap_socket(sock, server_hostname=host)
             t["tls_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-            not_after = sock.getpeercert().get("notAfter")
+            not_after = (sock.getpeercert() or {}).get("notAfter")
             if not_after:
                 cert_days = round((ssl.cert_time_to_seconds(not_after) - time.time()) / 86400, 1)
         conn = (http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection)(host, port)
@@ -222,8 +476,8 @@ def _request(scheme, host, port, path, method, check, body, deadline, t):
         sock.settimeout(_left(deadline))
         default_port = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
         conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
-        for k, v in {"Host": host if default_port else f"{host}:{port}", "User-Agent": USER_AGENT,
-                     "Accept": "*/*", **check.get("headers", {})}.items():
+        conn.putheader("Host", host if default_port else f"{host}:{port}")
+        for k, v in headers.items():
             conn.putheader(k, v)
         data = body.encode() if body is not None else None
         if data is not None:
@@ -232,22 +486,91 @@ def _request(scheme, host, port, path, method, check, body, deadline, t):
         resp = conn.getresponse()
         t["ttfb_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         content = b"" if method == "HEAD" else resp.read(MAX_BODY_READ)
-        t["total_ms"] = round((time.perf_counter() - t0) * 1000 + t.get("total_ms", 0), 1)
-        return resp.status, {k.lower(): v for k, v in resp.getheaders()}, content, t, cert_days
+        t["total_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        out = {}
+        for k, v in resp.getheaders():
+            out.setdefault(k.lower(), []).append(v)
+        return resp.status, out, content, t, cert_days
     finally:
         sock.close()
 
 
-def _assert(expect, status, total_ms, content):
-    """None if the answer meets the check's expectations, else why not."""
-    if not any((s.endswith("xx") and status // 100 == int(s[0])) or (not s.endswith("xx") and status == int(s))
-               for s in expect["status"].split(",")):
-        return f"status {status}, expected {expect['status']}"
-    if expect.get("max_ms") and total_ms > expect["max_ms"]:
-        return f"took {total_ms:.0f} ms, expected under {expect['max_ms']} ms"
-    if expect.get("contains") and expect["contains"] not in content.decode("utf-8", "replace"):
-        return f"response does not contain {expect['contains']!r}"
+def _check_constraints(constraints, status, total_ms, text, headers, tls_days, values):
+    """None if the response meets every constraint, else why not."""
+    doc, parsed = None, False
+    for c in constraints:
+        t = c["type"]
+        if t == "status" and not status_matches(c["expr"], status):
+            return f"status {status}, expected {c['expr']}"
+        if t == "max_ms" and total_ms > c["value"]:
+            return f"took {total_ms:.0f} ms, expected at most {c['value']} ms"
+        if t == "body_contains" and _sub(c["value"], values) not in text:
+            return f"response does not contain {c['value']!r}"
+        if t == "body_not_contains" and _sub(c["value"], values) in text:
+            return f"response contains {c['value']!r}"
+        if t == "body_regex" and not _search(c["value"], text):
+            return f"response does not match /{c['value']}/"
+        if t == "header":
+            got = (headers.get(c["name"].lower()) or [None])[0]
+            want = _sub(c.get("value", ""), values)
+            if got is None or (c["op"] == "equals" and got != want) or (c["op"] == "contains" and want not in got):
+                return f"header {c['name']} is {got!r}" + ("" if c["op"] == "exists" else f", expected it to {c['op'].replace('_', ' ')} {c.get('value')!r}")
+        if t == "json":
+            if not parsed:
+                parsed = True
+                try:
+                    doc = json.loads(text)
+                except ValueError:
+                    return "response is not JSON"
+            found, got = json_get(doc, c["path"])
+            if not _json_ok(found, got, c["op"], _sub(c.get("value", ""), values)):
+                shown = json.dumps(got)[:80] if found else "missing"
+                return f"{c['path']} is {shown}, expected {c['op'].replace('_', ' ')}" + (f" {c.get('value')!r}" if "value" in c else "")
+        if t == "tls_days" and tls_days is not None and tls_days < c["value"]:
+            return f"TLS certificate expires in {tls_days:.0f} days (less than {c['value']})"
     return None
+
+
+def _json_ok(found, got, op, want):
+    if op == "exists":
+        return found
+    if not found:
+        return False
+    as_text = got if isinstance(got, str) else json.dumps(got)
+    if op in ("equals", "not_equals"):
+        same = as_text == want or (not isinstance(got, str) and _num(want) is not None and _num(as_text) == _num(want))
+        return same if op == "equals" else not same
+    if op == "contains":
+        return want in as_text
+    a, b = _num(as_text), _num(want)
+    return a is not None and b is not None and (a < b if op == "lt" else a > b)
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _search(pattern, text):
+    try:
+        return regex.search(pattern, text[:REGEX_TEXT], timeout=REGEX_TIMEOUT_S)
+    except TimeoutError:
+        raise StepFailed(f"regex /{pattern}/ took too long")
+
+
+def _extract(e, text, headers):
+    if e["from"] == "header":
+        return (headers.get(e["expr"].lower()) or [None])[0]
+    if e["from"] == "regex":
+        m = _search(e["expr"], text)
+        return None if not m else (m.group(1) if m.re.groups else m.group(0))
+    try:
+        found, v = json_get(json.loads(text), e["expr"])
+    except ValueError:
+        return None
+    return None if not found or v is None else (v if isinstance(v, str) else json.dumps(v))
 
 
 # ------------------------------------------------------------------ results as telemetry
@@ -269,47 +592,95 @@ def _attrs(d):
 
 
 def telemetry(check_id, check, r):
-    """-> {signal: OTLP JSON doc} for one run."""
+    """-> {signal: OTLP JSON doc} for one run: a trace with a span per step, metrics, a log on failure."""
     start = int(r["started"] * 1e9)
-    end = start + int(r["timings"].get("total_ms", 0) * 1e6) + 1
-    trace, span = secrets.token_hex(16), secrets.token_hex(8)
-    resource = {"attributes": _attrs({"service.name": "synthetics", "cloud.region": LOCATION,
-                                      "synthetics.location": LOCATION})}
+    trace, root = _secrets.token_hex(16), _secrets.token_hex(8)
+    resource = {"attributes": _attrs({"service.name": "synthetics", "cloud.region": LOCATION, "synthetics.location": LOCATION})}
     who = {"check.id": check_id, "check.name": check["name"]}
-    t = r["timings"]
-    span_attrs = {**who, "check.result": "pass" if r["ok"] else "fail", "check.failure": r["failure"],
-                  "url.full": r["url"], "http.request.method": check["method"],
-                  "http.response.status_code": r["status"], "check.frequency_minutes": check["frequency"],
-                  **{f"check.{k}": float(v) for k, v in t.items()}, "check.tls_days_remaining": r.get("tls_days")}
-    docs = {"traces": {"resourceSpans": [{"resource": resource, "scopeSpans": [{"scope": {"name": "leasyd.synthetics"}, "spans": [{
-        "traceId": trace, "spanId": span, "name": check["name"], "kind": 3,
-        "startTimeUnixNano": str(start), "endTimeUnixNano": str(end), "attributes": _attrs(span_attrs),
-        "status": {} if r["ok"] else {"code": 2, "message": r["failure"]}}]}]}]}}
-    now = str(end)
-    gauges = [("synthetics.check.success", "1", "1 if the check passed, else 0", 1.0 if r["ok"] else 0.0)]
-    if "total_ms" in t:
-        gauges.append(("synthetics.check.duration", "ms", "Time to a complete answer", float(t["total_ms"])))
+    spans, end = [], start
+    for i, s in enumerate(r["steps"]):
+        s_start = int(s["started"] * 1e9)
+        s_end = s_start + int(s["timings"].get("total_ms", 0) * 1e6) + 1
+        end = max(end, s_end)
+        spans.append({"traceId": trace, "spanId": _secrets.token_hex(8), "parentSpanId": root, "name": s["name"], "kind": 3,
+                      "startTimeUnixNano": str(s_start), "endTimeUnixNano": str(s_end),
+                      "attributes": _attrs({**who, "step.index": i + 1, "step.name": s["name"], "url.full": s["url"],
+                                            "http.response.status_code": s["status"], "step.result": "pass" if s["ok"] else "fail",
+                                            "step.failure": s["failure"], "step.extracted": ",".join(s["extracted"]) or None,
+                                            **{f"step.{k}": float(v) for k, v in s["timings"].items()}}),
+                      "status": {} if s["ok"] else {"code": 2, "message": s["failure"]}})
+    first = r["steps"][0] if r["steps"] else {"url": check["steps"][0]["url"], "status": None}
+    spans.insert(0, {"traceId": trace, "spanId": root, "name": check["name"], "kind": 1,
+                     "startTimeUnixNano": str(start), "endTimeUnixNano": str(max(end, start + 1)),
+                     "attributes": _attrs({**who, "check.result": "pass" if r["ok"] else "fail", "check.failure": r["failure"],
+                                           "check.steps": len(check["steps"]), "check.steps_run": len(r["steps"]),
+                                           "check.failed_step": None if r["failed_step"] is None else r["failed_step"] + 1,
+                                           "url.full": first["url"], "http.response.status_code": first["status"],
+                                           "check.total_ms": float(r["total_ms"]), "check.frequency_minutes": check["frequency"],
+                                           "check.tls_days_remaining": r.get("tls_days")}),
+                     "status": {} if r["ok"] else {"code": 2, "message": r["failure"]}})
+    docs = {"traces": {"resourceSpans": [{"resource": resource, "scopeSpans": [{"scope": {"name": "leasyd.synthetics"}, "spans": spans}]}]}}
+    now = str(max(end, start + 1))
+    points = [("synthetics.check.success", "1", "1 if the check passed, else 0", 1.0 if r["ok"] else 0.0, who),
+              ("synthetics.check.duration", "ms", "Time for all the check's steps", float(r["total_ms"]), who)]
+    points += [("synthetics.step.duration", "ms", "Time for one step", float(s["timings"]["total_ms"]),
+                {**who, "step.index": i + 1, "step.name": s["name"]}) for i, s in enumerate(r["steps"]) if "total_ms" in s["timings"]]
     if r.get("tls_days") is not None:
-        gauges.append(("synthetics.check.tls_days_remaining", "d", "Days until the TLS certificate expires", float(r["tls_days"])))
+        points.append(("synthetics.check.tls_days_remaining", "d", "Days until the soonest TLS certificate expires", float(r["tls_days"]), who))
+    by_name = {}
+    for n, u, d, v, a in points:
+        by_name.setdefault((n, u, d), []).append({"timeUnixNano": now, "asDouble": v, "attributes": _attrs(a)})
     docs["metrics"] = {"resourceMetrics": [{"resource": resource, "scopeMetrics": [{"scope": {"name": "leasyd.synthetics"}, "metrics": [
-        {"name": n, "unit": u, "description": d, "gauge": {"dataPoints": [{"timeUnixNano": now, "asDouble": v, "attributes": _attrs(who)}]}}
-        for n, u, d, v in gauges]}]}]}
+        {"name": n, "unit": u, "description": d, "gauge": {"dataPoints": dps}} for (n, u, d), dps in by_name.items()]}]}]}
     if not r["ok"]:
+        failed = r["steps"][r["failed_step"]] if r["failed_step"] is not None else {}
+        body = f"Check {check['name']!r} failed at {r['failure']}"
+        if failed.get("body_sample"):
+            body += f"\n--- response (first {BODY_SAMPLE} bytes) ---\n{failed['body_sample']}"
         docs["logs"] = {"resourceLogs": [{"resource": resource, "scopeLogs": [{"scope": {"name": "leasyd.synthetics"}, "logRecords": [{
-            "timeUnixNano": now, "severityNumber": 17, "severityText": "ERROR", "traceId": trace, "spanId": span,
-            "body": {"stringValue": f"Check {check['name']!r} failed: {r['failure']}"},
-            "attributes": _attrs({**who, "url.full": r["url"]})}]}]}]}
+            "timeUnixNano": now, "severityNumber": 17, "severityText": "ERROR", "traceId": trace, "spanId": root,
+            "body": {"stringValue": body},
+            "attributes": _attrs({**who, "step.name": failed.get("name"), "url.full": failed.get("url"),
+                                  "http.response.status_code": failed.get("status")})}]}]}]}
     return docs
 
 
 def record(tenant, check_id, check, result):
     """Put one run's telemetry on the tenant's streams, as ingest would."""
+    import gzip
     for signal, doc in telemetry(check_id, check, result).items():
         records = list(ingest.to_records(signal, doc))
         if ingest.RECORD_COMPRESSION == "gzip":
-            import gzip
             records = [gzip.compress(x, compresslevel=6) for x in records]
         ingest.put_records(f"{ingest.STREAM_PREFIX}{tenant}-{signal}", records)
+
+
+# ------------------------------------------------------------------ secrets
+
+def _context(tenant, check_id):
+    return {"tenant": tenant, "check": check_id}
+
+
+def encrypt_secrets(tenant, check_id, plain, stored=None):
+    """Update a check's encrypted secrets: plain {name: value} sets, {name: None} removes."""
+    out = dict(stored or {})
+    for name, value in (plain or {}).items():
+        _var_name(name, "secret name")
+        if value is None:
+            out.pop(name, None)
+        else:
+            value = _text(value, f"secret {name}", 1, 4096)
+            blob = kms().encrypt(KeyId=KMS_KEY, Plaintext=value.encode(), EncryptionContext=_context(tenant, check_id))["CiphertextBlob"]
+            out[name] = base64.b64encode(blob).decode()
+    if len(out) > 20:
+        raise Refused("secrets: at most 20")
+    return out
+
+
+def decrypt_secrets(tenant, check_id, stored):
+    """{name: plaintext}: only decrypts under this check's own tenant and id."""
+    return {name: kms().decrypt(CiphertextBlob=base64.b64decode(blob), EncryptionContext=_context(tenant, check_id))["Plaintext"].decode()
+            for name, blob in (stored or {}).items()}
 
 
 # ------------------------------------------------------------------ storage
@@ -319,7 +690,9 @@ def _pk(tenant, check_id):
 
 
 def _public_view(item):
-    return {k: v for k, v in item.items() if k not in ("pk", "tenant")} | {"id": item["pk"].rsplit("#", 1)[1]}
+    """What the portal sees: settings and secret names, never secret values."""
+    out = {k: v for k, v in item.items() if k not in ("pk", "tenant", "secrets")}
+    return {**out, "id": item["pk"].rsplit("#", 1)[1], "secret_names": sorted(item.get("secrets") or {})}
 
 
 def list_checks(tenant):
@@ -358,35 +731,47 @@ def api(event, context):
         if resource == "/v1/app/checks" and method == "GET":
             return _http(200, {"checks": [_public_view(i) for i in list_checks(tenant)], "limit": MAX_CHECKS})
         if resource == "/v1/app/checks" and method == "POST":
-            check = validate(body)
+            plain = body.get("secrets") or {}
+            check = validate({**body, "secret_names": [k for k, v in plain.items() if v is not None]})
             if len(list_checks(tenant)) >= MAX_CHECKS:
                 raise Refused(f"at most {MAX_CHECKS} checks")
-            new_id, now = secrets.token_hex(6), _now()
-            item = {"pk": _pk(tenant, new_id), "tenant": tenant, **check, "created_at": now, "updated_at": now, "created_by": user}
+            new_id, now = _secrets.token_hex(6), _now()
+            item = {"pk": _pk(tenant, new_id), "tenant": tenant, **check, "created_at": now, "updated_at": now, "created_by": user,
+                    "secrets": encrypt_secrets(tenant, new_id, plain)}
             table().put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
             return _http(201, _public_view(item))
         if resource == "/v1/app/checks/test" and method == "POST":
-            check = validate(body)
-            return _http(200, {"result": _plain(probe(check))})
+            # Unsaved settings; secrets as typed, or, when editing, the saved ones not retyped.
+            saved = get_check(tenant, body.get("id")) if body.get("id") else None
+            plain = {**(decrypt_secrets(tenant, body["id"], saved.get("secrets")) if saved else {}),
+                     **{k: v for k, v in (body.get("secrets") or {}).items() if v is not None}}
+            check = validate({**body, "secret_names": list(plain)})
+            return _http(200, {"result": _view_result(run_check(check, plain))})
         item = get_check(tenant, check_id)
         if item is None:
             return _http(404, {"error": "no such check"})
         if resource == "/v1/app/checks/{id}" and method == "GET":
             return _http(200, _public_view(item))
         if resource == "/v1/app/checks/{id}" and method == "PUT":
-            item = {**item, **validate({**_public_view(item), **body}), "updated_at": _now()}
+            secrets_ = encrypt_secrets(tenant, check_id, body.get("secrets"), item.get("secrets"))
+            settings = validate({**_public_view(item), **body, "secret_names": list(secrets_)})
+            item = {**item, **settings, "secrets": secrets_, "updated_at": _now()}
             table().put_item(Item=item)
             return _http(200, _public_view(item))
         if resource == "/v1/app/checks/{id}" and method == "DELETE":
             table().delete_item(Key={"pk": item["pk"]})
             return _http(200, {"deleted": check_id})
         if resource == "/v1/app/checks/{id}/run" and method == "POST":
-            result = probe(item)
+            result = run_check(item, decrypt_secrets(tenant, check_id, item.get("secrets")))
             record(tenant, check_id, item, result)
-            return _http(200, {"result": _plain(result)})
+            return _http(200, {"result": _view_result(result)})
     except Refused as e:
         return _http(400, {"error": str(e)})
     return _http(404, {"error": "unknown route"})
+
+
+def _view_result(r):
+    return _plain({k: v for k, v in r.items() if k != "started"} | {"steps": [{k: v for k, v in s.items() if k != "started"} for s in r["steps"]]})
 
 
 def due(check_id, frequency, minute):
@@ -414,14 +799,20 @@ def tick(event, context):
 
 
 def run(event, context):
-    """Probe a batch of checks in parallel and record each result for its tenant."""
+    """Run a batch of checks in parallel and record each result for its tenant."""
     checks = event.get("checks") or []
 
     def one(item):
         tenant, check_id = item["tenant"], item["pk"].rsplit("#", 1)[1]
-        result = probe(item)
+        try:
+            plain = decrypt_secrets(tenant, check_id, item.get("secrets"))
+        except Exception as e:   # noqa: BLE001  a secret that can't be decrypted fails this check only
+            result = {"ok": False, "failure": f"could not decrypt the check's secrets ({type(e).__name__})", "failed_step": None,
+                      "steps": [], "total_ms": 0.0, "tls_days": None, "started": time.time()}
+        else:
+            result = run_check(item, plain)
         record(tenant, check_id, item, result)
-        return {"tenant": tenant, "check": check_id, "ok": result["ok"], "ms": result["timings"].get("total_ms")}
+        return {"tenant": tenant, "check": check_id, "ok": result["ok"], "ms": result["total_ms"]}
     with ThreadPoolExecutor(max(1, len(checks))) as pool:
         out = list(pool.map(one, checks))
     print(json.dumps({"ran": len(out), "failed": sum(1 for o in out if not o["ok"])}))
@@ -438,6 +829,8 @@ def _json(v):
     from decimal import Decimal
     if isinstance(v, Decimal):
         return int(v) if v == v.to_integral_value() else float(v)
+    if isinstance(v, (bytes, bytearray)):
+        return base64.b64encode(v).decode()
     return str(v)
 
 

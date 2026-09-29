@@ -35,17 +35,25 @@ export const me = () => call<{ tenant: string; email: string }>("/v1/app/me");
 export const query = (q: Query) => call<Result>("/v1/app/query", { method: "POST", body: JSON.stringify(q) });
 
 // Synthetic checks (/v1/app/checks): the signed-in user's tenant's own checks.
+export type Constraint = { type: string; expr?: string; value?: string | number; name?: string; path?: string; op?: string };
+export type Extraction = { name: string; from: "json" | "regex" | "header"; expr: string };
+export type Step = {
+  name: string; method: string; url: string; headers: Record<string, string>; body?: string;
+  auth: { type: "none" | "basic" | "bearer"; username?: string; password?: string; token?: string };
+  user_agent?: string; follow_redirects: boolean; verify_tls: boolean; record_body: boolean;
+  extract: Extraction[]; constraints: Constraint[];
+};
 export type CheckSettings = {
-  name: string; url: string; method: string; frequency: number; timeout_ms: number;
-  headers: Record<string, string>; body?: string;
-  expect: { status: string; max_ms?: number; contains?: string };
-  follow_redirects: boolean; enabled: boolean;
+  name: string; frequency: number; timeout_ms: number; enabled: boolean;
+  variables: Record<string, string>; steps: Step[];
+  secrets?: Record<string, string | null>;    // write-only: new values, or null to remove
 };
-export type Check = CheckSettings & { id: string; created_at: string; updated_at: string; created_by?: string };
-export type CheckResult = {
-  ok: boolean; status: number | null; failure: string | null; url: string; bytes?: number; tls_days?: number | null;
-  timings: { dns_ms?: number; connect_ms?: number; tls_ms?: number; ttfb_ms?: number; total_ms?: number };
-};
+export type Check = Omit<CheckSettings, "secrets"> & { id: string; secret_names: string[]; created_at: string; updated_at: string; created_by?: string };
+export type Timings = { dns_ms?: number; connect_ms?: number; tls_ms?: number; ttfb_ms?: number; total_ms?: number };
+export type StepResult = { name: string; ok: boolean; failure: string | null; status: number | null; url: string; timings: Timings;
+                           tls_days?: number | null; extracted: string[]; body_sample?: string | null };
+export type CheckResult = { ok: boolean; failure: string | null; failed_step: number | null; total_ms: number;
+                            tls_days?: number | null; steps: StepResult[] };
 const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
 export const checks = {
   list: () => call<{ checks: Check[]; limit: number }>("/v1/app/checks"),
@@ -54,7 +62,7 @@ export const checks = {
   update: (id: string, c: Partial<CheckSettings>) => call<Check>(`/v1/app/checks/${encodeURIComponent(id)}`, json("PUT", c)),
   remove: (id: string) => call<{ deleted: string }>(`/v1/app/checks/${encodeURIComponent(id)}`, json("DELETE")),
   run: (id: string) => call<{ result: CheckResult }>(`/v1/app/checks/${encodeURIComponent(id)}/run`, json("POST")),
-  test: (c: CheckSettings) => call<{ result: CheckResult }>("/v1/app/checks/test", json("POST", c)),
+  test: (c: CheckSettings & { id?: string }) => call<{ result: CheckResult }>("/v1/app/checks/test", json("POST", c)),
 };
 
 /** Rows of a result as objects keyed by column name. */

@@ -256,6 +256,23 @@ a:hover { text-decoration: underline; }
 .form-grid .wide { grid-column: 1 / -1; }
 .form-grid label.check { flex-direction: row; align-items: center; gap: 8px; }
 @media (max-width: 760px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
+.form-section { padding: 4px 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.form-section:last-of-type { border-bottom: 0; }
+.form-section h3 { font-size: 14px; font-weight: 600; margin: 4px 0 10px; }
+.step-body h4 { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: .4px; }
+.step-body label.block { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); margin-top: 8px; }
+.step-body .checks { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-size: 12.5px; color: var(--text-2); }
+.step-body .checks label { display: flex; gap: 6px; align-items: center; }
+.step-card { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; background: var(--surface-2); }
+.step-card.open { border-color: var(--border-strong); }
+.step-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; }
+.step-num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 20px; background: var(--surface-3); font-size: 11px; }
+.step-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 50%; }
+.step-tools { display: flex; gap: 4px; }
+.step-tools .btn { padding: 2px 8px; }
+.step-body { padding: 4px 14px 14px; border-top: 1px solid var(--border); }
+.result-steps { margin: 8px 0; padding-left: 18px; display: grid; gap: 6px; }
+.body-sample { margin: 4px 0 0; padding: 6px 8px; background: var(--surface-3); border-radius: 4px; font: 11px var(--font-mono); white-space: pre-wrap; max-height: 140px; overflow: auto; }
 .result-box { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--surface-2); font-size: 12.5px; }
 .result-box.pass { border-color: color-mix(in srgb, var(--ok, #3fb68b) 60%, var(--border)); }
 .result-box.fail { border-color: color-mix(in srgb, var(--sev-error) 60%, var(--border)); }

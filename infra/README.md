@@ -521,23 +521,35 @@ infra/deploy-phaseD1.sh --parameter-overrides State=DISABLED   # pause
 
 ## Phase S1: synthetic HTTP checks
 
-Customers set up checks in the portal (Synthetics): a URL, method, optional headers and body,
-every 1, 5 or 15 minutes, and what counts as passing (status such as `2xx`, a maximum response
-time, text in the body). They run from us-east-1. Each run is the tenant's own telemetry: a span
-(service `synthetics`), metrics `synthetics.check.success` / `duration` / `tls_days_remaining`,
-and an ERROR log when it fails, so every screen shows them.
+Customers set up checks in the portal (Monitoring > Synthetics). A check is 1-10 HTTP requests
+("steps") run in order every 1, 5 or 15 minutes from us-east-1; the first failing step ends the run.
 
+- Variables: `{name}` in a step's URL, headers, body, auth or constraint values, from the check's
+  variables, its secrets, or values extracted by earlier steps (JSON path such as
+  `data.items[0].id`, a regex's first group, or a response header). Cookies carry over.
+- Auth: basic or bearer; the password or token must be a secret or an extracted value.
+- Secrets: encrypted with the KMS key `alias/obs-checks` under the context `{tenant, check}` (a
+  ciphertext only decrypts for its own check), write-only in the API, masked in every result.
+- Constraints: status (`<400`, `2xx`, `3xx, 404, 406-410, >=500`), response time, body contains /
+  not contains / regex (time-limited), header, JSON value, TLS certificate days left. Options:
+  follow redirects, accept any certificate, don't record the response when it fails.
+- Results are the tenant's own telemetry: a trace per run (the check, a span per step; service
+  `synthetics`), metrics `synthetics.check.success` / `duration`, `synthetics.step.duration`,
+  `synthetics.check.tls_days_remaining`, and an ERROR log when it fails (first 2 KB of the
+  response, secrets and extracted values masked).
 - `obs-synthetics-api` serves `/v1/app/checks` (routed by `obs-phaseT2`, Cognito: the tenant is the
   user's). Checks are `obs-tenants` items `check#<tenant>#<id>`, at most 20 per tenant.
-- `obs-synthetics-tick` (every minute) hands the due checks to `obs-synthetics-run` in batches.
-- Safety: only public addresses are requested (the resolved address is checked and used; private,
-  loopback, link-local such as 169.254.169.254, and other non-public addresses are refused,
-  redirects included). The runner's role can only put records on tenant streams.
+  `obs-synthetics-tick` (every minute) hands due checks to `obs-synthetics-run` in batches.
+- Safety: only public addresses are requested (each step's final URL is resolved and that address
+  used; private, loopback, link-local such as 169.254.169.254 and other non-public addresses are
+  refused, redirects and variables included). No customer code runs. The runner's role can only
+  decrypt check secrets and put records on tenant streams.
 
 ```bash
-infra/deploy-phaseS1.sh      # first: the API routes invoke obs-synthetics-api
+aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
+  --capabilities CAPABILITY_NAMED_IAM      # the boundary now allows the checks' KMS key
+infra/deploy-phaseS1.sh      # before T2: the API routes invoke obs-synthetics-api
 infra/deploy-phaseT2.sh      # adds /v1/app/checks
 infra/deploy-phaseT5.sh      # deleting a tenant removes its checks
-infra/deploy-phaseW1.sh      # the Synthetics page
+infra/deploy-phaseW1.sh      # the Synthetics pages
 ```
-
