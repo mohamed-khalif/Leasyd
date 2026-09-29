@@ -17,7 +17,7 @@ export function rangeWindow(range: Range, now = Date.now()): { start: string; en
 /** A bucket size giving ~60-180 points over the range (one the API accepts). */
 export function bucketSeconds(range: Range): number {
   const target = (range.minutes * 60) / 120;
-  return [10, 30, 60, 300, 900, 3600, 86400].find((b) => b >= target) ?? 86400;
+  return [10, 30, 60, 300, 900, 1800, 3600, 7200, 21600, 43200, 86400].find((b) => b >= target) ?? 86400;
 }
 
 export function fmtTime(iso: string, range?: Range): string {

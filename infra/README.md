@@ -459,6 +459,7 @@ the deploy script.
 
 ```bash
 # attach infra/iam/deployer-phaseW1.json to obs-deployer first
+infra/deploy-phase4.sh --parameter-overrides BytesPerWorker=67108864   # query API: time buckets for the charts
 infra/deploy-phaseW1.sh                              # prints the app's URL
 infra/tenant.sh invite-user <tenant> <your email>    # a login; the email has a temporary password
 ```

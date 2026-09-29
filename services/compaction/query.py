@@ -102,7 +102,7 @@ def _field(signal, name, params):
     return f'"{name}"'
 
 
-BUCKET_SECONDS = {10, 30, 60, 300, 900, 3600, 86400}
+BUCKET_SECONDS = {10, 30, 60, 300, 900, 1800, 3600, 7200, 21600, 43200, 86400}
 
 
 def _time_bucket(name):
