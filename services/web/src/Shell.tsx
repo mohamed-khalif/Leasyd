@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconRefresh, IconSun, IconTraces } from "./icons";
+import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTraces } from "./icons";
 import { customRange, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow } from "./time";
 
 type Props = {
@@ -29,6 +29,8 @@ export function Shell(p: Props) {
         {link("/logs", "Logs", <IconLogs />, p.path.startsWith("/logs"))}
         {link("/traces", "Traces", <IconTraces />, p.path.startsWith("/traces"))}
         {link("/metrics", "Metrics", <IconMetrics />, p.path.startsWith("/metrics"))}
+        <div className="nav-section">Monitoring</div>
+        {link("/synthetics", "Synthetics", <IconPulse />, p.path.startsWith("/synthetics"))}
         <div className="nav-foot">
           <div className="whoami" title={p.user.email}>{p.user.email}<div className="faint mono">{p.user.tenant}</div></div>
           <button className="btn ghost" onClick={p.onSignOut}><IconOut />Sign out</button>

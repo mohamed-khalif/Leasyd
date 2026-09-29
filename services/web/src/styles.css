@@ -251,6 +251,14 @@ a:hover { text-decoration: underline; }
 .signin-card .btn { justify-content: center; padding: 9px; }
 .form-error { color: var(--sev-error); font-size: 12.5px; }
 .form-note { color: var(--text-2); font-size: 12.5px; }
+.form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; }
+.form-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.form-grid .wide { grid-column: 1 / -1; }
+.form-grid label.check { flex-direction: row; align-items: center; gap: 8px; }
+@media (max-width: 760px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
+.result-box { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--surface-2); font-size: 12.5px; }
+.result-box.pass { border-color: color-mix(in srgb, var(--ok, #3fb68b) 60%, var(--border)); }
+.result-box.fail { border-color: color-mix(in srgb, var(--sev-error) 60%, var(--border)); }
 .link { color: var(--accent); }
 tr:hover .link { text-decoration: underline; }
 .linkbtn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; align-self: center; }

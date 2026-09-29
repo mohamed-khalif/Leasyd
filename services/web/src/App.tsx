@@ -10,6 +10,7 @@ import { Usage } from "./pages/Usage";
 import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
 import { Metrics } from "./pages/Metrics";
+import { Synthetics } from "./pages/Synthetics";
 import { RANGES, Range, rangeFromKey } from "./time";
 
 export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
@@ -48,6 +49,10 @@ export function App() {
     const id = path.split("/")[2];
     page = <Traces ctx={ctx} traceId={id} />;
     crumb = ["Traces", id ? `${id.slice(0, 16)}…` : "Explorer"];
+  } else if (path.startsWith("/synthetics")) {
+    page = <Synthetics ctx={ctx} path={path} />;
+    const sub = path.split("/")[2];
+    crumb = ["Synthetics", sub === "new" ? "New check" : sub ? (path.endsWith("/edit") ? "Edit check" : "Check") : "Checks"];
   } else if (path.startsWith("/metrics")) {
     page = <Metrics ctx={ctx} params={params} />;
     crumb = ["Metrics", params.get("m") ?? "Explorer"];
