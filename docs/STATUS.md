@@ -30,7 +30,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Customer quick start (`docs/QUICKSTART.md`): any OpenTelemetry SDK over OTLP/HTTP; gRPC via the Collector | S1 | tested on AWS: Python, Node, Go, Java agent, Collector (gRPC in) |
 | Own names: `https://ingest.leasyd.com` (API), `https://app.leasyd.com` (web app); only these two are delegated to Route 53 (`obs-dns`), leasyd.com's website stays at GoDaddy/Vercel | P1 | live; the canary sends through ingest.leasyd.com every minute (sent and found) |
 | One-command up/down (`infra/up.sh`, `infra/down.sh`); data in `obs-state` survives a down | P1 | written, not yet run: this account still has the old stack layout (the full down/up was postponed) |
-| Metrics explorer: every metric with its type; charts per kind (gauge avg/max/min/p95, counter rate per second from cumulative or delta points, histogram average and rate), split by service or any attribute. Query engine: `increase` aggregate (reset-aware, stitched across workers) | M1 | built; to deploy (phase 4 + W1) and check on real data |
+| Metrics explorer: every metric with its type; charts per kind (gauge avg/max/min/p95, counter rate per second from cumulative or delta points, histogram average and rate), split by service or any attribute. Query engine: `increase` aggregate (reset-aware, stitched across workers) | M1 | live; checked on AWS: a known counter sent through ingest reads back exactly (0.70/s, restart handled), histogram average and gauge exact; real load-test data split over 12 deployed workers equals 1 worker |
 | Alerting on customer data, billing | - | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
