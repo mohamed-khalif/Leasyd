@@ -145,6 +145,7 @@ def test_bad_queries_rejected(bad):
 
 def test_plan_chunks_balances_by_size(monkeypatch):
     monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1000)
+    monkeypatch.setattr(query, "FILE_COST_BYTES", 0)
     files = [{"file_path": f"s3://b/{i}", "size_bytes": s, "kind": "parquet"} for i, s in enumerate([900, 500, 400, 300, 100])]
     chunks = query.plan_chunks(files, 8)
     sizes = sorted(sum(f["size_bytes"] for f in c) for c in chunks)
@@ -351,7 +352,60 @@ def test_delta_counters_gauges_and_histograms(counters, monkeypatch):
 
 def test_contiguous_chunks_follow_time_order(monkeypatch):
     monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1000)
+    monkeypatch.setattr(query, "FILE_COST_BYTES", 0)
     files = [{"file_path": f"s3://b/{i}", "size_bytes": s, "min_ts": f"2026-09-26T10:0{i}:00Z"}
              for i, s in enumerate([900, 100, 500, 400, 300])]
     chunks = query.plan_chunks(files, 8, contiguous=True)
     assert [[f["file_path"][-1] for f in c] for c in chunks] == [["0"], ["1", "2"], ["3", "4"]]
+
+
+def test_many_small_files_are_spread_over_workers(monkeypatch):
+    """A week of a small tenant's metrics: 3,000 files of ~14 KB. By size alone that is one worker
+    opening 3,000 files one after another (27 s measured); each file's open cost spreads them."""
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 64 * 2**20)
+    at = lambda s: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1790380800 + s))   # noqa: E731
+    files = [{"file_path": f"s3://b/{i}", "size_bytes": 14_000, "min_ts": at(i * 200), "max_ts": at(i * 200 + 199)}
+             for i in range(3000)]
+    for contiguous in (False, True):
+        chunks = query.plan_chunks(files, 64, contiguous)
+        sizes = [len(c) for c in chunks]
+        assert len(chunks) == 48 and max(sizes) - min(sizes) <= 2 and sum(sizes) == 3000
+    monkeypatch.setattr(query, "FILE_COST_BYTES", 0)
+    assert len(query.plan_chunks(files, 64)) == 1                 # the old behaviour
+
+
+def test_counter_increase_is_exact_when_files_overlap_in_time(aws, monkeypatch):  # noqa: F811
+    """Raw files holding interleaved minutes (e.g. compaction batches of a backfill) give files whose
+    time ranges overlap. Workers must never split inside an overlap, or a rise is counted twice."""
+    handler, lookup = aws
+    series = {}
+    docs = {m: metric_points(m) for m in range(8)}
+    for name, minutes in (("odd", [1, 3, 5, 7]), ("even", [0, 2, 4, 6])):
+        lines = []
+        for m in minutes:
+            pts, doc = docs[m]
+            for k, v in pts.items():
+                series.setdefault(k, []).extend(v)
+            lines.append(json.dumps(doc))
+        key = f"_incoming/tenant=acme/metrics/dt={DAY}/hour=10/{name}.json.gz"
+        boto3.client("s3").put_object(Bucket="obs-data-test", Key=key, Body=gzip.compress("\n".join(lines).encode()))
+        handler.recent_indexer({"detail": {"object": {"key": key}}}, None)
+    for k in series:
+        series[k].sort()
+    monkeypatch.setattr(query, "lookup", lookup)
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1)
+    out = run(signal="metrics", workers=8, where=[{"field": "metric_name", "op": "=", "value": "reqs"}],
+              group_by=["ts:60", "attributes.route"], aggs=[{"fn": "increase", "field": "value"}], limit=10000)
+    for route in ("/a", "/b"):
+        assert {r[0]: r[2] for r in out["rows"] if r[1] == route} == expected_rise(series, "reqs", route)
+
+
+def test_contiguous_chunks_never_cut_inside_an_overlap(monkeypatch):
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1)
+    monkeypatch.setattr(query, "FILE_COST_BYTES", 0)
+    f = lambda i, a, b: {"file_path": f"s3://b/{i}", "size_bytes": 100,   # noqa: E731
+                         "min_ts": f"{DAY}T10:{a:02d}:00Z", "max_ts": f"{DAY}T10:{b:02d}:00Z"}
+    files = [f(0, 0, 59), f(1, 21, 44), f(2, 30, 50), f(3, 59, 59), f(4, 1, 5)]
+    assert [[x["file_path"][-1] for x in c] for c in query.plan_chunks(files, 8, contiguous=True)] == [["0", "4", "1", "2", "3"]]
+    files = [f(0, 0, 9), f(1, 5, 14), f(2, 15, 20), f(3, 21, 30), f(4, 25, 26)]
+    assert [[x["file_path"][-1] for x in c] for c in query.plan_chunks(files, 8, contiguous=True)] == [["0", "1"], ["2"], ["3", "4"]]

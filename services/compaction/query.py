@@ -61,6 +61,10 @@ import lookup
 WORKER_FUNCTION = os.environ.get("QUERY_WORKER_FUNCTION", "obs-query-worker")
 MAX_WORKERS = int(os.environ.get("QUERY_MAX_WORKERS", "64"))
 TARGET_BYTES_PER_WORKER = int(os.environ.get("QUERY_BYTES_PER_WORKER", str(256 * 1024 * 1024)))
+# Opening a file costs about as much as reading this many more bytes (footer and column-chunk
+# requests; ~9 ms a file measured on 3,000 small metrics files), so many small files also get
+# spread over workers, not only large ones.
+FILE_COST_BYTES = int(os.environ.get("QUERY_FILE_COST_BYTES", str(1024 * 1024)))
 DOWNLOAD_THREADS = 32
 READ_MODE = os.environ.get("QUERY_READ_MODE", "ranges")   # or "download"
 RANGE_THREADS = int(os.environ.get("QUERY_RANGE_THREADS", "8"))
@@ -479,25 +483,31 @@ def run(q, invoke_worker=None):
 
 
 def plan_chunks(files, max_workers, contiguous=False):
-    """Split files into <= max_workers chunks of similar total size (largest first). contiguous:
-    each chunk is instead a run of files in time order (by min_ts), cut at about equal sizes."""
-    files = sorted({f["file_path"]: f for f in files}.values(), key=lambda f: -f["size_bytes"])
+    """Split files into <= max_workers chunks of similar total cost (largest first); a file costs
+    its size plus FILE_COST_BYTES. contiguous: each chunk is instead a run of files in time order
+    (by min_ts), cut at about equal costs, and only where no earlier file reaches past the next file's
+    start: chunks then cover separate stretches of time (files of one series can overlap, e.g. when
+    compaction batches hold interleaved minutes; a cut inside an overlap would count a rise twice)."""
+    cost = lambda f: f["size_bytes"] + FILE_COST_BYTES   # noqa: E731
+    files = sorted({f["file_path"]: f for f in files}.values(), key=lambda f: -cost(f))
     if not files:
         return []
-    total = sum(f["size_bytes"] for f in files)
+    total = sum(cost(f) for f in files)
     n = max(1, min(max_workers, MAX_WORKERS, len(files), math.ceil(total / TARGET_BYTES_PER_WORKER)))
     if contiguous:
-        chunks, size = [[]], 0
-        for f in sorted(files, key=lambda f: (f.get("min_ts", ""), f["file_path"])):
-            if chunks[-1] and size >= total * len(chunks) / n and len(chunks) < n:
+        chunks, size, reach = [[]], 0, None   # reach: the latest max_ts so far
+        for f in sorted(files, key=lambda f: (lookup._parse(f["min_ts"]), f["file_path"])):
+            start, end = lookup._parse(f["min_ts"]), lookup._parse(f.get("max_ts") or f["min_ts"])
+            if chunks[-1] and size >= total * len(chunks) / n and len(chunks) < n and start > reach:
                 chunks.append([])
             chunks[-1].append(f)
-            size += f["size_bytes"]
+            size += cost(f)
+            reach = end if reach is None else max(reach, end)
         return chunks
     bins = [[0, []] for _ in range(n)]
     for f in files:
         b = min(bins, key=lambda x: x[0])
-        b[0] += f["size_bytes"]
+        b[0] += cost(f)
         b[1].append(f)
     return [b[1] for b in bins if b[1]]
 
