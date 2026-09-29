@@ -318,3 +318,14 @@ def test_restore_puts_live_keys_in_new_plans_and_recreates_streams(adm, monkeypa
     assert in_plan == {a["key_id"], r["key_id"]} and gone["key_id"] not in in_plan
     assert streams() == ["obs-t-acme-logs", "obs-t-acme-metrics", "obs-t-acme-traces"]
     assert call(adm, "restore")["keys_added_to_plans"] == []   # safe to repeat
+
+
+def test_deleting_a_tenant_removes_its_synthetic_checks(adm):
+    call(adm, "create", tenant="acme")
+    call(adm, "create", tenant="globex")
+    ddb = boto3.resource("dynamodb").Table("obs-tenants")
+    for t in ("acme", "globex"):
+        ddb.put_item(Item={"pk": f"check#{t}#aaaabbbbcccc", "tenant": t, "name": "Home", "enabled": True})
+    call(adm, "delete", tenant="acme")
+    left = {i["pk"] for i in ddb.scan()["Items"] if i["pk"].startswith("check#")}
+    assert left == {"check#globex#aaaabbbbcccc"}

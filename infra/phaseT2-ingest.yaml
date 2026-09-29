@@ -395,22 +395,107 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/v1/app/*"
 
+  # Synthetic checks (S1): /v1/app/checks, /checks/test, /checks/{id}, /checks/{id}/run, each
+  # any method, all served by obs-synthetics-api (obs-phaseS1), which routes by method.
+  ChecksResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AppResource, PathPart: checks }
+  ChecksTestResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref ChecksResource, PathPart: test }
+  CheckResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref ChecksResource, PathPart: "{id}" }
+  CheckRunResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref CheckResource, PathPart: run }
+
+  ChecksMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ChecksResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api/invocations"
+        TimeoutInMillis: 29000
+  ChecksTestMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ChecksTestResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api/invocations"
+        TimeoutInMillis: 29000
+  CheckMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref CheckResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api/invocations"
+        TimeoutInMillis: 29000
+  CheckRunMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref CheckRunResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api/invocations"
+        TimeoutInMillis: 29000
+
+  ChecksApiPermission:
+    Type: AWS::Lambda::Permission
+    Condition: Logins
+    Properties:
+      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api"
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/v1/app/checks*"
+
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV4:
+  DeploymentV5:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, QueryMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppMeMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV4
+      DeploymentId: !Ref DeploymentV5
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

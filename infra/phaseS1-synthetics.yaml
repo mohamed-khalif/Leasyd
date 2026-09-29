@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Synthetic HTTP checks (S1): customers set up uptime and API checks in the portal; they run from
+  this region on a schedule, and each run becomes the tenant's own telemetry
+  (services/synthetics/synthetics.py). obs-synthetics-api serves /v1/app/checks (routed by
+  obs-phaseT2), obs-synthetics-tick runs every minute and hands due checks to obs-synthetics-run.
+  Deploy with infra/deploy-phaseS1.sh, before obs-phaseT2 (whose routes invoke the API function).
+
+Resources:
+  # Manages the tenants' check settings (obs-tenants items "check#...") and runs a check on demand.
+  ApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-synthetics-api
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: checks
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                Condition:   # check items only, never tenants, keys or users
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": "check#*" }
+              - Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
+              - Effect: Allow     # "run now": record the result on the tenant's streams
+                Action: [firehose:PutRecordBatch]
+                Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  # Finds the due checks and hands them to the runner.
+  TickRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-synthetics-tick
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: tick
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:Scan
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt RunFunction.Arn
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  # Requests customers' URLs: it can only put records on tenant streams. It reads nothing.
+  RunRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-synthetics-run
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: record
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [firehose:PutRecordBatch]
+                Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/obs-synthetics-api, RetentionInDays: 30 }
+  TickLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/obs-synthetics-tick, RetentionInDays: 7 }
+  RunLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/obs-synthetics-run, RetentionInDays: 14 }
+
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: obs-synthetics-api
+      Description: Portal API for synthetic checks (/v1/app/checks)
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: synthetics.api
+      Code: ../services/synthetics/build
+      Role: !GetAtt ApiRole.Arn
+      MemorySize: 512
+      Timeout: 28          # under API Gateway's 29 s (a check's timeout is at most 20 s)
+      Environment:
+        Variables: { TENANTS_TABLE: obs-tenants, RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t- }
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  TickFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: TickLogGroup
+    Properties:
+      FunctionName: obs-synthetics-tick
+      Description: Every minute, hand the due synthetic checks to the runner
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: synthetics.tick
+      Code: ../services/synthetics/build
+      Role: !GetAtt TickRole.Arn
+      MemorySize: 256
+      Timeout: 50
+      Environment:
+        Variables: { TENANTS_TABLE: obs-tenants, RUN_FUNCTION: !Ref RunFunction }
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  RunFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: RunLogGroup
+    Properties:
+      FunctionName: obs-synthetics-run
+      Description: Run a batch of synthetic checks and record the results
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: synthetics.run
+      Code: ../services/synthetics/build
+      Role: !GetAtt RunRole.Arn
+      MemorySize: 512
+      Timeout: 60
+      Environment:
+        Variables: { RECORD_COMPRESSION: gzip, STREAM_PREFIX: obs-t- }
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
+
+  # A batch that fails is not retried: the next scheduled run comes within minutes anyway.
+  RunInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties: { FunctionName: !Ref RunFunction, Qualifier: $LATEST, MaximumRetryAttempts: 0 }
+
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-synthetics-schedule
+      Description: Run the synthetic checks that are due
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets: [{ Id: tick, Arn: !GetAtt TickFunction.Arn }]
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TickFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+
+  # Our own failures (not customers' failing checks, which are their data).
+  TickErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-synthetics-tick-errors
+      AlarmDescription: The synthetic-check scheduler failed 3 minutes in a row; customers' checks are not running.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref TickFunction }]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  RunErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-synthetics-run-errors
+      AlarmDescription: Synthetic-check runner invocations failed in 3 of the last 5 minutes (results not recorded).
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref RunFunction }]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+Outputs:
+  ApiFunction:
+    Value: !Ref ApiFunction

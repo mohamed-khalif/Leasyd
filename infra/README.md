@@ -24,6 +24,7 @@ workgroup, for dev accounts). On a first run, confirm the alarm subscription ema
 | `obs-phase0` | IAM roles and boundary, artifacts bucket, budget | deleted | deleted |
 | `obs-phase2`, `3`, `4` | compaction and fast lane, index lookups, query engine and API | deleted | deleted |
 | `obs-phaseT2`, `T5`, `T7` | ingest API, tenant operations, canary and alarms | deleted | deleted |
+| `obs-phaseS1` | synthetic HTTP checks (scheduler, runner, portal API) | deleted | deleted |
 | `obs-phaseW1` | web app (S3 + CloudFront) | deleted | deleted |
 | `obs-phase1`, `obs-phaseT6` | test tools (`TEST_TOOLS=1`) | deleted | deleted |
 | `obs-phaseD1` | live demo data for the `leasyd-demo` tenant (`DEMO=1`) | deleted | deleted |
@@ -517,3 +518,26 @@ infra/tenant.sh invite-user leasyd-demo <email>     # a login to look at it
 BACKFILL_HOURS=6 infra/deploy-phaseD1.sh            # backfill again (e.g. after a pause)
 infra/deploy-phaseD1.sh --parameter-overrides State=DISABLED   # pause
 ```
+
+## Phase S1: synthetic HTTP checks
+
+Customers set up checks in the portal (Synthetics): a URL, method, optional headers and body,
+every 1, 5 or 15 minutes, and what counts as passing (status such as `2xx`, a maximum response
+time, text in the body). They run from us-east-1. Each run is the tenant's own telemetry: a span
+(service `synthetics`), metrics `synthetics.check.success` / `duration` / `tls_days_remaining`,
+and an ERROR log when it fails, so every screen shows them.
+
+- `obs-synthetics-api` serves `/v1/app/checks` (routed by `obs-phaseT2`, Cognito: the tenant is the
+  user's). Checks are `obs-tenants` items `check#<tenant>#<id>`, at most 20 per tenant.
+- `obs-synthetics-tick` (every minute) hands the due checks to `obs-synthetics-run` in batches.
+- Safety: only public addresses are requested (the resolved address is checked and used; private,
+  loopback, link-local such as 169.254.169.254, and other non-public addresses are refused,
+  redirects included). The runner's role can only put records on tenant streams.
+
+```bash
+infra/deploy-phaseS1.sh      # first: the API routes invoke obs-synthetics-api
+infra/deploy-phaseT2.sh      # adds /v1/app/checks
+infra/deploy-phaseT5.sh      # deleting a tenant removes its checks
+infra/deploy-phaseW1.sh      # the Synthetics page
+```
+

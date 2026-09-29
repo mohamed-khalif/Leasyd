@@ -56,6 +56,7 @@ delete_stack obs-phaseW1          # web app (CloudFront takes 5-15 minutes)
 delete_stack obs-phaseT7
 delete_stack obs-phaseT5
 delete_stack obs-phaseT2
+delete_stack obs-phaseS1          # synthetic checks (their settings stay in obs-tenants)
 delete_stack obs-phase4
 delete_stack obs-phase3
 empty_bucket "obs-athena-results-${ACCOUNT}-${REGION}"

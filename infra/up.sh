@@ -46,6 +46,8 @@ step "index lookups (obs-phase3)"
 infra/deploy-phase3.sh --no-fail-on-empty-changeset
 step "query engine and query API (obs-phase4)"
 infra/deploy-phase4.sh --no-fail-on-empty-changeset
+step "synthetic checks (obs-phaseS1; before the API, whose routes use it)"
+infra/deploy-phaseS1.sh --no-fail-on-empty-changeset
 step "ingest API (obs-phaseT2)"
 infra/deploy-phaseT2.sh --no-fail-on-empty-changeset
 step "tenant operations (obs-phaseT5)"
