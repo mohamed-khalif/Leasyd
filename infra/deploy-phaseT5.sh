@@ -7,7 +7,9 @@ cd "$(dirname "$0")/.."
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 t2() { aws cloudformation describe-stacks --stack-name obs-phaseT2 \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
-u1() { aws cloudformation describe-stacks --stack-name obs-state \
+# Logins: obs-state (obs-phaseU1 in accounts not yet moved to obs-state).
+LOGINS=obs-state; aws cloudformation describe-stacks --stack-name obs-state >/dev/null 2>&1 || LOGINS=obs-phaseU1
+u1() { aws cloudformation describe-stacks --stack-name "$LOGINS" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
 
 infra/build-tenants.sh

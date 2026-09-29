@@ -1,34 +1,45 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Leasyd domain (obs-dns): the DNS zone for the product's domain and the TLS certificate for
-  ingest.<domain> (the API) and app.<domain> (the web app). Deployed by infra/deploy-dns.sh. Never
-  deleted by infra/down.sh: deleting the zone would change its name servers, and the domain's
-  registrar would have to be updated again.
+  Leasyd names (obs-dns): DNS zones for ingest.<domain> (the API) and app.<domain> (the web app), and
+  their TLS certificate. Only these two names are handed to AWS: the domain itself (website, email)
+  stays with its current DNS provider, which delegates each name to its zone with 4 NS records.
+  Deployed by infra/deploy-dns.sh. Never deleted by infra/down.sh: new zones would have new name
+  servers, and the NS records would need updating again.
 
 Parameters:
   DomainName:
     Type: String
-    Description: The product's domain, e.g. leasyd.com (registered anywhere).
+    Description: The product's domain, e.g. leasyd.com.
     AllowedPattern: "^[a-z0-9-]+(\\.[a-z0-9-]+)+$"
   IssueCertificate:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: >
-      true once the registrar points the domain at this zone's name servers. The certificate is
-      validated through this zone, so it can only be issued after that.
+      true once the domain's DNS delegates both names to these zones. The certificate is validated
+      through the zones, so it can only be issued after that.
 
 Conditions:
   Certificate: !Equals [!Ref IssueCertificate, "true"]
 
 Resources:
-  Zone:
+  IngestZone:
     Type: AWS::Route53::HostedZone
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Ref DomainName
-      HostedZoneConfig: { Comment: Leasyd }
+      Name: !Sub "ingest.${DomainName}"
+      HostedZoneConfig: { Comment: Leasyd API }
+      HostedZoneTags:
+        - { Key: project, Value: obs }
+
+  AppZone:
+    Type: AWS::Route53::HostedZone
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub "app.${DomainName}"
+      HostedZoneConfig: { Comment: Leasyd web app }
       HostedZoneTags:
         - { Key: project, Value: obs }
 
@@ -42,19 +53,24 @@ Resources:
       SubjectAlternativeNames: [!Sub "app.${DomainName}"]
       ValidationMethod: DNS
       DomainValidationOptions:
-        - { DomainName: !Sub "ingest.${DomainName}", HostedZoneId: !Ref Zone }
-        - { DomainName: !Sub "app.${DomainName}", HostedZoneId: !Ref Zone }
+        - { DomainName: !Sub "ingest.${DomainName}", HostedZoneId: !Ref IngestZone }
+        - { DomainName: !Sub "app.${DomainName}", HostedZoneId: !Ref AppZone }
       Tags:
         - { Key: project, Value: obs }
 
 Outputs:
   DomainName:
     Value: !Ref DomainName
-  HostedZoneId:
-    Value: !Ref Zone
-  NameServers:
-    Description: Set these as the domain's name servers at its registrar.
-    Value: !Join [" ", !GetAtt Zone.NameServers]
+  IngestZoneId:
+    Value: !Ref IngestZone
+  AppZoneId:
+    Value: !Ref AppZone
+  IngestNameServers:
+    Description: NS records for ingest.<domain> at the domain's DNS provider.
+    Value: !Join [" ", !GetAtt IngestZone.NameServers]
+  AppNameServers:
+    Description: NS records for app.<domain> at the domain's DNS provider.
+    Value: !Join [" ", !GetAtt AppZone.NameServers]
   CertificateArn:
     Condition: Certificate
     Value: !Ref Cert

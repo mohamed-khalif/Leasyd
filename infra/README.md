@@ -34,11 +34,14 @@ keeps them; `up.sh` reconnects them to the recreated API (`infra/tenant.sh resto
 
 ### The product's domain
 
-`DOMAIN=leasyd.com infra/up.sh` (or `infra/deploy-dns.sh leasyd.com`) creates a DNS zone and
-prints its four name servers. Set them at the domain's registrar, once. When public DNS shows them
-(minutes to hours), run `infra/up.sh` again: it issues the certificate, then serves the API at
-`https://ingest.<domain>` and the web app at `https://app.<domain>`. These names stay the same
-across `down.sh`/`up.sh`; the AWS-generated URLs do not.
+Only `ingest.<domain>` and `app.<domain>` are handed to AWS; the domain itself (website, email)
+stays with its current DNS provider. `infra/deploy-dns.sh leasyd.com` (or
+`DOMAIN=leasyd.com infra/up.sh`) creates a zone for each name and prints 8 NS records (4 per name)
+to add at that provider, once. When public DNS shows them (minutes to hours), run
+`infra/deploy-dns.sh` again: it issues the certificate. Then `infra/deploy-phaseT2.sh` and
+`infra/deploy-phaseW1.sh` (or `infra/up.sh`) serve the API at `https://ingest.<domain>` and the web
+app at `https://app.<domain>`. These names stay the same across `down.sh`/`up.sh`; the
+AWS-generated URLs do not.
 
 ## Phase 0: foundation
 

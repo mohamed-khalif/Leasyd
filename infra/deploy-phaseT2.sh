@@ -12,7 +12,9 @@ aws cloudformation package \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phaseT2 \
   --output-template-file infra/phaseT2-ingest.packaged.yaml
 # Customer logins (/v1/app/*): the user pool in obs-state.
-POOL_ARN="$(aws cloudformation describe-stacks --stack-name obs-state \
+# (obs-phaseU1 in accounts not yet moved to obs-state)
+LOGINS=obs-state; aws cloudformation describe-stacks --stack-name obs-state >/dev/null 2>&1 || LOGINS=obs-phaseU1
+POOL_ARN="$(aws cloudformation describe-stacks --stack-name "$LOGINS" \
   --query "Stacks[0].Outputs[?OutputKey=='UserPoolArn'].OutputValue" --output text 2>/dev/null || true)"
 # The public name ingest.<domain>, once obs-dns has its certificate (infra/deploy-dns.sh).
 dns() { aws cloudformation describe-stacks --stack-name obs-dns \
@@ -20,7 +22,7 @@ dns() { aws cloudformation describe-stacks --stack-name obs-dns \
 DOMAIN_ARGS=()
 CERT="$(dns CertificateArn)"
 if [[ -n "$CERT" && "$CERT" != None ]]; then
-  DOMAIN_ARGS=("ApiHostName=ingest.$(dns DomainName)" "CertificateArn=${CERT}" "HostedZoneId=$(dns HostedZoneId)")
+  DOMAIN_ARGS=("ApiHostName=ingest.$(dns DomainName)" "CertificateArn=${CERT}" "HostedZoneId=$(dns IngestZoneId)")
 fi
 aws cloudformation deploy --stack-name obs-phaseT2 \
   --template-file infra/phaseT2-ingest.packaged.yaml \
