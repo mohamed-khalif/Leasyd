@@ -59,6 +59,7 @@ import regex
 from boto3.dynamodb.conditions import Attr, Key
 
 import ingest
+import reliability as rel
 import safety  # noqa: F401  (tests patch safety.public through it)
 from safety import PLACEHOLDER as _PLACEHOLDER, Refused, mask as _mask, resolve, sub as _sub, target
 
@@ -606,7 +607,7 @@ def run_any(check, secret_values, budget_ms=None):
 
 
 def _settings(item):
-    return {k: v for k, v in item.items() if k not in ("pk", "tenant", "secrets", "created_at", "updated_at", "created_by")}
+    return {k: v for k, v in item.items() if k not in ("pk", "tenant", "secrets", "created_at", "updated_at", "created_by", "maintenance")}
 
 
 def run_browser_check(check, secret_values, budget_ms=None):
@@ -664,7 +665,8 @@ def telemetry(check_id, check, r):
     start = int(r["started"] * 1e9)
     trace, root = r.get("run_id") or _secrets.token_hex(16), _secrets.token_hex(8)
     resource = {"attributes": _attrs({"service.name": "synthetics", "cloud.region": LOCATION, "synthetics.location": LOCATION})}
-    who = {"check.id": check_id, "check.name": check["name"], "check.type": check.get("type", "http")}
+    who = {"check.id": check_id, "check.name": check["name"], "check.type": check.get("type", "http"),
+           "check.run_id": trace, "check.excluded": r.get("excluded")}   # excluded: run in a maintenance window
     spans, end = [], start
     for i, s in enumerate(r["steps"]):
         s_start = int(s["started"] * 1e9)
@@ -792,6 +794,33 @@ def _public_view(item):
     return {**out, "id": item["pk"].rsplit("#", 1)[1], "secret_names": sorted(item.get("secrets") or {})}
 
 
+def _items(tenant, prefix):
+    """The tenant's obs-tenants items whose pk starts with prefix (by-tenant index)."""
+    items, kw = [], dict(IndexName="by-tenant", KeyConditionExpression=Key("tenant").eq(tenant) & Key("pk").begins_with(prefix))
+    while True:
+        page = table().query(**kw)
+        items += [_plain(i) for i in page["Items"]]
+        if "LastEvaluatedKey" not in page:
+            return items
+        kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def exclusions(tenant, check_id=None):
+    """Live excluded runs (of one check, or all the tenant's); expired ones are removed."""
+    now = _now()
+    out = []
+    for it in _items(tenant, f"exclude#{tenant}#" + (f"{check_id}#" if check_id else "")):
+        if it.get("expires_at", "") <= now:
+            table().delete_item(Key={"pk": it["pk"]})
+            continue
+        out.append({k: it.get(k) for k in ("check", "run_id", "reason", "by", "at")})
+    return sorted(out, key=lambda e: e["at"] or "", reverse=True)
+
+
+def windows(tenant):
+    return [{**w, "id": w["pk"].rsplit("#", 1)[1]} for w in _items(tenant, f"window#{tenant}#")]
+
+
 def list_checks(tenant):
     items, kw = [], dict(IndexName="by-tenant", KeyConditionExpression=Key("tenant").eq(tenant) & Key("pk").begins_with(f"check#{tenant}#"))
     while True:
@@ -828,8 +857,14 @@ def api(event, context):
     except ValueError:
         return _http(400, {"error": "body must be JSON"})
     try:
+        if resource.startswith(("/v1/app/windows", "/v1/app/slos")):
+            return _settings_api(tenant, user, method, resource, check_id, body)
         if resource == "/v1/app/checks" and method == "GET":
-            return _http(200, {"checks": [_public_view(i) for i in list_checks(tenant)], "limit": MAX_CHECKS})
+            excluded = {}
+            for e in exclusions(tenant):
+                excluded.setdefault(e["check"], []).append(e["run_id"])
+            return _http(200, {"checks": [{**_public_view(i), "excluded_runs": excluded.get(i["pk"].rsplit("#", 1)[1], [])}
+                                          for i in list_checks(tenant)], "limit": MAX_CHECKS})
         if resource == "/v1/app/checks" and method == "POST":
             plain = body.get("secrets") or {}
             check = validate({**body, "secret_names": [k for k, v in plain.items() if v is not None]})
@@ -851,7 +886,20 @@ def api(event, context):
         if item is None:
             return _http(404, {"error": "no such check"})
         if resource == "/v1/app/checks/{id}" and method == "GET":
-            return _http(200, _public_view(item))
+            return _http(200, {**_public_view(item), "exclusions": exclusions(tenant, check_id)})
+        if resource == "/v1/app/checks/{id}/exclusions" and method == "POST":
+            e = rel.validate_exclusion(body)
+            if len(exclusions(tenant, check_id)) >= rel.MAX_EXCLUSIONS:
+                raise Refused(f"at most {rel.MAX_EXCLUSIONS} excluded runs per check")
+            table().put_item(Item={"pk": f"exclude#{tenant}#{check_id}#{e['run_id']}", "tenant": tenant, "check": check_id,
+                                   **e, "by": user, "at": _now(), "expires_at": rel.exclusion_expires(datetime.now(timezone.utc))})
+            return _http(201, {"check": check_id, **e, "by": user})
+        if resource == "/v1/app/checks/{id}/exclusions/{run}" and method == "DELETE":
+            run_id = (event.get("pathParameters") or {}).get("run") or ""
+            if not rel.is_run(run_id):
+                raise Refused("run: a run's trace id")
+            table().delete_item(Key={"pk": f"exclude#{tenant}#{check_id}#{run_id}"})
+            return _http(200, {"included": run_id})
         if resource == "/v1/app/checks/{id}" and method == "PUT":
             secrets_ = encrypt_secrets(tenant, check_id, body.get("secrets"), item.get("secrets"))
             settings = validate({**_public_view(item), **body, "secret_names": list(secrets_)})
@@ -860,9 +908,14 @@ def api(event, context):
             return _http(200, _public_view(item))
         if resource == "/v1/app/checks/{id}" and method == "DELETE":
             table().delete_item(Key={"pk": item["pk"]})
+            for e in _items(tenant, f"exclude#{tenant}#{check_id}#"):
+                table().delete_item(Key={"pk": e["pk"]})
             return _http(200, {"deleted": check_id})
         if resource == "/v1/app/checks/{id}/run" and method == "POST":
             result = run_any(item, decrypt_secrets(tenant, check_id, item.get("secrets")), BROWSER_TEST_MS)
+            window = rel.open_window(windows(tenant), check_id, datetime.now(timezone.utc))
+            if window:
+                result["excluded"] = f"maintenance window: {window}"
             record(tenant, check_id, item, store_screenshots(tenant, check_id, result))
             return _http(200, {"result": _view_result(result)})
         if resource == "/v1/app/checks/{id}/screenshot" and method == "GET":
@@ -880,6 +933,52 @@ def api(event, context):
     return _http(404, {"error": "unknown route"})
 
 
+SETTINGS = {"/v1/app/windows": ("window", rel.MAX_WINDOWS, rel.validate_window),
+            "/v1/app/slos": ("slo", rel.MAX_SLOS, rel.validate_slo)}
+
+
+def _settings_api(tenant, user, method, resource, item_id, body):
+    """Maintenance windows and SLOs: list and create; get, replace and delete one."""
+    base = resource.removesuffix("/{id}")
+    kind, most, validate_ = SETTINGS[base]
+    known = {i["pk"].rsplit("#", 1)[1] for i in list_checks(tenant)}
+    view = lambda it: {**{k: v for k, v in it.items() if k not in ("pk", "tenant")}, "id": it["pk"].rsplit("#", 1)[1]}  # noqa: E731
+    if resource == base:
+        if method == "GET":
+            return _http(200, {"items": sorted((view(i) for i in _items(tenant, f"{kind}#{tenant}#")), key=lambda i: i["name"].lower()),
+                               "limit": most})
+        if method == "POST":
+            settings = validate_(body, known)
+            if len(_items(tenant, f"{kind}#{tenant}#")) >= most:
+                raise Refused(f"at most {most}")
+            now = _now()
+            item = {"pk": f"{kind}#{tenant}#{_secrets.token_hex(6)}", "tenant": tenant, **settings,
+                    "created_at": now, "updated_at": now, "created_by": user}
+            table().put_item(Item=_dynamo(item), ConditionExpression="attribute_not_exists(pk)")
+            return _http(201, view(item))
+    elif rel.is_id(item_id):
+        pk = f"{kind}#{tenant}#{item_id}"
+        item = table().get_item(Key={"pk": pk}, ConsistentRead=True).get("Item")
+        if item and item.get("tenant") == tenant:
+            item = _plain(item)
+            if method == "GET":
+                return _http(200, view(item))
+            if method == "PUT":
+                item = {**item, **validate_({**view(item), **body}, known), "updated_at": _now()}
+                table().put_item(Item=_dynamo(item))
+                return _http(200, view(item))
+            if method == "DELETE":
+                table().delete_item(Key={"pk": pk})
+                return _http(200, {"deleted": item_id})
+    return _http(404, {"error": f"no such {'maintenance window' if kind == 'window' else 'SLO'}"})
+
+
+def _dynamo(v):
+    """Floats (an SLO's target) as DynamoDB numbers."""
+    from decimal import Decimal
+    return json.loads(json.dumps(v), parse_float=Decimal)
+
+
 def _view_result(r):
     return _plain({k: v for k, v in r.items() if k != "started"} | {"steps": [{k: v for k, v in s.items() if k != "started"} for s in r["steps"]]})
 
@@ -893,13 +992,23 @@ def due(check_id, frequency, minute):
 def tick(event, context):
     """Scheduled every minute: hand the due checks to the runner in batches."""
     minute = int(time.time() // 60)
-    items, kw = [], dict(FilterExpression=Attr("pk").begins_with("check#") & Attr("enabled").eq(True))
+    now = datetime.fromtimestamp(minute * 60, timezone.utc)
+    items, open_windows = [], {}
+    kw = dict(FilterExpression=(Attr("pk").begins_with("check#") & Attr("enabled").eq(True)) | Attr("pk").begins_with("window#"))
     while True:
         page = table().scan(**kw)
-        items += [i for i in page["Items"] if due(i["pk"].rsplit("#", 1)[1], i["frequency"], minute)]
+        for i in page["Items"]:
+            if i["pk"].startswith("window#"):
+                open_windows.setdefault(i["tenant"], []).append(_plain(i))
+            elif due(i["pk"].rsplit("#", 1)[1], i["frequency"], minute):
+                items.append(i)
         if "LastEvaluatedKey" not in page:
             break
         kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    for i in items:     # runs in an open maintenance window run, but are recorded as excluded
+        window = rel.open_window(open_windows.get(i["tenant"], []), i["pk"].rsplit("#", 1)[1], now)
+        if window:
+            i["maintenance"] = window
     client = boto3.client("lambda")
     http_ = [i for i in items if i.get("type", "http") != "browser"]
     browser_ = [i for i in items if i.get("type") == "browser"]
@@ -924,6 +1033,8 @@ def run(event, context):
                       "steps": [], "total_ms": 0.0, "tls_days": None, "started": time.time()}
         else:
             result = run_any(item, plain)
+        if item.get("maintenance"):
+            result["excluded"] = f"maintenance window: {item['maintenance']}"
         record(tenant, check_id, item, store_screenshots(tenant, check_id, result))
         return {"tenant": tenant, "check": check_id, "ok": result["ok"], "ms": result["total_ms"]}
     with ThreadPoolExecutor(max(1, len(checks))) as pool:

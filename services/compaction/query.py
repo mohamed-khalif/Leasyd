@@ -63,6 +63,7 @@ MAX_WORKERS = int(os.environ.get("QUERY_MAX_WORKERS", "64"))
 # Data is kept this many full days plus today (UTC); the tenant admin's daily retention job deletes
 # earlier days. Customers' queries start no earlier, so a sweep in progress never shows as gaps.
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
+MAX_IN_VALUES = 2000
 TARGET_BYTES_PER_WORKER = int(os.environ.get("QUERY_BYTES_PER_WORKER", str(256 * 1024 * 1024)))
 # Opening a file costs about as much as reading this many more bytes (footer and column-chunk
 # requests; ~9 ms a file measured on 3,000 small metrics files), so many small files also get
@@ -155,6 +156,8 @@ def compile_query(q, edges=False):
         expr = _field(signal, cond.get("field"), params)
         if op == "exists":
             where.append(f"{expr} IS NOT NULL")
+        elif op == "not_exists":
+            where.append(f"{expr} IS NULL")
         elif op == "contains":
             where.append(f"{expr}::VARCHAR ILIKE ?")
             params.append("%" + str(cond["value"]).replace("%", r"\%").replace("_", r"\_") + "%")
@@ -164,6 +167,15 @@ def compile_query(q, edges=False):
                 raise BadQuery("'in' needs values")
             where.append(f"{expr}::VARCHAR IN ({', '.join('?' * len(vals))})")
             params += [str(v) for v in vals]
+        elif op == "not_in":            # a missing value is "not in" (rows without the field stay)
+            vals = list(cond["value"])
+            if len(vals) > MAX_IN_VALUES:
+                raise BadQuery(f"'not_in' takes at most {MAX_IN_VALUES} values")
+            if vals:
+                where.append(f"({expr}::VARCHAR IN ({', '.join('?' * len(vals))})) IS NOT TRUE")
+                params += [str(v) for v in vals]
+            else:                         # nothing to leave out (still uses the field's bound key)
+                where.append(f"({expr} IS NULL OR TRUE)")
         elif op in OPS:
             v = cond["value"]
             if isinstance(v, (int, float)) and not isinstance(v, bool):

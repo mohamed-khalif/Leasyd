@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import { BrowserAction, BrowserStep, Check, CheckResult, checks, CheckSettings, Constraint, Extraction, records, Step, StepResult } from "../api";
+import { BrowserAction, BrowserStep, Check, CheckResult, checks, CheckSettings, Constraint, Extraction, notExcluded, records, Step, StepResult } from "../api";
 import type { Ctx } from "../App";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
@@ -8,6 +8,7 @@ import { TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtNum, rangeWindow } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "./Logs";
+import { Maintenance } from "./Maintenance";
 
 // Results are the tenant's own telemetry (service "synthetics"): gauges synthetics.check.success /
 // .duration / .tls_days_remaining and synthetics.step.duration, and a trace per run (a span per step),
@@ -43,8 +44,9 @@ function describeStep(st: Step | BrowserStep): string {
 }
 
 export function Synthetics({ ctx, path }: { ctx: Ctx; path: string }) {
-  const [, , id, sub] = path.split("/");            // /synthetics[/new | /<id>[/edit]]
+  const [, , id, sub] = path.split("/");            // /synthetics[/new | /windows[/…] | /<id>[/edit]]
   if (id === "new") return <CheckForm ctx={ctx} />;
+  if (id === "windows") return <Maintenance ctx={ctx} sub={sub} />;
   if (id && sub === "edit") return <EditCheck ctx={ctx} id={id} />;
   if (id) return <CheckDetail ctx={ctx} id={id} />;
   return <CheckList ctx={ctx} />;
@@ -66,9 +68,11 @@ function CheckList({ ctx }: { ctx: Ctx }) {
   const list = useChecks(ctx.tick);
   const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
   const key = ctx.range.key + ctx.tick;
+  const excluded = (list.data?.checks ?? []).flatMap((c) => c.excluded_runs ?? []);
   const byCheck = { signal: "metrics" as const, ...w, services: ["synthetics"], group_by: ["attributes.check.id"], limit: 1000 };
-  const uptime = useQuery({ ...byCheck, where: [{ field: "metric_name", op: "=", value: SUCCESS }], aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "u" + key);
-  const speed = useQuery({ ...byCheck, where: [{ field: "metric_name", op: "=", value: DURATION }], aggs: [{ fn: "avg", field: "value" }] }, "d" + key);
+  const ex = notExcluded(excluded), exKey = key + ":" + excluded.length;
+  const uptime = useQuery({ ...byCheck, where: [{ field: "metric_name", op: "=", value: SUCCESS }, ...ex], aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "u" + exKey);
+  const speed = useQuery({ ...byCheck, where: [{ field: "metric_name", op: "=", value: DURATION }, ...ex], aggs: [{ fn: "avg", field: "value" }] }, "d" + exKey);
   const runs = useQuery({ signal: "traces", ...w, services: ["synthetics"], where: [{ field: "attributes.check.result", op: "exists" }],
                           search: { limit: 500 } }, "r" + key);
 
@@ -85,6 +89,7 @@ function CheckList({ ctx }: { ctx: Ctx }) {
       <div className="toolbar">
         <span className="faint">Checks run from us-east-1 (N. Virginia). Their results are part of your data: filter by service <b>synthetics</b> anywhere.</span>
         <span className="spacer" style={{ flex: 1 }} />
+        <button className="btn" onClick={() => ctx.go("/synthetics/windows")}>Maintenance windows</button>
         <button className="btn primary" disabled={!!list.data && all.length >= list.data.limit} onClick={() => ctx.go("/synthetics/new")}>New check</button>
       </div>
       <Panel title="Synthetic checks" flush right={list.data && <span className="faint">{all.length} of {list.data.limit}</span>}>
@@ -127,12 +132,15 @@ function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const [running, setRunning] = useState<CheckResult | "running" | null>(null);
   const [nonce, setNonce] = useState(0);
   const [shot, setShot] = useState<{ run: string; step: number; image?: string; error?: string } | null>(null);
+  const [excluding, setExcluding] = useState<{ run: string; reason: string } | null>(null);
   const load = useCallback(() => checks.get(id).then(setCheck, (e: Error) => setError(e.message)), [id]);
   useEffect(() => { load(); }, [load, ctx.tick]);
 
   const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick, nonce]);
-  const b = bucketSeconds(ctx.range), key = id + ctx.range.key + ctx.tick + nonce;
-  const mine = (metric: string) => [{ field: "metric_name", op: "=", value: metric }, { field: "attributes.check.id", op: "=", value: id }];
+  const exRuns = (check?.exclusions ?? []).map((e) => e.run_id);
+  const b = bucketSeconds(ctx.range), key = id + ctx.range.key + ctx.tick + nonce + ":" + exRuns.join(",").length;
+  // Results leave out excluded runs (maintenance windows, and runs excluded by hand).
+  const mine = (metric: string) => [{ field: "metric_name", op: "=", value: metric }, { field: "attributes.check.id", op: "=", value: id }, ...notExcluded(exRuns)];
   const base = { signal: "metrics" as const, ...w, services: ["synthetics"] };
   const totals = useQuery({ ...base, where: mine(SUCCESS), aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "t" + key);
   const speed = useQuery({ ...base, where: mine(DURATION), aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }] }, "s" + key);
@@ -162,6 +170,9 @@ function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
     catch (e) { setError((e as Error).message); setRunning(null); }
   };
   const act = async (f: () => Promise<unknown>) => { try { await f(); } catch (e) { setError((e as Error).message); } };
+  const byRun = new Map((check.exclusions ?? []).map((e) => [e.run_id, e]));
+  const exclude = () => excluding && act(async () => { await checks.exclude(id, excluding.run, excluding.reason || "Excluded"); setExcluding(null); await load(); });
+  const include = (run: string) => act(async () => { await checks.include(id, run); await load(); });
   const points = (q: typeof series, scale = 1) => (q.data ? q.data.rows.map((r) => [Date.parse(String(r[0])), Number(r[1]) * scale] as [number, number]) : []);
   const runRows = runs.data ? records(runs.data).sort((a, c) => String(c.ts).localeCompare(String(a.ts))) : [];
   return (
@@ -178,7 +189,8 @@ function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
       {running && running !== "running" && <ResultBox result={running} note="Recorded; it appears in the charts within about a minute." />}
       <Panel title={check.name} right={<span className="faint">{browser ? `browser (${check.device ?? "desktop"}) · ` : ""}{check.steps.length} step{check.steps.length > 1 ? "s" : ""} · every {every(check.frequency)}{check.enabled ? "" : " · paused"}</span>}>
         <div className="grid">
-          <div className="span-3"><Loads q={totals} height={84}>{() => <Stat small value={t && Number(t[1]) ? pct(Number(t[0])) : "—"} sub="uptime" />}</Loads></div>
+          <div className="span-3"><Loads q={totals} height={84}>{() => <Stat small value={t && Number(t[1]) ? pct(Number(t[0])) : "—"}
+                                                                          sub={byRun.size ? `uptime (${byRun.size} run${byRun.size > 1 ? "s" : ""} excluded)` : "uptime"} />}</Loads></div>
           <div className="span-3"><Loads q={speed} height={84}>{() => <Stat small value={s && s[0] != null ? `${fmtNum(Number(s[0]))} ms` : "—"} sub="average time (all steps)" />}</Loads></div>
           <div className="span-3"><Loads q={speed} height={84}>{() => <Stat small value={s && s[1] != null ? `${fmtNum(Number(s[1]))} ms` : "—"} sub="p95 time (all steps)" />}</Loads></div>
           {browser ? (
@@ -216,21 +228,37 @@ function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
                              r ? `${fmtNum(Number(r["avg(value)"]))} ms` : "—", r ? `${fmtNum(Number(r["p95(value)"]))} ms` : "—"];
                    })} />
       </Panel>
-      <Panel title="Recent runs" flush right={<span className="faint">click one to open its trace (a span per step)</span>}>
+      <Panel title="Recent runs" flush right={<span className="faint">click one to open its trace · exclude a false alarm (e.g. a deployment) so it doesn't count</span>}>
+        {excluding && (
+          <form className="exclude-form" onSubmit={(e) => { e.preventDefault(); exclude(); }}>
+            <span>Exclude the run of {fmtTs(String(runRows.find((r) => r.trace_id === excluding.run)?.ts ?? "")).slice(0, 19)} from uptime and SLOs, because</span>
+            <input className="input grow" autoFocus maxLength={200} value={excluding.reason} onChange={(e) => setExcluding({ ...excluding, reason: e.target.value })} />
+            <button className="btn primary">Exclude</button>
+            <button type="button" className="btn" onClick={() => setExcluding(null)}>Cancel</button>
+          </form>
+        )}
         <Loads q={runs} empty={!runRows.length} height={120}>
-          {() => <RankTable head={["time", "result", "failed at", "why", "time", ...(browser ? ["screenshots"] : [])]} maxHeight={420}
+          {() => <RankTable head={["time", "result", "failed at", "why", "time", ...(browser ? ["screenshots"] : []), ""]} maxHeight={420}
                             onRow={(i) => ctx.go(`/traces/${runRows[i].trace_id}`)}
                             rows={runRows.map((r) => {
                               const a = r.attributes as Record<string, unknown>, pass = a["check.result"] === "pass";
                               const why = String(a["check.failure"] ?? "");
                               const shots = String(a["check.screenshots"] ?? "").split(",").filter(Boolean).map(Number);
-                              return [fmtTs(String(r.ts)), <span style={{ color: pass ? OK : "var(--sev-error)" }}>{pass ? "passed" : "failed"}</span>,
+                              const run = String(r.trace_id), manual = byRun.get(run), window = a["check.excluded"] as string | undefined;
+                              const result = <span style={{ color: pass ? OK : "var(--sev-error)" }}>{pass ? "passed" : "failed"}</span>;
+                              return [fmtTs(String(r.ts)),
+                                      manual || window ? <span className="excluded" title={manual ? `${manual.reason} — ${manual.by ?? ""}` : window}>{result} · excluded</span> : result,
                                       pass ? "" : (check.steps[Number(a["check.failed_step"]) - 1]?.name ?? "—"), why.replace(/^[^:]*: /, ""),
                                       a["check.total_ms"] != null ? `${fmtNum(Number(a["check.total_ms"]))} ms` : "—",
                                       ...(browser ? [<span className="chips" onClick={(e) => e.stopPropagation()}>
                                         {shots.length ? shots.map((n) => <button key={n} type="button" className={`chip${shot?.run === r.trace_id && shot?.step === n ? " on" : ""}`}
                                                                                title={`Screenshot after step ${n}`} onClick={() => showShot(String(r.trace_id), n)}>{n}</button>) : "—"}
-                                      </span>] : [])];
+                                      </span>] : []),
+                                      <span onClick={(e) => e.stopPropagation()}>
+                                        {window ? <span className="faint" title={window}>maintenance</span>
+                                          : manual ? <button type="button" className="btn small" title={`Excluded by ${manual.by ?? "?"}: ${manual.reason}`} onClick={() => include(run)}>Include</button>
+                                          : <button type="button" className="btn small" onClick={() => setExcluding({ run, reason: "Deployment" })}>Exclude</button>}
+                                      </span>];
                             })} />}
         </Loads>
       </Panel>

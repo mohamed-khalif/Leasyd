@@ -80,6 +80,28 @@ function browserResult(steps: { name: string; action: string; url?: string }[]) 
     }) };
 }
 
+// Excluded runs, maintenance windows and SLOs, kept in memory.
+const EXCLUSIONS: { check: string; run_id: string; reason: string; by: string; at: string }[] = [];
+const SETTINGS: Record<string, Record<string, unknown>[]> = {
+  windows: [{ id: "w1a2b3c4d5e6", name: "Weekly deployment", checks: ["*"],
+              schedule: { type: "weekly", days: ["tue", "thu"], start: "22:00", duration_minutes: 60, timezone: "Europe/London" } }],
+  slos: [
+    { id: "s1a2b3c4d5e6", name: "Checkout available", description: "Customers can complete a purchase.", type: "availability",
+      checks: ["e5f6a1b2c3d4", "b2c3d4e5f6a1"], target: 99.5, window_days: 30 },
+    { id: "s2b3c4d5e6f1", name: "Homepage fast", description: "", type: "performance", checks: ["a1b2c3d4e5f6"], target: 99, window_days: 7, threshold_ms: 300 },
+  ],
+};
+
+function settingsRoute(kind: string, id: string | undefined, method: string, body: Record<string, unknown>): [number, unknown] {
+  const list = SETTINGS[kind], one = list.find((x) => x.id === id);
+  if (!id && method === "GET") return [200, { items: list, limit: 20 }];
+  if (!id && method === "POST") { const n = { ...body, id: hex(Math.random, 12) }; list.push(n); return [201, n]; }
+  if (!one) return [404, { error: "not found" }];
+  if (method === "PUT") { Object.assign(one, body); return [200, one]; }
+  if (method === "DELETE") { list.splice(list.indexOf(one), 1); return [200, { deleted: id }]; }
+  return [200, one];
+}
+
 function synthetics(q: Q) {
   const t0 = Date.parse(q.start), t1 = Date.parse(q.end);
   const metric = String(q.where?.find((w) => w.field === "metric_name")?.value ?? "");
@@ -91,9 +113,11 @@ function synthetics(q: Q) {
     const rows = [];
     for (const c of cs) for (let t = t1 - 30000; t > t0 && rows.length < q.search.limit; t -= c.frequency * 60000) {
       const bad = fail(c, t), ms = Number(c.ms) * (0.8 + r() * 0.5) * (bad ? 6 : 1);
-      rows.push({ ts: new Date(t).toISOString(), service: "synthetics", name: c.name, trace_id: hex(r, 32), span_id: hex(r, 16),
+      rows.push({ ts: new Date(t).toISOString(), service: "synthetics", name: c.name, trace_id: `${c.id}${String(t).padStart(20, "0")}`, span_id: hex(r, 16),
         duration_ns: Math.round(ms * 1e6), status_code: bad ? 2 : 0,
         attributes: { "check.id": c.id, "check.name": c.name, "check.result": bad ? "fail" : "pass", "check.total_ms": Math.round(ms),
+          "check.run_id": `${c.id}${String(t).padStart(20, "0")}`,
+          ...(rows.length === 3 ? { "check.excluded": "maintenance window: Weekly deployment" } : {}),
           ...(bad && c.type === "browser" ? { "check.failed_step": 8, "check.failure": "Order confirmed: text 'Thank you for your order' not found", "check.screenshots": "8" }
             : bad ? { "check.failed_step": 2, "check.failure": "Create cart: status 503, expected 201" } : {}) } });
     }
@@ -318,11 +342,22 @@ export function mockApi(): Plugin {
         if (!req.url?.startsWith("/v1/app/")) return next();
         res.setHeader("Content-Type", "application/json");
         if (req.url === "/v1/app/me") return res.end(JSON.stringify({ tenant: "acme", email: "ana@acme.io" }));
+        const settings = req.url.split("?")[0].match(/^\/v1\/app\/(windows|slos)(?:\/([a-z0-9]+))?$/);
+        if (settings) {
+          let raw = "";
+          req.on("data", (c: Buffer) => (raw += c));
+          req.on("end", () => {
+            const [status, out] = settingsRoute(settings[1], settings[2], req.method ?? "GET", raw ? JSON.parse(raw) : {});
+            res.statusCode = status;
+            setTimeout(() => res.end(JSON.stringify(out)), 150);
+          });
+          return;
+        }
         if (req.url.startsWith("/v1/app/checks")) {
           let raw = "";
           req.on("data", (c: Buffer) => (raw += c));
           req.on("end", () => {
-            const [, , , , id, sub] = req.url!.split("?")[0].split("/");   // /v1/app/checks[/id[/run]]
+            const [, , , , id, sub, run] = req.url!.split("?")[0].split("/");   // /v1/app/checks[/id[/run | /exclusions[/run]]]
             const body = raw ? JSON.parse(raw) : {};
             const steps = (body.steps ?? CHECKS.find((x) => x.id === id)?.steps ?? []) as { name: string; url: string; extract?: { name: string }[] }[];
             const isBrowser = (body.type ?? CHECKS.find((x) => x.id === id)?.type) === "browser";
@@ -332,15 +367,17 @@ export function mockApi(): Plugin {
                 timings: { dns_ms: i ? 0.4 : 12.1, connect_ms: 31.6, tls_ms: 58.2, ttfb_ms: 141.7, total_ms: 150.3 }, body_sample: null })) };
             let out: unknown = { error: "no such check" }, status = 200;
             const c = CHECKS.find((x) => x.id === id);
-            if (!id && req.method === "GET") out = { checks: CHECKS, limit: 20 };
+            if (!id && req.method === "GET") out = { checks: CHECKS.map((x) => ({ ...x, excluded_runs: EXCLUSIONS.filter((e) => e.check === x.id).map((e) => e.run_id) })), limit: 20 };
             else if (!id && req.method === "POST") { const n = { ...body, id: hex(Math.random, 12), created_at: new Date().toISOString() }; CHECKS.push(n); out = n; status = 201; }
             else if (id === "test") out = { result };
             else if (!c) status = 404;
             else if (sub === "run") out = { result };
             else if (sub === "screenshot") out = { image: SHOT, content_type: "image/jpeg" };
+            else if (sub === "exclusions" && req.method === "POST") { const e = { check: id, ...body, by: "ana@acme.io", at: new Date().toISOString() }; EXCLUSIONS.push(e); out = e; status = 201; }
+            else if (sub === "exclusions" && req.method === "DELETE") { EXCLUSIONS.splice(EXCLUSIONS.findIndex((e) => e.run_id === run), 1); out = { included: run }; }
             else if (req.method === "PUT") { Object.assign(c, body); out = c; }
             else if (req.method === "DELETE") { CHECKS.splice(CHECKS.indexOf(c), 1); out = { deleted: id }; }
-            else out = c;
+            else out = { ...c, exclusions: EXCLUSIONS.filter((e) => e.check === id) };
             res.statusCode = status;
             setTimeout(() => res.end(JSON.stringify(out)), 200);
           });

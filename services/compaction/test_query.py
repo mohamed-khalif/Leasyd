@@ -428,3 +428,21 @@ def test_api_never_reaches_before_retention(data, monkeypatch):
     assert status == 200 and out["rows"] == []                      # nothing older is read
     status, out = http("acme", {**q, "end": f"{DAY}T23:59:59Z", "start": "2020-01-01T00:00:00Z"})
     assert status == 200 and out["rows"] == []                      # nothing older is read
+
+
+def test_not_in_and_not_exists(data):
+    q = dict(aggs=[{"fn": "count"}])
+    total = run(**q)["rows"][0][0]
+    b = run(**q, where=[{"field": "attributes.http.route", "op": "=", "value": "/b"}])["rows"][0][0]
+    got = run(**q, where=[{"field": "attributes.http.route", "op": "not_in", "value": ["/b"]}])["rows"][0][0]
+    assert got == total - b and 0 < b < total
+    # Rows without the attribute are kept by not_in, and are exactly those not_exists finds.
+    assert run(**q, where=[{"field": "attributes.nope", "op": "not_in", "value": ["x"]}])["rows"][0][0] == total
+    assert run(**q, where=[{"field": "attributes.nope", "op": "not_exists"}])["rows"][0][0] == total
+    assert run(**q, where=[{"field": "attributes.http.route", "op": "not_exists"}])["rows"][0][0] == 0
+    # Placeholders stay aligned with other conditions around it.
+    two = run(**q, where=[{"field": "attributes.http.route", "op": "not_in", "value": ["/a", "/c"]},
+                          {"field": "severity_text", "op": "=", "value": "ERROR"}])["rows"][0][0]
+    assert two == run(**q, where=[{"field": "attributes.http.route", "op": "=", "value": "/b"},
+                                  {"field": "severity_text", "op": "=", "value": "ERROR"}])["rows"][0][0] > 0
+    assert run(**q, where=[{"field": "attributes.http.route", "op": "not_in", "value": []}])["rows"][0][0] == total

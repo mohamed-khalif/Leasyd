@@ -325,11 +325,13 @@ def test_deleting_a_tenant_removes_its_synthetic_checks(adm):
     call(adm, "create", tenant="acme")
     call(adm, "create", tenant="globex")
     ddb = boto3.resource("dynamodb").Table("obs-tenants")
+    kinds = ("check#{t}#aaaabbbbcccc", "exclude#{t}#aaaabbbbcccc#" + "a" * 32, "window#{t}#bbbbccccdddd", "slo#{t}#ccccddddeeee")
     for t in ("acme", "globex"):
-        ddb.put_item(Item={"pk": f"check#{t}#aaaabbbbcccc", "tenant": t, "name": "Home", "enabled": True})
+        for k in kinds:
+            ddb.put_item(Item={"pk": k.format(t=t), "tenant": t, "name": "x", "enabled": True})
     call(adm, "delete", tenant="acme")
-    left = {i["pk"] for i in ddb.scan()["Items"] if i["pk"].startswith("check#")}
-    assert left == {"check#globex#aaaabbbbcccc"}
+    left = {i["pk"] for i in ddb.scan()["Items"] if i["pk"].startswith(("check#", "exclude#", "window#", "slo#"))}
+    assert left == {k.format(t="globex") for k in kinds}
 
 
 # ------------------------------------------------------------------ retention

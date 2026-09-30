@@ -56,7 +56,9 @@ export type CheckSettings = {
   device?: "desktop" | "mobile"; screenshots?: "failure" | "every_step"; verify_tls?: boolean;   // browser checks
   secrets?: Record<string, string | null>;    // write-only: new values, or null to remove
 };
-export type Check = Omit<CheckSettings, "secrets"> & { id: string; secret_names: string[]; created_at: string; updated_at: string; created_by?: string };
+export type Exclusion = { check: string; run_id: string; reason: string; by?: string; at: string };
+export type Check = Omit<CheckSettings, "secrets"> & { id: string; secret_names: string[]; created_at: string; updated_at: string; created_by?: string;
+                                                       excluded_runs?: string[]; exclusions?: Exclusion[] };
 export type Timings = { dns_ms?: number; connect_ms?: number; tls_ms?: number; ttfb_ms?: number; total_ms?: number };
 export type Vitals = { ttfb_ms: number | null; fcp_ms: number | null; lcp_ms: number | null; cls: number | null;
                        dom_ms: number | null; load_ms: number | null; transfer_bytes: number | null };
@@ -76,9 +78,37 @@ export const checks = {
   remove: (id: string) => call<{ deleted: string }>(`/v1/app/checks/${encodeURIComponent(id)}`, json("DELETE")),
   run: (id: string) => call<{ result: CheckResult }>(`/v1/app/checks/${encodeURIComponent(id)}/run`, json("POST")),
   test: (c: CheckSettings & { id?: string }) => call<{ result: CheckResult }>("/v1/app/checks/test", json("POST", c)),
+  exclude: (id: string, run_id: string, reason: string) =>
+    call<Exclusion>(`/v1/app/checks/${encodeURIComponent(id)}/exclusions`, json("POST", { run_id, reason })),
+  include: (id: string, run: string) => call<{ included: string }>(`/v1/app/checks/${encodeURIComponent(id)}/exclusions/${run}`, json("DELETE")),
   screenshot: (id: string, run: string, step: number) =>
     call<{ image: string; content_type: string }>(`/v1/app/checks/${encodeURIComponent(id)}/screenshot?run=${encodeURIComponent(run)}&step=${step}`),
 };
+
+// Maintenance windows (/v1/app/windows): runs of the chosen checks inside one are recorded as excluded.
+export type WindowSchedule = { type: "once"; start: string; end: string }
+  | { type: "weekly"; days: string[]; start: string; duration_minutes: number; timezone: string };
+export type MaintenanceWindow = { id: string; name: string; checks: string[]; schedule: WindowSchedule; created_at?: string; created_by?: string };
+// SLOs (/v1/app/slos) over synthetic checks, evaluated from their results.
+export type Slo = { id: string; name: string; description: string; type: "availability" | "performance"; checks: string[];
+                    target: number; window_days: number; threshold_ms?: number; created_at?: string; created_by?: string };
+function settingsApi<T extends { id: string }>(base: string) {
+  return {
+    list: () => call<{ items: T[]; limit: number }>(base),
+    get: (id: string) => call<T>(`${base}/${encodeURIComponent(id)}`),
+    create: (x: Omit<T, "id">) => call<T>(base, json("POST", x)),
+    update: (id: string, x: Partial<T>) => call<T>(`${base}/${encodeURIComponent(id)}`, json("PUT", x)),
+    remove: (id: string) => call<{ deleted: string }>(`${base}/${encodeURIComponent(id)}`, json("DELETE")),
+  };
+}
+export const windows = settingsApi<MaintenanceWindow>("/v1/app/windows");
+export const slos = settingsApi<Slo>("/v1/app/slos");
+
+/** Where-conditions that leave excluded runs out: maintenance windows, and runs excluded by hand. */
+export function notExcluded(runIds: string[] = []): Where[] {
+  return [{ field: "attributes.check.excluded", op: "not_exists" },
+          ...(runIds.length ? [{ field: "attributes.check.run_id", op: "not_in", value: runIds }] : [])];
+}
 
 /** Rows of a result as objects keyed by column name. */
 export function records(r: Result): Record<string, unknown>[] {

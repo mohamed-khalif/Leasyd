@@ -245,8 +245,10 @@ def delete(tenant, context=None):
     for u in _users(tenant):
         if u["status"] == "active":
             _remove_login(u)
-    for c in _items(tenant, "check#"):      # synthetic checks (S1): stop running them
-        tenants.delete_item(Key={"pk": c["pk"]})
+    # Synthetic checks (S1): stop running them; and their excluded runs, maintenance windows, SLOs.
+    for prefix in ("check#", "exclude#", "window#", "slo#"):
+        for c in _items(tenant, prefix):
+            tenants.delete_item(Key={"pk": c["pk"]})
     _invoke_self({"action": "purge", "tenant": tenant})
     return {"tenant": tenant, "status": "deleting", "revoked": revoked,
             "note": f"data purge started; passes repeat every {int(SETTLE.total_seconds() // 60)} min "

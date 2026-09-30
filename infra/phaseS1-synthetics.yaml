@@ -60,8 +60,8 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
-                Condition:   # check items only, never tenants, keys or users
-                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": "check#*" }
+                Condition:   # checks, excluded runs, maintenance windows, SLOs; never tenants, keys or users
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["check#*", "exclude#*", "window#*", "slo#*"] }
               - Effect: Allow
                 Action: dynamodb:Query
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"

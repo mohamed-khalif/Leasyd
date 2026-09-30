@@ -52,7 +52,7 @@ export function App() {
   } else if (path.startsWith("/synthetics")) {
     page = <Synthetics ctx={ctx} path={path} />;
     const sub = path.split("/")[2];
-    crumb = ["Synthetics", sub === "new" ? "New check" : sub ? (path.endsWith("/edit") ? "Edit check" : "Check") : "Checks"];
+    crumb = ["Synthetics", sub === "windows" ? "Maintenance windows" : sub === "new" ? "New check" : sub ? (path.endsWith("/edit") ? "Edit check" : "Check") : "Checks"];
   } else if (path.startsWith("/metrics")) {
     page = <Metrics ctx={ctx} params={params} />;
     crumb = ["Metrics", params.get("m") ?? "Explorer"];

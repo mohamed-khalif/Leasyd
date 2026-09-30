@@ -56,7 +56,7 @@ rm -rf services/synthetics/build && mkdir -p services/synthetics/build
 pip install -q --target services/synthetics/build --only-binary=:all: --implementation cp --python-version 3.12 \
   --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 \
   -r services/ingest/requirements.txt -r services/synthetics/requirements.txt
-cp services/synthetics/synthetics.py services/synthetics/safety.py services/ingest/ingest.py services/synthetics/build/
+cp services/synthetics/synthetics.py services/synthetics/safety.py services/synthetics/reliability.py services/ingest/ingest.py services/synthetics/build/
 aws cloudformation package \
   --template-file infra/phaseS1-synthetics.yaml \
   --s3-bucket "$ARTIFACTS" --s3-prefix phaseS1 \
