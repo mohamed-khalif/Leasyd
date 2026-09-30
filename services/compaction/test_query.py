@@ -501,3 +501,34 @@ def test_too_many_groups_is_reported(data, monkeypatch):
     monkeypatch.setattr(query, "MAX_ROWS", 5)
     out = run(group_by=["service", "hash:attributes"], aggs=[{"fn": "count"}], collapse=1)
     assert out["truncated"] is True
+
+
+def test_promql_building_blocks(data, counters):
+    # label.<key>: an attribute (or resource attribute); a|b tries each key
+    by_route = {r[0]: r[1] for r in run(group_by=["label.nope|http.route"], aggs=[{"fn": "count"}])["rows"]}
+    assert by_route == {r[0]: r[1] for r in run(group_by=["attributes.http.route"], aggs=[{"fn": "count"}])["rows"]}
+    # regex: the whole value must match; a missing label counts as ""
+    q = dict(aggs=[{"fn": "count"}])
+    n = lambda **w: run(**q, where=[w])["rows"][0][0]
+    assert n(field="label.http.route", op="regex", value="/(a|b)") == n(field="attributes.http.route", op="in", value=["/a", "/b"])
+    assert n(field="label.http.route", op="regex", value="/a") + n(field="label.http.route", op="not_regex", value="/a") == run(**q)["rows"][0][0]
+    assert n(field="label.nope", op="regex", value="") == run(**q)["rows"][0][0]
+    with pytest.raises(query.BadQuery, match="bad regex"):
+        run(**q, where=[{"field": "body", "op": "regex", "value": "("}])
+    # any percentile, and the raw histogram behind it
+    p999 = run(aggs=[{"fn": "p99.9", "field": "attributes.duration_ms"}, {"fn": "hist", "field": "attributes.duration_ms"}])["rows"][0]
+    assert 900 < p999[0] <= 1050 and sum(p999[1].values()) == len(data)
+    assert query._percentile({int(k): v for k, v in p999[1].items()}, 0.999) == p999[0]
+    # last: the latest point's value, across workers
+    mq = {"tenant": "acme", "signal": "metrics", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z",
+          "where": [{"field": "metric_name", "op": "=", "value": "mem"}], "aggs": [{"fn": "last", "field": "value"}]}
+    assert query.run(mq, invoke_worker=query.run_worker)["rows"][0][0] == counters[("mem", None)][-1][1]
+    # series keys and their labels
+    mq.update(where=[{"field": "metric_name", "op": "=", "value": "reqs"}], aggs=[{"fn": "count"}],
+              group_by=["hash:series", "json:attributes"])
+    rows = query.run(mq, invoke_worker=query.run_worker)["rows"]
+    assert sorted(json.loads(r[1])["route"] for r in rows) == ["/a", "/b"] and len({r[0] for r in rows}) == 2
+    # PromQL's own queries may return more groups than the API allows, up to a cap
+    big = run(group_by=["span_id"], aggs=[{"fn": "count"}], limit=100000, max_rows=100000)
+    assert len(big["rows"]) > query.MAX_ROWS or len(data) <= query.MAX_ROWS
+    assert query._row_cap({"max_rows": 10**9}) == query.MAX_INTERNAL_ROWS

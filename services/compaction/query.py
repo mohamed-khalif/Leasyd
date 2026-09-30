@@ -85,7 +85,11 @@ COLUMNS = {
                 "temporality", "is_monotonic", "value", "count", "sum", "min", "max", "flags", "scope_name"},
 }
 OPS = {"=": "=", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
-AGGS = {"count", "sum", "min", "max", "avg", "p50", "p90", "p95", "p99", "increase"}
+AGGS = {"count", "sum", "min", "max", "avg", "p50", "p90", "p95", "p99", "increase",
+        "last",   # the value of the latest point in the group
+        "hist"}   # the percentile histogram itself ({bucket: count}, HIST_BASE buckets), to merge later
+_PCT = re.compile(r"p(\d{1,2}(?:\.\d{1,3})?)")   # any percentile: p50, p99.9, ...
+MAX_INTERNAL_ROWS = 50_000   # "max_rows" (set by PromQL, not the API): groups a query may return
 INCREASE_FIELDS = {"value", "count", "sum"}   # metrics columns a counter's rise can be taken of
 DELTA, CUMULATIVE = 1, 2                       # metrics "temporality" (OTLP AggregationTemporality)
 _ATTR_KEY = re.compile(r"^[A-Za-z0-9_.\-/:]{1,128}$")
@@ -104,6 +108,13 @@ def _field(signal, name, params):
     """SQL for a field; attribute keys become bound parameters."""
     if not isinstance(name, str):
         raise BadQuery(f"bad field {name!r}")
+    if name.startswith("label."):
+        # A PromQL-style label: an attribute, else a resource attribute; "a|b" tries each key in turn.
+        keys = name[len("label."):].split("|")
+        if not 1 <= len(keys) <= 4 or not all(_ATTR_KEY.match(k) for k in keys):
+            raise BadQuery(f"bad label {name[len('label.'):]!r}")
+        params += keys + keys
+        return "coalesce(" + ", ".join([f"attributes[?]"] * len(keys) + [f"resource_attributes[?]"] * len(keys)) + ")"
     for prefix, col in (("attributes.", "attributes"), ("resource.", "resource_attributes")):
         if name.startswith(prefix):
             key = name[len(prefix):]
@@ -133,13 +144,14 @@ def _time_bucket(name):
 LOG_STEPS = 2                # group_by "log:<field>": buckets per doubling (…, 707 ms, 1 s, 1.41 s, …)
 LOG_BASE = 2 ** (1 / LOG_STEPS)
 _BUCKETABLE = {"duration_ns", "value", "severity_number"}
-_HASHABLE = {"attributes", "resource_attributes"}
+_HASHABLE = {"attributes", "resource_attributes", "series"}
+_SORTED_JSON = "to_json(map_from_entries(list_sort(map_entries({}))))::VARCHAR"   # key order never matters
 
 
 def _derived(signal, name):
     """group_by "log:<field>": the log bucket of a number (its lower bound is LOG_BASE**bucket);
     "hash:<attributes|resource_attributes>": one key per distinct attribute set (a series)."""
-    m = re.fullmatch(r"(log|hash):([a-z_]+)", name) if isinstance(name, str) else None
+    m = re.fullmatch(r"(log|hash|json):([a-z_]+)", name) if isinstance(name, str) else None
     if not m:
         return None
     kind, field = m.groups()
@@ -148,9 +160,32 @@ def _derived(signal, name):
             raise BadQuery(f"log buckets are for {sorted(_BUCKETABLE & COLUMNS[signal])}")
         x = _num(f'"{field}"')
         return f"CASE WHEN {x} > 0 THEN floor(log2({x}) * {LOG_STEPS})::INTEGER END"   # log2: exact at powers of 2
+    if kind == "json":   # the attribute map itself, as JSON with sorted keys (a series' labels)
+        if field not in ("attributes", "resource_attributes"):
+            raise BadQuery("json is for attributes or resource_attributes")
+        return _SORTED_JSON.format(f'"{field}"')
     if field not in _HASHABLE:
         raise BadQuery(f"hash is for {sorted(_HASHABLE)}")
+    if field == "series":   # one key per series: service, metric and both attribute maps
+        if signal != "metrics":
+            raise BadQuery("hash:series is for metrics")
+        return (f"hash(concat_ws('|', service, metric_name, {_SORTED_JSON.format('attributes')}, "
+                f"{_SORTED_JSON.format('resource_attributes')}))::VARCHAR")
     return f'hash("{field}"::VARCHAR)::VARCHAR'
+
+
+def _regex(v):
+    if not isinstance(v, str) or len(v) > 1000:
+        raise BadQuery("a regex must be a string of at most 1000 characters")
+    try:
+        regex_compile_check(v)
+    except re.error as e:
+        raise BadQuery(f"bad regex {v!r}: {e}")
+    return v
+
+
+def regex_compile_check(v):
+    re.compile(v)
 
 
 def _num(expr):
@@ -181,6 +216,9 @@ def compile_query(q, edges=False):
             where.append(f"{expr} IS NOT NULL")
         elif op == "not_exists":
             where.append(f"{expr} IS NULL")
+        elif op in ("regex", "not_regex"):   # PromQL =~ / !~: the whole value must match; missing is ""
+            where.append(f"regexp_full_match(coalesce({expr}::VARCHAR, ''), ?)" + (" IS NOT TRUE" if op == "not_regex" else ""))
+            params.append(_regex(cond.get("value")))
         elif op == "contains":
             where.append(f"{expr}::VARCHAR ILIKE ?")
             params.append("%" + str(cond["value"]).replace("%", r"\%").replace("_", r"\_") + "%")
@@ -223,8 +261,8 @@ def compile_query(q, edges=False):
     select, agg_params = [f"{g} AS g{i}" for i, g in enumerate(groups)], []
     for i, a in enumerate(aggs):
         fn = a.get("fn")
-        if fn not in AGGS:
-            raise BadQuery(f"unknown aggregate {fn!r}; one of {sorted(AGGS)}")
+        if fn not in AGGS and not (isinstance(fn, str) and _PCT.fullmatch(fn) and 0 < float(fn[1:]) < 100):
+            raise BadQuery(f"unknown aggregate {fn!r}; one of {sorted(AGGS)} or any percentile pNN")
         if fn == "count":
             select.append(f"count(*) AS a{i}")
             continue
@@ -238,7 +276,9 @@ def compile_query(q, edges=False):
         x = _num(_field(signal, a.get("field"), field_params))
         if fn == "avg":
             parts = [f"sum({x}) AS a{i}_sum", f"count({x}) AS a{i}_n"]
-        elif fn.startswith("p"):
+        elif fn == "last":
+            parts = [f"arg_max({x}, ts) AS a{i}", f"max(CASE WHEN {x} IS NOT NULL THEN ts END) AS a{i}_ts"]
+        elif fn.startswith("p") or fn == "hist":
             # log-bucket histogram {bucket: count}; bucket -inf holds values <= 0
             parts = [f"histogram(CASE WHEN {x} > 0 THEN floor(ln({x}) / ln({HIST_BASE}))::INTEGER "
                      f"WHEN {x} IS NOT NULL THEN -2147483648 END) AS a{i}"]
@@ -268,6 +308,11 @@ def compile_query(q, edges=False):
 
 
 SERIES = "concat_ws('|', service, metric_name, attributes::VARCHAR, resource_attributes::VARCHAR)"
+
+
+def _row_cap(q):
+    """Rows a query may return: MAX_ROWS, or more for PromQL's internal queries ("max_rows")."""
+    return max(1, min(int(q.get("max_rows") or MAX_ROWS), MAX_INTERNAL_ROWS))
 
 
 def _rise(x, prev):
@@ -356,7 +401,8 @@ def run_worker(event):
             con.execute("CREATE TEMP VIEW t AS " + " UNION ALL BY NAME ".join(parts))
             cur = con.execute(sql, params)
             cols = [d[0] for d in cur.description]
-            rows = cur.fetchmany(MAX_ROWS + 1)
+            cap = _row_cap(q)
+            rows = cur.fetchmany(cap + 1)
             edges = compile_query(q, edges=True) if kind == "aggregate" else None
             if edges:
                 cur = con.execute(*edges)
@@ -365,8 +411,8 @@ def run_worker(event):
             scanned = con.execute("SELECT count(*) FROM t").fetchone()[0] if event.get("count_scanned") else None
         finally:
             con.close()
-        return {"kind": kind, "columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:MAX_ROWS]],
-                "truncated": len(rows) > MAX_ROWS, **({"edges": edges} if edges else {}),
+        return {"kind": kind, "columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:cap]],
+                "truncated": len(rows) > cap, **({"edges": edges} if edges else {}),
                 "stats": {"files": len(files), "read_mode": mode,
                           "bytes": sum(os.path.getsize(p) for _, p in local) + ranges.bytes_read,
                           "range_requests": ranges.requests,
@@ -469,6 +515,8 @@ def api(event, context):
         return _http(400, {"error": "body must be a JSON query"})
     if not isinstance(q, dict):
         return _http(400, {"error": "body must be a JSON object"})
+    if "promql" in q:
+        return _promql_api(tenant, q)
     q = {k: v for k, v in q.items() if k in API_FIELDS}
     if not q.get("start") or not q.get("end"):
         return _http(400, {"error": "start and end are required (ISO-8601, e.g. 2026-09-28T00:00:00Z)"})
@@ -487,6 +535,43 @@ def api(event, context):
     text = json.dumps(out)
     if len(text) > MAX_RESPONSE_BYTES:
         return _http(413, {"error": "result too large; ask for fewer rows (search.limit / limit)"})
+    return _http(200, text)
+
+
+def _epoch_of(v, name):
+    """ISO-8601 or epoch seconds -> epoch seconds."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return int(v)
+    if isinstance(v, str) and v:
+        try:
+            return int(float(v))
+        except ValueError:
+            return int(lookup._parse(v).timestamp())
+    raise BadQuery(f"{name} is required (ISO-8601 or epoch seconds)")
+
+
+def _promql_api(tenant, q):
+    """{"promql": "...", "start", "end", "step"} -> a range query; {"promql", "time"} -> an instant query.
+    Answers in the Prometheus HTTP API's format."""
+    import promql
+    text = q.get("promql")
+    if not isinstance(text, str) or not text.strip():
+        return _http(400, {"status": "error", "errorType": "bad_data", "error": "promql must be a query"})
+    try:
+        kept = int(kept_from().timestamp())
+        if q.get("time") is not None and q.get("start") is None:
+            out = promql.query_instant(tenant, text, max(_epoch_of(q["time"], "time"), kept))
+        else:
+            start, end = _epoch_of(q.get("start"), "start"), _epoch_of(q.get("end"), "end")
+            step = int(float(q.get("step") or 60))
+            out = promql.query_range(tenant, text, max(start, kept), max(end, kept), step)
+    except BadQuery as e:
+        return _http(400, {"status": "error", "errorType": "bad_data", "error": str(e)})
+    except ValueError as e:
+        return _http(400, {"status": "error", "errorType": "bad_data", "error": f"bad query: {e}"})
+    text = json.dumps(out)
+    if len(text) > MAX_RESPONSE_BYTES:
+        return _http(413, {"status": "error", "errorType": "too_large", "error": "result too large; aggregate or use a larger step"})
     return _http(200, text)
 
 
@@ -601,7 +686,11 @@ def merge(q, partials):
                     s, n = r[idx[f"a{i}_sum"]], r[idx[f"a{i}_n"]]
                     old = acc[i] or (0.0, 0)
                     acc[i] = (old[0] + (s or 0), old[1] + (n or 0))
-                elif fn.startswith("p"):
+                elif fn == "last":
+                    v, t = r[idx[f"a{i}"]], r[idx[f"a{i}_ts"]]
+                    if t is not None and (acc[i] is None or t > acc[i][1]):
+                        acc[i] = (v, t)
+                elif fn.startswith("p") or fn == "hist":
                     h = r[idx[f"a{i}"]] or {}
                     old = acc[i] or {}
                     for b, c in h.items():
@@ -626,8 +715,12 @@ def merge(q, partials):
         for a, v in zip(aggs, acc):
             if a["fn"] == "avg":
                 out.append(v[0] / v[1] if v and v[1] else None)
+            elif a["fn"] == "last":
+                out.append(v[0] if v else None)
+            elif a["fn"] == "hist":
+                out.append({str(b): c for b, c in sorted((v or {}).items())})
             elif a["fn"].startswith("p"):
-                out.append(_percentile(v or {}, int(a["fn"][1:]) / 100))
+                out.append(_percentile(v or {}, float(a["fn"][1:]) / 100))
             else:
                 out.append(v if v is not None else (0 if a["fn"] == "count" else None))
         rows.append(out)
@@ -648,14 +741,18 @@ def merge(q, partials):
         groups = list(groups[:n]) + ["groups"]
     i = len(groups)   # order by the first aggregate; empty values last either way
     if q.get("order", "desc") == "desc":
-        rows.sort(key=lambda r: (r[i] is not None, r[i] or 0), reverse=True)
+        rows.sort(key=lambda r: (r[i] is not None, _sortable(r[i])), reverse=True)
     else:
-        rows.sort(key=lambda r: (r[i] is None, r[i] or 0))
+        rows.sort(key=lambda r: (r[i] is None, _sortable(r[i])))
     cols = list(groups) + [a["fn"] if a["fn"] == "count" else f"{a['fn']}({a.get('field')})" for a in aggs]
-    out = {"columns": cols, "rows": rows[:min(int(q.get("limit", 100)), MAX_ROWS)]}
+    out = {"columns": cols, "rows": rows[:min(int(q.get("limit", 100)), _row_cap(q))]}
     if any(p.get("truncated") for p in partials):
         out["truncated"] = True     # a worker had more groups than MAX_ROWS: counts (and collapse) are partial
     return out
+
+
+def _sortable(v):
+    return v if isinstance(v, (int, float)) else 0   # histograms ("hist") don't order results
 
 
 def _stitch(groups, aggs, partials, merged):
