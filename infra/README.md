@@ -618,3 +618,34 @@ run, passed or failed. Browser-check screenshots: 30 days.
 ```bash
 aws lambda invoke --function-name obs-tenant-admin --payload '{"action": "retention"}' out.json   # run it now
 ```
+
+
+## Phase A1: alerts
+
+Customers tell Leasyd where alerts go (Monitoring > Alerts > Channels) and when (Rules):
+
+- **Channels**: email (an SNS topic `obs-alert-<tenant>-<id>` per address; the person confirms
+  once by the link AWS sends), Slack (an incoming-webhook URL) or a webhook (any public https URL,
+  JSON body, `X-Leasyd-Signature: sha256=<HMAC-SHA256 of the body>` with the channel's secret,
+  shown once). URLs and secrets are encrypted with the checks' KMS key under `{tenant, channel}`;
+  webhooks are only sent to public addresses (checked after DNS). "Send a test" on each.
+- **Rules**: a check (or any check) failing N runs in a row, resolved by its next pass; or an SLO
+  burning its budget faster than N x over the last hour, or with less than X % of it left
+  (evaluated every 5 minutes through `obs-query`, the same numbers as the SLO page). Runs excluded
+  by hand or in maintenance windows never count. A rule fires once and says when it resolves.
+- **History**: every firing and resolution is a log of the tenant (service `alerts`), so it shows
+  in Logs too and expires with the data.
+- `obs-alerts` (one Lambda): the API `/v1/app/alerts/{proxy+}` (routed by `obs-phaseT2`), the
+  synthetic runner's "run recorded" (async, `ALERTS_FUNCTION` in `obs-phaseS1`), the SLO schedule
+  (`obs-alerts-slo`). Items: `channel#`, `alert#`, `astate#` in `obs-tenants`; deleting a tenant
+  removes them and its email topics. Alarm: `obs-alerts-errors`.
+
+```bash
+aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
+  --capabilities CAPABILITY_NAMED_IAM      # boundary: customer email topics
+infra/deploy-phaseA1.sh      # before T2: its routes invoke obs-alerts
+infra/deploy-phaseS1.sh      # the runner tells obs-alerts of each run
+infra/deploy-phaseT2.sh      # /v1/app/alerts routes
+infra/deploy-phaseT5.sh      # deleting a tenant removes its alert settings and topics
+infra/deploy-phaseW1.sh      # the Alerts pages
+```

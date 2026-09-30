@@ -192,6 +192,7 @@ function SloDetail({ ctx, id }: { ctx: Ctx; id: string }) {
         <a href="#/slos" className="btn" onClick={(e) => { e.preventDefault(); ctx.go("/slos"); }}>← All SLOs</a>
         <span className="faint">Always the last {slo.window_days} days, whatever the time range above.</span>
         <span className="spacer" style={{ flex: 1 }} />
+        <button className="btn" onClick={() => ctx.go(`/alerts/rules/new?slo=${id}`)}>Alert me</button>
         <button className="btn" onClick={() => ctx.go(`/slos/${id}/edit`)}>Edit</button>
         <button className="btn" onClick={remove}>Delete</button>
       </div>

@@ -92,6 +92,46 @@ const SETTINGS: Record<string, Record<string, unknown>[]> = {
   ],
 };
 
+const CHANNELS: Record<string, unknown>[] = [
+  { id: "c1a2b3c4d5e6", name: "On-call", type: "email", email: "oncall@acme.io", status: "confirmed" },
+  { id: "c2b3c4d5e6f1", name: "#ops-alerts", type: "slack", url_hint: "https://hooks.slack.com/…x9Qz" },
+];
+const RULES: Record<string, unknown>[] = [
+  { id: "r1a2b3c4d5e6", name: "Checkout is down", type: "check_failing", checks: ["e5f6a1b2c3d4", "b2c3d4e5f6a1"], failures: 2,
+    channels: ["c1a2b3c4d5e6", "c2b3c4d5e6f1"], enabled: true, firing: ["e5f6a1b2c3d4"] },
+  { id: "r2b3c4d5e6f1", name: "Checkout budget", type: "slo_burn", slo: "s1a2b3c4d5e6", burn_rate: 10, budget_below: 25,
+    channels: ["c2b3c4d5e6f1"], enabled: true, firing: [] },
+];
+
+function alertsRoute(path: string, method: string, body: Record<string, unknown>): [number, unknown] {
+  const [kind, id, sub] = path.split("/");
+  const list = kind === "channels" ? CHANNELS : RULES;
+  if (!id && method === "GET") return [200, { items: list, limit: 20 }];
+  if (!id && method === "POST") {
+    const n: Record<string, unknown> = { ...body, id: hex(Math.random, 12) };
+    if (kind === "channels" && body.type === "email") n.status = "waiting for confirmation";
+    if (kind === "channels" && body.type !== "email") { n.url_hint = `https://${String(body.url).split("/")[2]}/…${String(body.url).slice(-4)}`; delete n.url; }
+    if (kind === "channels" && body.type === "webhook") n.signing_secret = hex(Math.random, 48);
+    list.push(n); return [201, n];
+  }
+  const one = list.find((x) => x.id === id);
+  if (!one) return [404, { error: "not found" }];
+  if (sub === "test") return [200, { sent: true, error: null }];
+  if (method === "PUT") { Object.assign(one, body); return [200, one]; }
+  if (method === "DELETE") { list.splice(list.indexOf(one), 1); return [200, { deleted: id }]; }
+  return [200, one];
+}
+
+function alertHistory(q: Q) {
+  const t1 = Date.parse(q.end), cols = ["ts", "service", "severity_text", "body", "attributes"];
+  const ev = [[95, "firing", "Checkout is down", "Checkout journey", "Failed 2 runs in a row. Last failure: Order confirmed: text 'Thank you for your order' not found"],
+              [80, "resolved", "Checkout is down", "Checkout journey", "The check passed again."],
+              [30, "firing", "Checkout is down", "Checkout journey", "Failed 2 runs in a row. Last failure: Place order: timed out waiting for locator(\"button:has-text('Place order')\")"]];
+  return { columns: cols, rows: ev.filter(([m]) => t1 - Number(m) * 60000 > Date.parse(q.start)).map(([m, st, rule, subj, detail]) => [
+    new Date(t1 - Number(m) * 60000).toISOString(), "alerts", st === "firing" ? "WARN" : "INFO", `${String(st).toUpperCase()}: ${rule} — ${subj}. ${detail}`,
+    { "alert.state": st, "alert.rule": rule, "alert.subject": subj, "alert.url": "https://app.leasyd.com/#/synthetics/e5f6a1b2c3d4" }]) };
+}
+
 function settingsRoute(kind: string, id: string | undefined, method: string, body: Record<string, unknown>): [number, unknown] {
   const list = SETTINGS[kind], one = list.find((x) => x.id === id);
   if (!id && method === "GET") return [200, { items: list, limit: 20 }];
@@ -159,6 +199,7 @@ function synthetics(q: Q) {
 }
 
 function answer(q: Q) {
+  if (q.services?.includes("alerts")) return alertHistory(q);
   if (q.services?.includes("synthetics")) return synthetics(q);
   const t0 = Date.parse(q.start), t1 = Date.parse(q.end), mins = Math.max(1, (t1 - t0) / 60000);
   const r = rng(Math.floor(t1 / 60000) % 997 + q.signal.length);
@@ -354,6 +395,17 @@ export function mockApi(): Plugin {
         if (!req.url?.startsWith("/v1/app/")) return next();
         res.setHeader("Content-Type", "application/json");
         if (req.url === "/v1/app/me") return res.end(JSON.stringify({ tenant: "acme", email: "ana@acme.io" }));
+        const al = req.url.split("?")[0].match(/^\/v1\/app\/alerts\/(.+)$/);
+        if (al) {
+          let raw = "";
+          req.on("data", (c: Buffer) => (raw += c));
+          req.on("end", () => {
+            const [status, out] = alertsRoute(al[1], req.method ?? "GET", raw ? JSON.parse(raw) : {});
+            res.statusCode = status;
+            setTimeout(() => res.end(JSON.stringify(out)), 150);
+          });
+          return;
+        }
         const settings = req.url.split("?")[0].match(/^\/v1\/app\/(windows|slos)(?:\/([a-z0-9]+))?$/);
         if (settings) {
           let raw = "";

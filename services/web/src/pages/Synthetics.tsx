@@ -182,6 +182,7 @@ function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
         <span className="spacer" style={{ flex: 1 }} />
         <button className="btn" disabled={running === "running"} onClick={runNow}>{running === "running" ? "Running…" : "Run now"}</button>
         <button className="btn" onClick={() => act(async () => setCheck(await checks.update(id, { enabled: !check.enabled })))}>{check.enabled ? "Pause" : "Resume"}</button>
+        <button className="btn" onClick={() => ctx.go(`/alerts/rules/new?check=${id}`)}>Alert me</button>
         <button className="btn" onClick={() => ctx.go(`/synthetics/${id}/edit`)}>Edit</button>
         <button className="btn" onClick={() => confirm(`Delete the check “${check.name}”? Its past results stay in your data.`) &&
                                                act(async () => { await checks.remove(id); ctx.go("/synthetics"); })}>Delete</button>

@@ -12,6 +12,7 @@ import { Traces } from "./pages/Traces";
 import { Metrics } from "./pages/Metrics";
 import { Synthetics } from "./pages/Synthetics";
 import { Slos } from "./pages/Slos";
+import { Alerts } from "./pages/Alerts";
 import { RANGES, Range, rangeFromKey } from "./time";
 
 export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
@@ -58,6 +59,10 @@ export function App() {
     page = <Slos ctx={ctx} path={path} />;
     const sub = path.split("/")[2];
     crumb = ["SLOs", sub === "new" ? "New SLO" : sub ? (path.endsWith("/edit") ? "Edit SLO" : "SLO") : "All SLOs"];
+  } else if (path.startsWith("/alerts")) {
+    page = <Alerts ctx={ctx} path={path} params={params} />;
+    const [, , tab, sub] = path.split("/");
+    crumb = ["Alerts", tab === "rules" && sub ? (sub === "new" ? "New rule" : "Rule") : tab === "channels" ? "Channels" : tab === "history" ? "History" : "Rules"];
   } else if (path.startsWith("/metrics")) {
     page = <Metrics ctx={ctx} params={params} />;
     crumb = ["Metrics", params.get("m") ?? "Explorer"];
