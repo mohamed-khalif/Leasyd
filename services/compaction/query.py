@@ -337,7 +337,146 @@ def _naive(ts):
 # -------------------------------------------------------------- worker
 
 def worker(event, context):
+    if "sql" in event:
+        return run_sql_worker(event)
     return run_worker(event)
+
+
+# ------------------------------------------------------------ SQL (read-only, one tenant)
+
+SQL_TABLES = {"logs": "logs", "spans": "traces", "metrics": "metrics"}   # table -> signal
+SQL_MAX_BYTES = int(os.environ.get("SQL_MAX_BYTES", str(1 << 30)))       # files one SQL query may read (29 s API limit)
+SQL_MAX_ROWS = 10_000
+SQL_MAX_LENGTH = 20_000
+
+
+def check_sql(sql):
+    """-> the tables one read-only SELECT uses. Refuses anything but a single SELECT over logs,
+    spans and metrics (no table functions such as read_csv, no other tables)."""
+    import duckdb
+    if not isinstance(sql, str) or not sql.strip():
+        raise BadQuery("sql must be a query")
+    if len(sql) > SQL_MAX_LENGTH:
+        raise BadQuery(f"the query is too long ({SQL_MAX_LENGTH:,} characters at most)")
+    con = duckdb.connect()
+    try:
+        con.execute("SET enable_external_access=false")
+        tree = json.loads(con.execute("SELECT json_serialize_sql(?)::VARCHAR", [sql]).fetchone()[0])
+    finally:
+        con.close()
+    if tree.get("error"):
+        msg = tree.get("error_message") or "not a query"
+        raise BadQuery("only one SELECT query is allowed" if "Only SELECT" in msg else f"bad SQL: {msg}")
+    if len(tree.get("statements") or []) != 1:
+        raise BadQuery("give exactly one SELECT query")
+    tables, ctes = set(), set()
+
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "TABLE_FUNCTION":
+                raise BadQuery("table functions (read_csv, read_parquet, ...) are not allowed; query logs, spans or metrics")
+            if n.get("type") == "BASE_TABLE":
+                if n.get("schema_name") or n.get("catalog_name"):
+                    raise BadQuery(f"unknown table {n.get('table_name')!r}; the tables are logs, spans and metrics")
+                tables.add(n.get("table_name", "").lower())
+            if isinstance(n.get("cte_map"), dict):
+                for entry in n["cte_map"].get("map") or []:
+                    ctes.add(str(entry.get("key", "")).lower())
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+    walk(tree["statements"][0])
+    unknown = tables - set(SQL_TABLES) - ctes
+    if unknown:
+        raise BadQuery(f"unknown table {sorted(unknown)[0]!r}; the tables are logs, spans and metrics")
+    used = sorted(tables & set(SQL_TABLES))
+    if not used:
+        raise BadQuery("query at least one of the tables logs, spans or metrics")
+    return used
+
+
+def run_sql(tenant, sql, start, end, invoke_worker=None):
+    """One read-only SELECT over the tenant's logs / spans / metrics between start and end."""
+    t0 = time.perf_counter()
+    used = check_sql(sql)
+    files = {}
+    for table in used:
+        found = lookup.lookup(tenant=tenant, start=start, end=end, signal=SQL_TABLES[table])
+        files[table] = found["files"]
+    size = sum(f.get("size_bytes", 0) for fs in files.values() for f in fs)
+    if size > SQL_MAX_BYTES:
+        raise BadQuery(f"this would read {size / 2**30:.1f} GB (at most {SQL_MAX_BYTES / 2**30:.0f} GB); choose a shorter time range")
+    event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files}
+    out = (invoke_worker or _invoke_worker)(event)
+    out["stats"] = {**out.get("stats", {}), "files": sum(len(v) for v in files.values()), "total_ms": round((time.perf_counter() - t0) * 1000)}
+    return out
+
+
+def run_sql_worker(event):
+    """Download the tenant's files, expose them as the views logs / spans / metrics (limited to
+    the time range), then lock DuckDB down (no file, network or extension access; settings
+    locked) and run the query."""
+    t0 = time.perf_counter()
+    tenant = layout.check_tenant(event["tenant"])
+    check_sql(event["sql"])
+    _, s3 = lookup._clients_for(tenant)
+    work = tempfile.mkdtemp(dir="/tmp")
+    prefix = f"s3://{lookup.BUCKET}/"
+    try:
+        con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
+        allowed, n = [], 0
+        try:
+            for table in SQL_TABLES:
+                signal, parts = SQL_TABLES[table], []
+                for f in sorted({f["file_path"]: f for f in (event["tables"].get(table) or [])}.values(), key=lambda f: f["file_path"]):
+                    local = os.path.join(work, f"{n:05d}{'.parquet' if _is_parquet(f) else '.json.gz'}")
+                    n += 1
+                    s3.download_file(lookup.BUCKET, f["file_path"][len(prefix):], local)
+                    if _is_parquet(f):
+                        allowed.append(local)
+                        parts.append(f"SELECT * FROM read_parquet('{local}', hive_partitioning = false)")
+                    else:
+                        parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
+                        compact.load_rows(con, [local], parsed[2], parsed[3], signal)
+                        con.execute(f"CREATE TEMP TABLE raw{n} AS SELECT * FROM rows")
+                        parts.append(f"SELECT * FROM raw{n}")
+                if not parts:   # no data: an empty table with the signal's columns
+                    empty = os.path.join(work, f"empty-{table}.json")
+                    with open(empty, "w") as fh:
+                        json.dump({"logs": {"resourceLogs": []}, "traces": {"resourceSpans": []},
+                                   "metrics": {"resourceMetrics": []}}[signal], fh)
+                    compact.load_rows(con, [empty], "2000-01-01", "00", signal)
+                    con.execute(f"CREATE TEMP TABLE empty_{table} AS SELECT * FROM rows")
+                    parts.append(f"SELECT * FROM empty_{table}")
+                con.execute(f"CREATE TEMP VIEW {table} AS SELECT * FROM ({' UNION ALL BY NAME '.join(parts)}) "
+                            f"WHERE ts >= '{_naive(event['start'])}'::TIMESTAMP AND ts < '{_naive(event['end'])}'::TIMESTAMP")
+            con.execute("DROP TABLE IF EXISTS rows")
+            if allowed:
+                con.execute("SET allowed_paths=[" + ", ".join("'" + p.replace("'", "''") + "'" for p in allowed) + "]")
+            for setting in ("enable_external_access=false", "autoinstall_known_extensions=false",
+                            "autoload_known_extensions=false", "lock_configuration=true"):
+                con.execute(f"SET {setting}")
+            t_load = time.perf_counter()
+            try:
+                cur = con.execute(event["sql"])
+            except duckdb_error() as e:
+                return {"error": str(e).split("\n")[0][:500]}
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchmany(SQL_MAX_ROWS + 1)
+        finally:
+            con.close()
+        return {"columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:SQL_MAX_ROWS]],
+                "truncated": len(rows) > SQL_MAX_ROWS,
+                "stats": {"load_ms": round((t_load - t0) * 1000), "query_ms": round((time.perf_counter() - t_load) * 1000)}}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def duckdb_error():
+    import duckdb
+    return duckdb.Error
 
 
 def run_worker(event):
@@ -517,6 +656,8 @@ def api(event, context):
         return _http(400, {"error": "body must be a JSON object"})
     if "promql" in q:
         return _promql_api(tenant, q)
+    if "sql" in q:
+        return _sql_api(tenant, q)
     q = {k: v for k, v in q.items() if k in API_FIELDS}
     if not q.get("start") or not q.get("end"):
         return _http(400, {"error": "start and end are required (ISO-8601, e.g. 2026-09-28T00:00:00Z)"})
@@ -572,6 +713,27 @@ def _promql_api(tenant, q):
     text = json.dumps(out)
     if len(text) > MAX_RESPONSE_BYTES:
         return _http(413, {"status": "error", "errorType": "too_large", "error": "result too large; aggregate or use a larger step"})
+    return _http(200, text)
+
+
+def _sql_api(tenant, q):
+    """{"sql": "SELECT ...", "start", "end"} -> {"columns", "rows", "truncated", "stats"}."""
+    if not q.get("start") or not q.get("end"):
+        return _http(400, {"error": "start and end are required (ISO-8601)"})
+    try:
+        kept = kept_from()
+        start = max(lookup._parse(q["start"]), kept).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end = max(lookup._parse(q["end"]), kept).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out = run_sql(tenant, q["sql"], start, end)
+    except BadQuery as e:
+        return _http(400, {"error": str(e)})
+    except ValueError as e:
+        return _http(400, {"error": f"bad query: {e}"})
+    if out.get("error"):
+        return _http(400, {"error": out["error"]})
+    text = json.dumps(out)
+    if len(text) > MAX_RESPONSE_BYTES:
+        return _http(413, {"error": "result too large; select fewer columns or add LIMIT"})
     return _http(200, text)
 
 
