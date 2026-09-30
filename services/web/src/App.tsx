@@ -74,7 +74,7 @@ export function App() {
     crumb = ["Dashboards", "Usage & Cost"];
   } else {
     page = <Insights ctx={ctx} />;
-    crumb = ["Dashboards", "Telemetry Insights"];
+    crumb = ["Dashboards", "Home"];
   }
 
   return (

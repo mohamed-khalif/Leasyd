@@ -10,8 +10,9 @@ export type Query = {
   where?: Where[]; match?: Record<string, string>; services?: string[];
   group_by?: string[]; aggs?: { fn: string; field?: string }[];
   search?: { limit: number }; order?: "asc" | "desc"; limit?: number;
+  collapse?: number;   // count the groups under the first n group_by columns (e.g. series per metric)
 };
-export type Result = { columns: string[]; rows: unknown[][]; stats?: Record<string, unknown> };
+export type Result = { columns: string[]; rows: unknown[][]; stats?: Record<string, unknown>; truncated?: boolean };
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }

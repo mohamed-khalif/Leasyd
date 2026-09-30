@@ -1,28 +1,25 @@
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { BrowserAction, BrowserStep, Check, CheckResult, checks, CheckSettings, Constraint, Extraction, notExcluded, records, Step, StepResult } from "../api";
 import type { Ctx } from "../App";
-import { Loads, Panel } from "../components/Panel";
+import { Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
-import { Stat } from "../components/Stat";
-import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtNum, rangeWindow } from "../time";
+import { fmtNum, rangeWindow } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "./Logs";
+import { CheckDetail } from "./CheckDetail";
 import { Maintenance } from "./Maintenance";
 
 // Results are the tenant's own telemetry (service "synthetics"): gauges synthetics.check.success /
 // .duration / .tls_days_remaining and synthetics.step.duration, and a trace per run (a span per step),
-// all with attribute check.id.
+// all with attribute check.id. One check's page: CheckDetail.tsx.
 const SUCCESS = "synthetics.check.success", DURATION = "synthetics.check.duration";
-const TLS = "synthetics.check.tls_days_remaining", STEP_DURATION = "synthetics.step.duration";
-const LCP = "synthetics.browser.lcp";          // browser checks: largest contentful paint per page opened
-const OK = "var(--ok, #3fb68b)";
+export const OK = "var(--ok, #3fb68b)";
 const FREQUENCIES = [1, 5, 15, 30, 45, 60];
-const every = (f: number) => (f === 60 ? "1 hour" : `${f} min`);
-const isBrowser = (c: { type?: string }) => c.type === "browser";
+export const every = (f: number) => (f === 60 ? "1 hour" : `${f} min`);
+export const isBrowser = (c: { type?: string }) => c.type === "browser";
 
 /** One line for a step: "GET https://…" or "Type {password} into #password". */
-function describeStep(st: Step | BrowserStep): string {
+export function describeStep(st: Step | BrowserStep): string {
   if (!("action" in st)) return `${st.method} ${st.url}`;
   const sel = st.selector || "…";
   st = { ...st, text: st.text ?? "", value: st.value ?? "", url: st.url ?? "", key: st.key || "…", variable: st.variable || "…" };
@@ -122,160 +119,10 @@ function Dot({ ok, title }: { ok: boolean | null; title: string }) {
   const color = ok == null ? "var(--text-3)" : ok ? OK : "var(--sev-error)";
   return <span title={title} aria-label={title} style={{ display: "inline-block", width: 9, height: 9, borderRadius: 9, background: color }} />;
 }
-const pct = (v: number) => `${(v * 100).toFixed(v >= 0.9995 ? 0 : v >= 0.99 ? 2 : 1)}%`;
-
-// ------------------------------------------------------------------ one check
-
-function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
-  const [check, setCheck] = useState<Check | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState<CheckResult | "running" | null>(null);
-  const [nonce, setNonce] = useState(0);
-  const [shot, setShot] = useState<{ run: string; step: number; image?: string; error?: string } | null>(null);
-  const [excluding, setExcluding] = useState<{ run: string; reason: string } | null>(null);
-  const load = useCallback(() => checks.get(id).then(setCheck, (e: Error) => setError(e.message)), [id]);
-  useEffect(() => { load(); }, [load, ctx.tick]);
-
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick, nonce]);
-  const exRuns = (check?.exclusions ?? []).map((e) => e.run_id);
-  const b = bucketSeconds(ctx.range), key = id + ctx.range.key + ctx.tick + nonce + ":" + exRuns.join(",").length;
-  // Results leave out excluded runs (maintenance windows, and runs excluded by hand).
-  const mine = (metric: string) => [{ field: "metric_name", op: "=", value: metric }, { field: "attributes.check.id", op: "=", value: id }, ...notExcluded(exRuns)];
-  const base = { signal: "metrics" as const, ...w, services: ["synthetics"] };
-  const totals = useQuery({ ...base, where: mine(SUCCESS), aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "t" + key);
-  const speed = useQuery({ ...base, where: mine(DURATION), aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }] }, "s" + key);
-  const tls = useQuery({ ...base, where: mine(TLS), aggs: [{ fn: "min", field: "value" }] }, "c" + key);
-  const series = useQuery({ ...base, where: mine(DURATION), group_by: [`ts:${b}`], aggs: [{ fn: "avg", field: "value" }], limit: 10000 }, "d" + key);
-  const upSeries = useQuery({ ...base, where: mine(SUCCESS), group_by: [`ts:${b}`], aggs: [{ fn: "avg", field: "value" }], limit: 10000 }, "p" + key);
-  const perStep = useQuery({ ...base, where: mine(STEP_DURATION), group_by: ["attributes.step.index"], aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }], limit: 20 }, "q" + key);
-  const lcp = useQuery({ ...base, where: mine(LCP), aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }] }, "l" + key);
-  const lcpStep = useQuery({ ...base, where: mine(LCP), group_by: ["attributes.step.index"], aggs: [{ fn: "avg", field: "value" }], limit: 20 }, "m" + key);
-  const runs = useQuery({ signal: "traces", ...w, services: ["synthetics"], search: { limit: 100 },
-                          where: [{ field: "attributes.check.id", op: "=", value: id }, { field: "attributes.check.result", op: "exists" }] }, "r" + key);
-
-  if (error) return <div className="state error">{error}</div>;
-  if (!check) return <div className="skeleton" style={{ height: 240 }} />;
-  const t = totals.data?.rows[0], s = speed.data?.rows[0];
-  const stepTimes = new Map((perStep.data ? records(perStep.data) : []).map((r) => [Number(r["attributes.step.index"]), r]));
-  const stepLcp = new Map((lcpStep.data ? records(lcpStep.data) : []).map((r) => [Number(r["attributes.step.index"]), Number(r["avg(value)"])]));
-  const browser = isBrowser(check);
-  const showShot = async (run: string, step: number) => {
-    setShot({ run, step });
-    try { setShot({ run, step, image: (await checks.screenshot(id, run, step)).image }); }
-    catch (e) { setShot({ run, step, error: (e as Error).message }); }
-  };
-  const runNow = async () => {
-    setRunning("running");
-    try { setRunning((await checks.run(id)).result); setTimeout(() => setNonce((n) => n + 1), 60_000); }   // searchable within ~a minute
-    catch (e) { setError((e as Error).message); setRunning(null); }
-  };
-  const act = async (f: () => Promise<unknown>) => { try { await f(); } catch (e) { setError((e as Error).message); } };
-  const byRun = new Map((check.exclusions ?? []).map((e) => [e.run_id, e]));
-  const exclude = () => excluding && act(async () => { await checks.exclude(id, excluding.run, excluding.reason || "Excluded"); setExcluding(null); await load(); });
-  const include = (run: string) => act(async () => { await checks.include(id, run); await load(); });
-  const points = (q: typeof series, scale = 1) => (q.data ? q.data.rows.map((r) => [Date.parse(String(r[0])), Number(r[1]) * scale] as [number, number]) : []);
-  const runRows = runs.data ? records(runs.data).sort((a, c) => String(c.ts).localeCompare(String(a.ts))) : [];
-  return (
-    <>
-      <div className="toolbar">
-        <a href="#/synthetics" className="btn" onClick={(e) => { e.preventDefault(); ctx.go("/synthetics"); }}>← All checks</a>
-        <span className="spacer" style={{ flex: 1 }} />
-        <button className="btn" disabled={running === "running"} onClick={runNow}>{running === "running" ? "Running…" : "Run now"}</button>
-        <button className="btn" onClick={() => act(async () => setCheck(await checks.update(id, { enabled: !check.enabled })))}>{check.enabled ? "Pause" : "Resume"}</button>
-        <button className="btn" onClick={() => ctx.go(`/alerts/rules/new?check=${id}`)}>Alert me</button>
-        <button className="btn" onClick={() => ctx.go(`/synthetics/${id}/edit`)}>Edit</button>
-        <button className="btn" onClick={() => confirm(`Delete the check “${check.name}”? Its past results stay in your data.`) &&
-                                               act(async () => { await checks.remove(id); ctx.go("/synthetics"); })}>Delete</button>
-      </div>
-      {running && running !== "running" && <ResultBox result={running} note="Recorded; it appears in the charts within about a minute." />}
-      <Panel title={check.name} right={<span className="faint">{browser ? `browser (${check.device ?? "desktop"}) · ` : ""}{check.steps.length} step{check.steps.length > 1 ? "s" : ""} · every {every(check.frequency)}{check.enabled ? "" : " · paused"}</span>}>
-        <div className="grid">
-          <div className="span-3"><Loads q={totals} height={84}>{() => <Stat small value={t && Number(t[1]) ? pct(Number(t[0])) : "—"}
-                                                                          sub={byRun.size ? `uptime (${byRun.size} run${byRun.size > 1 ? "s" : ""} excluded)` : "uptime"} />}</Loads></div>
-          <div className="span-3"><Loads q={speed} height={84}>{() => <Stat small value={s && s[0] != null ? `${fmtNum(Number(s[0]))} ms` : "—"} sub="average time (all steps)" />}</Loads></div>
-          <div className="span-3"><Loads q={speed} height={84}>{() => <Stat small value={s && s[1] != null ? `${fmtNum(Number(s[1]))} ms` : "—"} sub="p95 time (all steps)" />}</Loads></div>
-          {browser ? (
-            <div className="span-3"><Loads q={lcp} height={84}>{() => {
-              const v = lcp.data?.rows[0]?.[0];
-              return <Stat small value={v == null ? "—" : `${fmtNum(Number(v))} ms`} sub="largest paint (avg of pages opened)" />;
-            }}</Loads></div>
-          ) : (
-            <div className="span-3"><Loads q={tls} height={84}>{() => {
-              const d = tls.data?.rows[0]?.[0];
-              return <Stat small value={d == null ? "—" : `${Math.floor(Number(d))} days`} sub="until a TLS certificate expires" />;
-            }}</Loads></div>
-          )}
-        </div>
-      </Panel>
-      <div className="grid">
-        <Panel title="Time for all steps" span={8}>
-          <Loads q={series} empty={!series.data?.rows.length} height={200}>
-            {() => <TimeSeries series={[{ label: "average", color: "var(--series-1)", points: points(series) }]} range={ctx.range} unit=" ms" height={200} area={false} />}
-          </Loads>
-        </Panel>
-        <Panel title="Passing runs" span={4}>
-          <Loads q={upSeries} empty={!upSeries.data?.rows.length} height={200}>
-            {() => <TimeSeries series={[{ label: "% passing", color: OK, points: points(upSeries, 100) }]} range={ctx.range} unit="%" height={200} />}
-          </Loads>
-        </Panel>
-      </div>
-      <Panel title="Steps" flush>
-        <RankTable head={["#", "step", browser ? "action" : "request", browser ? "largest paint" : "checks", "avg", "p95"]} numCols={2}
-                   rows={(check.steps as (Step | BrowserStep)[]).map((st, i) => {
-                     const r = stepTimes.get(i + 1);
-                     const extra = "action" in st ? (stepLcp.has(i + 1) ? `${fmtNum(stepLcp.get(i + 1)!)} ms` : "")
-                       : [st.auth.type !== "none" ? st.auth.type : "", ...st.constraints.map(describeConstraint), ...st.extract.map((e) => `→ {${e.name}}`)].filter(Boolean).join(" · ");
-                     return [String(i + 1), st.name, describeStep(st), extra,
-                             r ? `${fmtNum(Number(r["avg(value)"]))} ms` : "—", r ? `${fmtNum(Number(r["p95(value)"]))} ms` : "—"];
-                   })} />
-      </Panel>
-      <Panel title="Recent runs" flush right={<span className="faint">click one to open its trace · exclude a false alarm (e.g. a deployment) so it doesn't count</span>}>
-        {excluding && (
-          <form className="exclude-form" onSubmit={(e) => { e.preventDefault(); exclude(); }}>
-            <span>Exclude the run of {fmtTs(String(runRows.find((r) => r.trace_id === excluding.run)?.ts ?? "")).slice(0, 19)} from uptime and SLOs, because</span>
-            <input className="input grow" autoFocus maxLength={200} value={excluding.reason} onChange={(e) => setExcluding({ ...excluding, reason: e.target.value })} />
-            <button className="btn primary">Exclude</button>
-            <button type="button" className="btn" onClick={() => setExcluding(null)}>Cancel</button>
-          </form>
-        )}
-        <Loads q={runs} empty={!runRows.length} height={120}>
-          {() => <RankTable head={["time", "result", "failed at", "why", "time", ...(browser ? ["screenshots"] : []), ""]} maxHeight={420}
-                            onRow={(i) => ctx.go(`/traces/${runRows[i].trace_id}`)}
-                            rows={runRows.map((r) => {
-                              const a = r.attributes as Record<string, unknown>, pass = a["check.result"] === "pass";
-                              const why = String(a["check.failure"] ?? "");
-                              const shots = String(a["check.screenshots"] ?? "").split(",").filter(Boolean).map(Number);
-                              const run = String(r.trace_id), manual = byRun.get(run), window = a["check.excluded"] as string | undefined;
-                              const result = <span style={{ color: pass ? OK : "var(--sev-error)" }}>{pass ? "passed" : "failed"}</span>;
-                              return [fmtTs(String(r.ts)),
-                                      manual || window ? <span className="excluded" title={manual ? `${manual.reason} — ${manual.by ?? ""}` : window}>{result} · excluded</span> : result,
-                                      pass ? "" : (check.steps[Number(a["check.failed_step"]) - 1]?.name ?? "—"), why.replace(/^[^:]*: /, ""),
-                                      a["check.total_ms"] != null ? `${fmtNum(Number(a["check.total_ms"]))} ms` : "—",
-                                      ...(browser ? [<span className="chips" onClick={(e) => e.stopPropagation()}>
-                                        {shots.length ? shots.map((n) => <button key={n} type="button" className={`chip${shot?.run === r.trace_id && shot?.step === n ? " on" : ""}`}
-                                                                               title={`Screenshot after step ${n}`} onClick={() => showShot(String(r.trace_id), n)}>{n}</button>) : "—"}
-                                      </span>] : []),
-                                      <span onClick={(e) => e.stopPropagation()}>
-                                        {window ? <span className="faint" title={window}>maintenance</span>
-                                          : manual ? <button type="button" className="btn small" title={`Excluded by ${manual.by ?? "?"}: ${manual.reason}`} onClick={() => include(run)}>Include</button>
-                                          : <button type="button" className="btn small" onClick={() => setExcluding({ run, reason: "Deployment" })}>Exclude</button>}
-                                      </span>];
-                            })} />}
-        </Loads>
-      </Panel>
-      {shot && (
-        <Panel title={`Screenshot after step ${shot.step}: ${check.steps[shot.step - 1]?.name ?? ""}`} right={<button className="btn" onClick={() => setShot(null)}>Close</button>}>
-          {shot.error ? <div className="state error">{shot.error}</div>
-            : !shot.image ? <div className="skeleton" style={{ height: 300 }} />
-            : <img className="shot" src={`data:image/jpeg;base64,${shot.image}`} alt={`Screenshot after step ${shot.step}`} />}
-        </Panel>
-      )}
-    </>
-  );
-}
+export const pct = (v: number) => `${(v * 100).toFixed(v >= 0.9995 ? 0 : v >= 0.99 ? 2 : 1)}%`;
 
 const OPS: Record<string, string> = { equals: "=", not_equals: "≠", contains: "contains", lt: "<", gt: ">", exists: "exists" };
-function describeConstraint(c: Constraint): string {
+export function describeConstraint(c: Constraint): string {
   switch (c.type) {
     case "status": return `status ${c.expr}`;
     case "max_ms": return `≤ ${c.value} ms`;
@@ -704,7 +551,7 @@ function ConstraintRow({ c, onChange, onRemove }: { c: Constraint; onChange: (c:
   </>);
 }
 
-function ResultBox({ result, note }: { result: CheckResult; note: string }) {
+export function ResultBox({ result, note }: { result: CheckResult; note: string }) {
   return (
     <div className={`result-box ${result.ok ? "pass" : "fail"}`} role="status">
       <b>{result.ok ? "Passed" : "Failed"}</b> <span className="faint">· {fmtNum(result.total_ms)} ms{result.tls_days != null ? ` · certificate valid for ${Math.floor(result.tls_days)} more days` : ""}</span>

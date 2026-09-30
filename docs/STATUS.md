@@ -1,7 +1,7 @@
 # Status
 
 Where the project stands, what is running on AWS, and how to pick it up.
-Last updated: 2026-09-29. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+Last updated: 2026-09-30. Detail: `docs/observability-plan.md` (the plan, with results per phase)
 and `infra/README.md` (deploy and test commands per phase).
 
 ## What exists
@@ -38,6 +38,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | 30-day retention: every tenant's data (all signals, every synthetic run) deleted nightly after 30 days plus today; queries never read earlier; 35-day bucket backstop | R1 | live; checked on AWS: logs sent dated 40 days back were indexed, then the retention job deleted their index entry and file (recent data kept); a full pass over 102 tenants took 41 s |
 | Exclude a synthetic run (false alarm) with a reason, undo; maintenance windows (once / weekly in a time zone) whose runs don't count; SLOs over checks (availability or performance, 7/14/30 days): current level, error budget, bad vs allowed runs, burn rate, per day | R1 | live; checked on AWS: excluding a run took the check's counted runs from 4 to 3 (its run id matches exactly one result); a run inside a maintenance window was recorded excluded (5 runs, 4 counted); SLOs saved per tenant (another tenant sees none) |
 | Alerts: email (SNS, confirmed once), Slack, signed webhooks; rules for a check failing N runs in a row and an SLO burning fast or low on budget; fire once, resolve; history as the tenant's logs; excluded runs never alert | A1 | live; checked on AWS 2026-09-30: a check failing on purpose fired on its 2nd failure (19:28) and resolved on its 1st pass (19:29), to a confirmed email and a webhook; an SLO alert fired on the next 5-minute evaluation with 60% good (3 of 5 runs, exactly the raw results); an internal webhook address refused; another tenant saw no channels or rules and couldn't use ours |
+| Portal redesign: Home (services, failing checks, volumes, folding tracing/logging/metrics/alerting sections); Logs (views, severity counts, stacked severity chart, group by any field, Table/Groups/Patterns, column picker); Traces (views: traces, errors, DB, Gen AI, gRPC, HTTP, server spans; duration heat map with errors in red, click a cell for its spans; rate/errors/duration); Metrics (tree map by series or data points, list grouped by name); a synthetic check's Overview / Check runs / Settings, each run's steps, request and response in a side panel. Engine: `log:` duration buckets, `hash:attributes` series keys, `collapse` (series per metric). Runs record each step's request/response headers and a 2 KB body sample, credentials hidden | W2 | built and previewed on the mock 2026-09-30; to deploy (phase4, phaseS1, phaseW1) and check on AWS |
 | Alerts on logs and metrics (thresholds), billing, per-customer usage caps | - | not started |
 
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.

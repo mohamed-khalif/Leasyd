@@ -23,7 +23,7 @@ export function Shell(p: Props) {
       <nav className="nav" aria-label="Main">
         <div className="brand"><IconLogo />Leasyd</div>
         <div className="nav-section">Dashboards</div>
-        {link("/", "Telemetry Insights", <IconDash />, p.path === "/" || p.path === "")}
+        {link("/", "Home", <IconDash />, p.path === "/" || p.path === "")}
         {link("/usage", "Usage & Cost", <IconCost />, p.path.startsWith("/usage"))}
         <div className="nav-section">Explore</div>
         {link("/logs", "Logs", <IconLogs />, p.path.startsWith("/logs"))}

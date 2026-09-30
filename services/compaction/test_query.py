@@ -465,7 +465,7 @@ def test_log_buckets_hashes_and_collapse(data):
         svc = "web" if 150 <= i < 300 else "api"
         sets.setdefault(svc, set()).add((attr(r, "http.route")["stringValue"], attr(r, "duration_ms")["intValue"]))
         counts[svc] = counts.get(svc, 0) + 1
-    assert got == {s: (len(sets[s]), counts[s]) for s in sets}
+    assert got == {s: (len(sets[s]), counts[s]) for s in sets} and "truncated" not in out
 
 
 def test_series_per_metric(counters):
@@ -495,3 +495,9 @@ def test_bad_derived_groups(q, msg):
 def test_bad_collapse(data, q):
     with pytest.raises(query.BadQuery, match="collapse"):
         run(**q)
+
+
+def test_too_many_groups_is_reported(data, monkeypatch):
+    monkeypatch.setattr(query, "MAX_ROWS", 5)
+    out = run(group_by=["service", "hash:attributes"], aggs=[{"fn": "count"}], collapse=1)
+    assert out["truncated"] is True

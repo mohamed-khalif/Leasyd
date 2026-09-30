@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
+import { Tabs, Treemap } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Series, TimeSeries } from "../components/TimeSeries";
@@ -38,30 +39,97 @@ export function Metrics({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) 
 
 function MetricList({ ctx }: { ctx: Ctx }) {
   const [filter, setFilter] = useState("");
+  const [size, setSize] = useState<"cardinality" | "points">("cardinality");
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
   const key = ctx.range.key + ctx.tick;
   const list = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "metric_type", "temporality", "is_monotonic", "unit"],
                           aggs: [{ fn: "count" }], limit: 2000 }, "l" + key);
   const bySvc = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "service"], aggs: [{ fn: "count" }], limit: 10000 }, "s" + key);
+  // Cardinality: how many series (distinct service + attribute sets) each metric has.
+  const card = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "service", "hash:attributes"], aggs: [{ fn: "count" }],
+                          collapse: 1, limit: 2000 }, "c" + key);
 
   const services = new Map<string, number>();
   for (const r of bySvc.data ? records(bySvc.data) : []) services.set(String(r.metric_name), (services.get(String(r.metric_name)) ?? 0) + 1);
+  const series = new Map((card.data ? records(card.data) : []).map((r) => [String(r.metric_name), Number(r.groups)]));
   const rows = (list.data ? records(list.data) : [])
     .filter((r) => String(r.metric_name).toLowerCase().includes(filter.trim().toLowerCase()))
     .sort((a, b) => String(a.metric_name).localeCompare(String(b.metric_name)));
+  const prefixes = useMemo(() => {
+    const m = new Map<string, Record<string, unknown>[]>();
+    for (const r of rows) {
+      const p = String(r.metric_name).split(".")[0];
+      m.set(p, [...(m.get(p) ?? []), r]);
+    }
+    return [...m];
+  }, [rows]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const open = (name: string) => ctx.go(`/metrics?m=${encodeURIComponent(name)}`);
+  const collapsedByDefault = rows.length > 30 && !filter.trim();
+  const isOpen = (p: string) => folded[p] ?? !collapsedByDefault;
+  const cardText = (n?: number) => (n == null ? (card.data ? "—" : "…") : fmtNum(n) + (card.data?.truncated ? "+" : ""));
+  const tiles = rows.map((r) => {
+    const name = String(r.metric_name), n = size === "cardinality" ? series.get(name) ?? 0 : Number(r.count);
+    return { label: name, value: n, sub: size === "cardinality" ? `${fmtNum(Number(r.count))} data points` : `${cardText(series.get(name))} series` };
+  });
   return (
     <>
-      <div className="toolbar">
-        <input className="input grow mono" placeholder="Filter metrics by name…" value={filter} onChange={(e) => setFilter(e.target.value)}
-               aria-label="Filter metrics" />
+      <div className="page-head">
+        <h1>Metrics</h1>
+        <span className="head-count"><b>{list.data ? fmtNum(rows.length) : "…"}</b>metrics</span>
+        <span className="head-count"><b>{list.data ? fmtNum(rows.reduce((a, r) => a + Number(r.count), 0)) : "…"}</b>data points</span>
+        <span className="head-count"><b>{card.data ? fmtNum([...series.values()].reduce((a, n) => a + n, 0)) + (card.data.truncated ? "+" : "") : "…"}</b>series</span>
       </div>
-      <Panel title="Metrics" flush
-             right={list.data && <span className="faint">{rows.length} metrics · open one to chart it, filter by service and split by attribute</span>}>
+      <div className="toolbar">
+        <input className="input grow mono" placeholder="Filter metrics by name…" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter metrics" />
+      </div>
+      <section className="panel">
+        <Tabs tabs={[["cardinality", "By cardinality"], ["points", "By data points"]]} active={size} onPick={setSize}
+              right={<span className="faint" style={{ fontSize: 12 }}>{size === "cardinality" ? "size: number of series (service + attribute combinations)" : "size: data points received"}</span>} />
+        <div className="panel-body">
+          <Loads q={size === "cardinality" ? card : list} empty={!tiles.some((t) => t.value > 0)} height={220}>
+            {() => <Treemap tiles={tiles} height={230} onTile={(t) => open(t.label)} />}
+          </Loads>
+        </div>
+      </section>
+      <Panel title="All metrics" flush right={list.data && <span className="faint">grouped by name · open one to chart it, filter by service and split by attribute</span>}>
         <Loads q={list} empty={!rows.length} height={240}>
-          {() => <RankTable head={["metric", "type", "unit", "services", "data points"]} numCols={2} maxHeight={640}
-                            rows={rows.map((r) => [<span className="link">{String(r.metric_name)} ›</span>, typeLabel(info(r)), unitLabel(String(r.unit ?? "")) || "—",
-                                                   fmtNum(services.get(String(r.metric_name)) ?? 0), fmtNum(Number(r.count))])}
-                            onRow={(i) => ctx.go(`/metrics?m=${encodeURIComponent(String(rows[i].metric_name))}`)} />}
+          {() => (
+            <div className="table-scroll" style={{ maxHeight: 700 }}>
+              <table className="dtable">
+                <colgroup><col /><col style={{ width: 130 }} /><col style={{ width: 90 }} /><col style={{ width: 120 }} /><col style={{ width: 110 }} /><col style={{ width: 100 }} /></colgroup>
+                <thead><tr><th>Name</th><th>Type</th><th>Unit</th><th className="num">Data points</th><th className="num">Cardinality</th><th className="num">Resources</th></tr></thead>
+                <tbody>
+                  {prefixes.map(([p, ms]) => (
+                    <Fragment key={p}>
+                      {ms.length > 1 && (
+                        <tr className="tree-row" onClick={() => setFolded({ ...folded, [p]: isOpen(p) })}>
+                          <td><span className={`caret${isOpen(p) ? " open" : ""}`}>▸</span> <b style={{ fontWeight: 500 }}>{p}</b> <span className="faint">{ms.length} metrics</span></td>
+                          <td /><td />
+                          <td className="num">{fmtNum(ms.reduce((a, r) => a + Number(r.count), 0))}</td>
+                          <td className="num">{cardText(ms.reduce((a, r) => a + (series.get(String(r.metric_name)) ?? 0), 0))}</td>
+                          <td />
+                        </tr>
+                      )}
+                      {(ms.length === 1 || isOpen(p)) && ms.map((r) => {
+                        const name = String(r.metric_name);
+                        return (
+                          <tr key={name} className={`tree-row${ms.length > 1 ? " child" : ""}`} onClick={() => open(name)}>
+                            <td><span className="link">{name}</span></td>
+                            <td className="muted">{typeLabel(info(r))}</td>
+                            <td className="muted">{unitLabel(String(r.unit ?? "")) || "—"}</td>
+                            <td className="num">{fmtNum(Number(r.count))}</td>
+                            <td className="num">{cardText(series.get(name))}</td>
+                            <td className="num">{fmtNum(services.get(name) ?? 0)}</td>
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Loads>
       </Panel>
     </>

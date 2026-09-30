@@ -652,7 +652,10 @@ def merge(q, partials):
     else:
         rows.sort(key=lambda r: (r[i] is None, r[i] or 0))
     cols = list(groups) + [a["fn"] if a["fn"] == "count" else f"{a['fn']}({a.get('field')})" for a in aggs]
-    return {"columns": cols, "rows": rows[:min(int(q.get("limit", 100)), MAX_ROWS)]}
+    out = {"columns": cols, "rows": rows[:min(int(q.get("limit", 100)), MAX_ROWS)]}
+    if any(p.get("truncated") for p in partials):
+        out["truncated"] = True     # a worker had more groups than MAX_ROWS: counts (and collapse) are partial
+    return out
 
 
 def _stitch(groups, aggs, partials, merged):

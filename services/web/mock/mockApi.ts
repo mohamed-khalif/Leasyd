@@ -30,7 +30,7 @@ const hex = (r: () => number, n: number) => Array.from({ length: n }, () => Math
 
 type Q = { signal: string; start: string; end: string; group_by?: string[]; aggs?: { fn: string; field?: string }[];
   search?: { limit: number }; where?: { field: string; op: string; value?: unknown }[]; services?: string[];
-  match?: Record<string, string>; limit?: number };
+  match?: Record<string, string>; limit?: number; collapse?: number };
 
 const PER_MIN = { logs: 5200, traces: 9100, metrics: 14000 } as Record<string, number>;
 
@@ -150,6 +150,7 @@ function synthetics(q: Q) {
   const within = Number(q.where?.find((w) => w.field === "value" && w.op === "<=")?.value ?? NaN);   // an SLO's "fast enough" runs
   const r = rng(Math.floor(t1 / 60000));
   const fail = (c: MockCheck, t: number) => Number(c.up) < 1 && Math.sin(t / 7e5 + c.id.charCodeAt(0)) > 0.93;
+  if (q.search && q.match?.trace_id) return runSpans(q.match.trace_id);
   if (q.search) {
     const rows = [];
     for (const c of cs) for (let t = t1 - 30000; t > t0 && rows.length < q.search.limit; t -= c.frequency * 60000) {
@@ -157,7 +158,7 @@ function synthetics(q: Q) {
       rows.push({ ts: new Date(t).toISOString(), service: "synthetics", name: c.name, trace_id: `${c.id}${String(t).padStart(20, "0")}`, span_id: hex(r, 16),
         duration_ns: Math.round(ms * 1e6), status_code: bad ? 2 : 0,
         attributes: { "check.id": c.id, "check.name": c.name, "check.result": bad ? "fail" : "pass", "check.total_ms": Math.round(ms),
-          "check.run_id": `${c.id}${String(t).padStart(20, "0")}`,
+          "check.run_id": `${c.id}${String(t).padStart(20, "0")}`, "http.response.status_code": bad && c.type !== "browser" ? 503 : c.type === "browser" ? undefined : 200,
           ...(rows.length === 3 ? { "check.excluded": "maintenance window: Weekly deployment" } : {}),
           ...(bad && c.type === "browser" ? { "check.failed_step": 8, "check.failure": "Order confirmed: text 'Thank you for your order' not found", "check.screenshots": "8" }
             : bad ? { "check.failed_step": 2, "check.failure": "Create cart: status 503, expected 201" } : {}) } });
@@ -168,6 +169,17 @@ function synthetics(q: Q) {
   const by = q.group_by ?? [], aggs = q.aggs ?? [{ fn: "count" }];
   const tsg = by.find((g) => g.startsWith("ts:")), b = tsg ? Number(tsg.slice(3)) * 1000 : t1 - t0;
   const rows: unknown[][] = [];
+  if (by.includes("value") && tsg) {          // runs per bucket that passed (1) / failed (0)
+    for (let t = Math.floor(t0 / b) * b; t <= t1; t += b) {
+      const runs = cs.reduce((a, c) => a + (b / 60000) / c.frequency, 0), bad = cs.filter((c) => fail(c, t)).length * (b / 60000);
+      rows.push([new Date(t).toISOString().replace("Z", "000Z"), 1, Math.round(runs - bad)]);
+      if (bad) rows.push([new Date(t).toISOString().replace("Z", "000Z"), 0, Math.round(bad)]);
+    }
+    return { columns: [...by, "count"], rows };
+  }
+  if (q.where?.some((w) => w.field === "value" && w.op === "=") && by[0] === "attributes.check.id") {
+    return { columns: ["attributes.check.id", "count"], rows: [["b2c3d4e5f6a1", 9], ["e5f6a1b2c3d4", 2]] };
+  }
   for (const c of cs) for (let t = Math.floor(t0 / b) * b; t <= t1; t += b) {
     const up = Number(c.up) + (tsg && fail(c, t) ? -0.3 : 0), ms = Number(c.ms) * (0.9 + 0.2 * Math.sin(t / 3e6 + c.frequency));
     const runs = Math.round((b / 60000) / c.frequency);
@@ -198,6 +210,40 @@ function synthetics(q: Q) {
   return { columns: [...by, ...aggs.map((a) => (a.fn === "count" ? "count" : `${a.fn}(${a.field})`))], rows };
 }
 
+/** One run's spans: the root and a span per step, with each step's request and response. */
+function runSpans(trace: string) {
+  const c = CHECKS.find((x) => trace.startsWith(x.id)) ?? CHECKS[0];
+  const t = Number(trace.slice(12)) || Date.now(), bad = Number(c.up) < 1 && Math.sin(t / 7e5 + c.id.charCodeAt(0)) > 0.93;
+  const steps = c.steps as { name: string; method?: string; url?: string; action?: string; body?: string }[];
+  const failAt = bad ? (c.type === "browser" ? steps.length - 1 : 1) : -1;
+  const rows: Record<string, unknown>[] = [];
+  let at = t;
+  steps.slice(0, failAt >= 0 ? failAt + 1 : steps.length).forEach((st, i) => {
+    const ms = Number(c.ms) / steps.length * (0.8 + (i % 3) * 0.2) * (i === failAt ? 3 : 1), fail = i === failAt;
+    const url = String(st.url ?? "").replace("{base}", "https://api.shop.example.com").replace("{cart_id}", "c_81f2");
+    const status = fail ? 503 : st.method === "POST" && i === 1 ? 201 : 200;
+    const body = st.name === "Log in" ? '{"access_token": "••••", "expires_in": 3600, "user": {"id": 42, "name": "Monitor"}}'
+      : st.name === "Create cart" ? (fail ? '{"error": "service unavailable", "retry_after": 5}' : '{"cart": {"id": "c_81f2", "items": [{"sku": "OLJCESPC7Z", "qty": 1}]}}')
+      : st.name === "Get cart" ? '{"cart": {"id": "c_81f2", "items": [{"sku": "OLJCESPC7Z", "qty": 1, "price": 101.96}]}}'
+      : "<!doctype html><html><head><title>Shop</title></head><body><h1>Welcome</h1><button>Add to cart</button>…";
+    rows.push({ ts: new Date(at).toISOString(), ts_unix_nano: at * 1e6, service: "synthetics", name: st.name, trace_id: trace, span_id: hex(rng(i + 7), 16),
+      parent_span_id: "root", duration_ns: Math.round(ms * 1e6), status_code: fail ? 2 : 0,
+      attributes: { "check.id": c.id, "step.index": i + 1, "step.name": st.name, "url.full": url || "https://shop.example.com/",
+        "step.result": fail ? "fail" : "pass", ...(fail ? { "step.failure": c.type === "browser" ? "text 'Thank you for your order' not found" : "status 503, expected 201" } : {}),
+        "step.dns_ms": 3.1, "step.connect_ms": 11.4, "step.tls_ms": 32.8, "step.ttfb_ms": ms * 0.8, "step.total_ms": ms,
+        ...(c.type === "browser" ? { "step.action": st.action, ...(fail ? { "step.screenshot": true } : {}) } : {
+          "http.response.status_code": status, "http.request.method": st.method ?? "GET",
+          "http.request.headers": JSON.stringify({ "User-Agent": "Leasyd-Synthetics/1.0", Accept: "*/*", ...(i ? { Authorization: "••••" } : { Authorization: "••••", "Content-Type": "application/json" }) }),
+          ...(st.body ? { "http.request.body": st.body } : {}),
+          "http.response.headers": JSON.stringify({ "content-type": body.startsWith("{") ? "application/json" : "text/html; charset=utf-8", "content-length": String(body.length),
+            date: new Date(at).toUTCString(), server: "envoy", "x-request-id": hex(rng(i), 12), ...(i === 0 && st.name === "Log in" ? { "set-cookie": "••••" } : {}) }),
+          "http.response.body": body }) } });
+    at += ms;
+  });
+  const cols = Object.keys(rows[0]);
+  return { columns: cols, rows: rows.map((x) => cols.map((k) => x[k])) };
+}
+
 function answer(q: Q) {
   if (q.services?.includes("alerts")) return alertHistory(q);
   if (q.services?.includes("synthetics")) return synthetics(q);
@@ -211,7 +257,7 @@ function answer(q: Q) {
   const svcShare = (s: string) => WEIGHT[SERVICES.indexOf(s)] / WEIGHT.reduce((a, b) => a + b, 0);
   const total = PER_MIN[q.signal] * mins * (q.services?.length ? svcs.reduce((a, s) => a + svcShare(s), 0) : 1)
     * (q.signal === "logs" ? Object.keys(sevShare).filter(sevOk).reduce((a, s) => a + sevShare[s], 0) : 1)
-    * (text ? 0.04 : 1);
+    * (text ? 0.04 : 1) * (q.where?.some((w) => w.field === "status_code" && Number(w.value) === 2) ? 0.012 : 1);
 
   if (q.signal === "metrics") return metrics(q, t0, t1, svcs);
   if (q.search) return search(q, r, t0, t1, svcs, sevOk, text);
@@ -224,9 +270,11 @@ function answer(q: Q) {
   for (const d of dims) combos = combos.flatMap((c) => d.map((v) => ({ key: [...c.key, v.value], share: c.share * v.share })));
   const rows = combos.map((c) => [...c.key, ...aggs.map((a) => {
     if (a.fn === "count") return Math.round(total * c.share * (0.85 + r() * 0.3));
-    const base = 18e6 * (1 + (SERVICES.indexOf(String(c.key[0])) % 5)) * (0.7 + r() * 0.6);
+    const base = 18e6 * (1 + (Math.max(0, SERVICES.indexOf(String(c.key[0]))) % 5)) * (0.7 + r() * 0.6);
     return base * (({ p50: 1, p90: 2.6, p95: 3.4, p99: 6.8 } as Record<string, number>)[a.fn] ?? 1);
   })]).filter((row) => Number(row[by.length]) > 0);
+  const lb = by.indexOf("log:duration_ns"), sc = by.indexOf("status_code");
+  if (lb >= 0 && sc >= 0) for (const row of rows) if (row[sc] === 2) row[by.length] = Math.round(Number(row[by.length]) * (Number(row[lb]) >= 56 ? 6 : 0));
   if (!by.some((g) => g.startsWith("ts:"))) rows.sort((a, b) => Number(b[by.length]) - Number(a[by.length]));
   return { columns: cols, rows: rows.slice(0, q.limit ?? 100) };
 }
@@ -246,6 +294,10 @@ function values(g: string, _q: Q, t0: number, t1: number, svcs: string[], sevOk:
     const w = svcs.map((s) => WEIGHT[SERVICES.indexOf(s)]), sum = w.reduce((a, b) => a + b, 0);
     return svcs.map((s, i) => ({ value: s, share: w[i] / sum }));
   }
+  if (g === "severity_number") return [[9, .72], [5, .14], [13, .09], [17, .045], [21, .005]].filter(([n]) => sevOk(({ 5: "DEBUG", 9: "INFO", 13: "WARN", 17: "ERROR", 21: "ERROR" } as Record<number, string>)[n]))
+    .map(([v, s]) => ({ value: v, share: s }));
+  if (g === "log:duration_ns") return Array.from({ length: 40 }, (_, i) => 22 + i).map((b) => ({ value: b, share: Math.exp(-((b - 42) ** 2) / 14) / 6.6 + (b > 54 ? 0.003 : 0) }));
+  if (g === "status_code") return [[0, .96], [2, .04]].map(([v, s]) => ({ value: v, share: s }));
   if (g === "severity_text") return [["INFO", .72], ["DEBUG", .14], ["WARN", .09], ["ERROR", .05]].filter(([s]) => sevOk(String(s))).map(([v, s]) => ({ value: v, share: Number(s) }));
   if (g === "kind") return [["SPAN_KIND_SERVER", .46], ["SPAN_KIND_CLIENT", .38], ["SPAN_KIND_INTERNAL", .12], ["SPAN_KIND_PRODUCER", .04]].map(([v, s]) => ({ value: v, share: Number(s) }));
   if (g === "name") return Object.values(OPS).flat().map((v, i) => ({ value: v, share: 1 / (i + 2) / 3 }));
@@ -293,6 +345,10 @@ function metrics(q: Q, t0: number, t1: number, svcs: string[]) {
     return { columns: cols, rows: rows.map((x) => cols.map((c) => (x as Record<string, unknown>)[c])) };
   }
   const by = q.group_by ?? [], aggs = q.aggs ?? [{ fn: "count" }];
+  if (q.collapse === 1 && by[0] === "metric_name") {   // series per metric
+    return { columns: ["metric_name", "groups", "count"], rows: defs.map((d) => [d.name, d.svcs.filter((s) => svcs.includes(s)).length * (1 + d.name.length % 7) * 3,
+                                                                                   Math.round(d.svcs.length * (t1 - t0) / 10000)]) };
+  }
   const tsg = by.find((g) => g.startsWith("ts:")), b = tsg ? Number(tsg.slice(3)) : (t1 - t0) / 1000;
   const times = tsg ? Array.from({ length: Math.floor((t1 - t0) / 1000 / b) + 1 }, (_, i) => (Math.floor(t0 / 1000 / b) + i) * b * 1000) : [t0];
   const attrKey = by.find((g) => ATTRS[g]);
@@ -333,7 +389,7 @@ function search(q: Q, r: () => number, t0: number, t1: number, svcs: string[], s
   if (q.signal === "traces") {
     const trace = q.match?.trace_id ?? hex(r, 32);
     const spans = q.match?.trace_id ? traceSpans(trace, r, t1 - 120000) : Array.from({ length: limit }, (_, i) => ({
-      ...span(r, t1 - i * 7000, SERVICES[Math.floor(r() ** 2 * 7)], hex(r, 32), hex(r, 16), null, 2e6 + r() ** 3 * 2.4e9),
+      ...span(r, t1 - i * 7000, SERVICES[Math.floor(r() ** 2 * 7)], hex(r, 32), hex(r, 16), i % 3 ? hex(r, 16) : null, 2e6 + r() ** 3 * 2.4e9),
     }));
     const cols = Object.keys(spans[0]);
     return { columns: cols, rows: spans.map((s) => cols.map((c) => (s as Record<string, unknown>)[c])) };
@@ -362,7 +418,10 @@ function span(r: () => number, start: number, svc: string, trace: string, id: st
     ts: new Date(start).toISOString(), ts_unix_nano: start * 1e6, end_ts: new Date(start + dur / 1e6).toISOString(), duration_ns: Math.round(dur),
     service: svc, name: name ?? ops[Math.floor(r() * ops.length)], kind: parent ? "SPAN_KIND_CLIENT" : "SPAN_KIND_SERVER",
     status_code: r() < 0.06 ? "STATUS_CODE_ERROR" : "STATUS_CODE_UNSET", trace_id: trace, span_id: id, parent_span_id: parent,
-    attributes: { "http.method": "POST", "rpc.system": "grpc" }, resource_attributes: { "service.name": svc },
+    attributes: svc === "cart" ? { "db.system": "redis", "db.operation.name": "HGET" }
+      : svc.startsWith("frontend") ? { "http.request.method": "GET", "http.route": "/api/products" }
+      : { "rpc.system": "grpc", "rpc.service": "oteldemo" },
+    resource_attributes: { "service.name": svc },
   };
 }
 
