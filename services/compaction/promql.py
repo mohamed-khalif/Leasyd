@@ -412,6 +412,26 @@ class Vector(dict):
     """{label key: (labels dict, [value or None per timestamp])}"""
 
 
+def _get(labels, name):
+    """A label's value by the name used in the query: exact, else with underscores as dots."""
+    if name in labels:
+        return labels[name]
+    if name == "service.name":
+        return labels.get("service_name")
+    alt = name.replace("_", ".")
+    return labels.get(alt) if alt != name else None
+
+
+def _pick(labels, names):
+    """{name: value} for the names present (as written in the query)."""
+    return {n: v for n in names if (v := _get(labels, n)) is not None}
+
+
+def _without(labels, names):
+    drop = set(names) | {n.replace("_", ".") for n in names} | ({"service_name"} if "service.name" in names else set())
+    return {k: v for k, v in labels.items() if k not in drop}
+
+
 def _key(labels):
     return tuple(sorted(labels.items()))
 
@@ -492,7 +512,7 @@ class Evaluator:
         elif signal == "metrics":
             labels, fields = None, [("hash:series", None)]
         else:
-            labels, fields = ["service.name"], [("service", None)]
+            labels, fields = ["service_name"], [("service", None)]
         t0, t1 = self.times[0] - offset - window, self.times[-1] - offset + b
         base = {"signal": signal, "where": where, **({"services": services} if services else {}),
                 "start": _iso(t0), "end": _iso(t1)}
@@ -507,7 +527,9 @@ class Evaluator:
         if labels is None:
             names = {}
             for h, metric, service, res, attrs, _ in results[1]["rows"]:
-                lab = {**json.loads(res or "{}"), **json.loads(attrs or "{}"), "service.name": service}
+                lab = {**json.loads(res or "{}"), **json.loads(attrs or "{}")}
+                lab.pop("service.name", None)
+                lab["service_name"] = service
                 if mode == "instant":
                     lab["__name__"] = metric
                 names[h] = {k: v for k, v in lab.items() if v not in (None, "")}
@@ -663,7 +685,7 @@ class Evaluator:
         groups = {}
         for lab, vals in v.values():
             lab = _drop_name(lab)
-            g = {k: lab[k] for k in labels if k in lab} if mode == "by" else {k: x for k, x in lab.items() if k not in labels}
+            g = _pick(lab, labels) if mode == "by" else _without(lab, labels)
             groups.setdefault(_key(g), (g, []))[1].append((lab, vals))
         out = Vector()
         n = len(self.times)
@@ -708,9 +730,9 @@ class Evaluator:
         def sig(lab):
             lab = _drop_name(lab)
             if mod["match"] == "on":
-                return _key({k: lab[k] for k in mod["labels"] if k in lab})
+                return _key(_pick(lab, mod["labels"]))
             if mod["match"] == "ignoring":
-                return _key({k: v for k, v in lab.items() if k not in mod["labels"]})
+                return _key(_without(lab, mod["labels"]))
             return _key(lab)
         right = {}
         for lab, vals in rhs.values():
@@ -733,7 +755,7 @@ class Evaluator:
             res = [_cmp_keep(op, a, b, mod["bool"], a) if a is not None and b is not None else None for a, b in zip(vals, rv)]
             out_lab = lab if keep_name else _drop_name(lab)
             if mod["match"] == "on" and not keep_name:
-                out_lab = {k: out_lab[k] for k in mod["labels"] if k in out_lab}
+                out_lab = _pick(out_lab, mod["labels"])
             if any(x is not None for x in res):
                 out[_key(out_lab)] = (out_lab, res)
         return out
@@ -837,9 +859,9 @@ def _set_op(op, lhs, rhs, mod, n):
     def sig(lab):
         lab = _drop_name(lab)
         if mod["match"] == "on":
-            return _key({k: lab[k] for k in mod["labels"] if k in lab})
+            return _key(_pick(lab, mod["labels"]))
         if mod["match"] == "ignoring":
-            return _key({k: v for k, v in lab.items() if k not in mod["labels"]})
+            return _key(_without(lab, mod["labels"]))
         return _key(lab)
     present = {}
     for lab, vals in rhs.values():

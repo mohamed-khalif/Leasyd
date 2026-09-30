@@ -347,6 +347,8 @@ def worker(event, context):
 SQL_TABLES = {"logs": "logs", "spans": "traces", "metrics": "metrics"}   # table -> signal
 SQL_MAX_BYTES = int(os.environ.get("SQL_MAX_BYTES", str(1 << 30)))       # files one SQL query may read (29 s API limit)
 SQL_MAX_ROWS = 10_000
+SQL_MAX_FILES = 4_000
+SQL_DOWNLOAD_THREADS = 64
 SQL_MAX_LENGTH = 20_000
 
 
@@ -406,6 +408,9 @@ def run_sql(tenant, sql, start, end, invoke_worker=None):
         found = lookup.lookup(tenant=tenant, start=start, end=end, signal=SQL_TABLES[table])
         files[table] = found["files"]
     size = sum(f.get("size_bytes", 0) for fs in files.values() for f in fs)
+    count = sum(len(fs) for fs in files.values())
+    if count > SQL_MAX_FILES:
+        raise BadQuery(f"this time range has {count:,} files to read (at most {SQL_MAX_FILES:,}); choose a shorter time range")
     if size > SQL_MAX_BYTES:
         raise BadQuery(f"this would read {size / 2**30:.1f} GB (at most {SQL_MAX_BYTES / 2**30:.0f} GB); choose a shorter time range")
     event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files}
@@ -425,23 +430,30 @@ def run_sql_worker(event):
     work = tempfile.mkdtemp(dir="/tmp")
     prefix = f"s3://{lookup.BUCKET}/"
     try:
+        allowed = []
+        # Every file of every table, downloaded in parallel (an hour is hundreds of small fast-lane files).
+        todo = []
+        for table in SQL_TABLES:
+            for f in sorted({f["file_path"]: f for f in (event["tables"].get(table) or [])}.values(), key=lambda f: f["file_path"]):
+                todo.append((table, f, os.path.join(work, f"{len(todo):05d}{'.parquet' if _is_parquet(f) else '.json.gz'}")))
+        with ThreadPoolExecutor(SQL_DOWNLOAD_THREADS) as pool:
+            list(pool.map(lambda x: s3.download_file(lookup.BUCKET, x[1]["file_path"][len(prefix):], x[2]), todo))
+        t_dl = time.perf_counter()
         con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
-        allowed, n = [], 0
         try:
-            for table in SQL_TABLES:
-                signal, parts = SQL_TABLES[table], []
-                for f in sorted({f["file_path"]: f for f in (event["tables"].get(table) or [])}.values(), key=lambda f: f["file_path"]):
-                    local = os.path.join(work, f"{n:05d}{'.parquet' if _is_parquet(f) else '.json.gz'}")
-                    n += 1
-                    s3.download_file(lookup.BUCKET, f["file_path"][len(prefix):], local)
-                    if _is_parquet(f):
-                        allowed.append(local)
-                        parts.append(f"SELECT * FROM read_parquet('{local}', hive_partitioning = false)")
-                    else:
-                        parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
-                        compact.load_rows(con, [local], parsed[2], parsed[3], signal)
-                        con.execute(f"CREATE TEMP TABLE raw{n} AS SELECT * FROM rows")
-                        parts.append(f"SELECT * FROM raw{n}")
+            for table, signal in SQL_TABLES.items():
+                mine = [(f, local) for t, f, local in todo if t == table]
+                pq = [local for f, local in mine if _is_parquet(f)]
+                parts = []
+                if pq:
+                    allowed += pq
+                    paths = ", ".join("'" + p.replace("'", "''") + "'" for p in pq)
+                    parts.append(f"SELECT * FROM read_parquet([{paths}], union_by_name = true, hive_partitioning = false)")
+                for i, (f, local) in enumerate((f, l) for f, l in mine if not _is_parquet(f)):
+                    parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
+                    compact.load_rows(con, [local], parsed[2], parsed[3], signal)
+                    con.execute(f"CREATE TEMP TABLE raw_{table}_{i} AS SELECT * FROM rows")
+                    parts.append(f"SELECT * FROM raw_{table}_{i}")
                 if not parts:   # no data: an empty table with the signal's columns
                     empty = os.path.join(work, f"empty-{table}.json")
                     with open(empty, "w") as fh:
@@ -469,7 +481,7 @@ def run_sql_worker(event):
             con.close()
         return {"columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:SQL_MAX_ROWS]],
                 "truncated": len(rows) > SQL_MAX_ROWS,
-                "stats": {"load_ms": round((t_load - t0) * 1000), "query_ms": round((time.perf_counter() - t_load) * 1000)}}
+                "stats": {"download_ms": round((t_dl - t0) * 1000), "load_ms": round((t_load - t_dl) * 1000), "query_ms": round((time.perf_counter() - t_load) * 1000)}}
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -812,12 +824,20 @@ def plan_chunks(files, max_workers, contiguous=False):
     return [b[1] for b in bins if b[1]]
 
 
-def _invoke_worker(payload):
-    r = lam.invoke(FunctionName=WORKER_FUNCTION, Payload=json.dumps(payload).encode())
-    out = json.loads(r["Payload"].read())
-    if r.get("FunctionError"):
-        raise RuntimeError(f"query worker failed: {out}")
-    return out
+def _invoke_worker(payload, attempts=2):
+    """Run one worker. Workers only read, so a worker whose process died (DuckDB has crashed, rarely,
+    in a fresh container: about 1 in 3,000 runs) is run once more instead of failing the query."""
+    for attempt in range(attempts):
+        r = lam.invoke(FunctionName=WORKER_FUNCTION, Payload=json.dumps(payload).encode())
+        out = json.loads(r["Payload"].read())
+        if not r.get("FunctionError"):
+            return out
+        crashed = isinstance(out, dict) and out.get("errorType") == "Runtime.ExitError"
+        print(json.dumps({"worker_failed": out.get("errorType") if isinstance(out, dict) else str(out)[:200],
+                          "attempt": attempt + 1, "retrying": crashed and attempt + 1 < attempts}))
+        if not crashed:
+            break
+    raise RuntimeError(f"query worker failed: {out}")
 
 
 def merge(q, partials):

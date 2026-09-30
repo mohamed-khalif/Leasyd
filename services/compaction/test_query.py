@@ -532,3 +532,27 @@ def test_promql_building_blocks(data, counters):
     big = run(group_by=["span_id"], aggs=[{"fn": "count"}], limit=100000, max_rows=100000)
     assert len(big["rows"]) > query.MAX_ROWS or len(data) <= query.MAX_ROWS
     assert query._row_cap({"max_rows": 10**9}) == query.MAX_INTERNAL_ROWS
+
+
+def test_a_crashed_worker_is_run_once_more(monkeypatch):
+    import io
+    calls = []
+
+    class Lam:
+        def invoke(self, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                return {"FunctionError": "Unhandled", "Payload": io.BytesIO(b'{"errorType": "Runtime.ExitError"}')}
+            return {"Payload": io.BytesIO(b'{"rows": []}')}
+    monkeypatch.setattr(query, "lam", Lam())
+    assert query._invoke_worker({}) == {"rows": []} and len(calls) == 2
+    calls.clear()
+
+    class Bad(Lam):
+        def invoke(self, **kw):
+            calls.append(1)
+            return {"FunctionError": "Unhandled", "Payload": io.BytesIO(b'{"errorType": "ValueError"}')}
+    monkeypatch.setattr(query, "lam", Bad())
+    with pytest.raises(RuntimeError, match="ValueError"):
+        query._invoke_worker({})
+    assert len(calls) == 1          # a real error in the query is not retried

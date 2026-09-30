@@ -58,7 +58,7 @@ def test_bad_queries(text, msg):
 def test_counter_rate_per_minute_is_exact(counters):
     got = prange('rate(reqs{route="/a"}[1m])', T10 + 60, T10 + 600)
     ((labels, series),) = got.items()
-    assert dict(labels)["route"] == "/a" and dict(labels)["service.name"] == "api"
+    assert dict(labels)["route"] == "/a" and dict(labels)["service_name"] == "api"
     want = expected_rise(counters, "reqs", "/a")
     for t, v in series.items():   # the window (t-60, t] is the bucket starting at t-60
         bucket = f"{__import__('time').strftime('%Y-%m-%dT%H:%M:%S', __import__('time').gmtime(t - 60))}.000000Z"
@@ -122,7 +122,7 @@ def test_logs_by_severity(data):
     errors = prange('sum(increase(leasyd.logs{severity_range="ERROR_FATAL"}[1h]))', T10 + 3600, T10 + 3600, step=3600)
     assert next(iter(errors.values()))[T10 + 3600] == want["ERROR"]
     by_service = prange('increase(leasyd.logs[1h])', T10 + 3600, T10 + 3600, step=3600)
-    assert {dict(k)["service.name"] for k in by_service} == {"api", "web"}
+    assert {dict(k)["service_name"] for k in by_service} == {"api", "web"}
     with pytest.raises(promql.PromQLError, match="counts records"):
         prange("leasyd.logs", T10, T10)
 
@@ -192,3 +192,14 @@ def test_api(counters, monkeypatch):
     assert st == 200 and out["data"]["result"] == []            # another tenant sees nothing
     st, out = call({"promql": "rate(reqs[1m]", "time": T10})
     assert st == 400 and out["status"] == "error" and "expected" in out["error"]
+
+
+def test_every_series_has_service_name_and_labels_match_by_either_spelling(counters):
+    per_series = prange("avg by (service_name) (avg_over_time(mem[5m]))", T10 + 300, T10 + 300)   # not pushed down
+    assert [dict(k) for k in per_series] == [{"service_name": "api"}]
+    assert prange('avg by ("service.name") (avg_over_time(mem[5m]))', T10 + 300, T10 + 300).keys() == \
+        {(("service.name", "api"),)}
+    a = prange("max by (route) (max_over_time(reqs[5m]))", T10 + 300, T10 + 300)
+    b = prange("sum by (route) (increase(reqs[5m]))", T10 + 300, T10 + 300)   # pushed down
+    assert a.keys() == b.keys()
+    assert len(prange("max by (route) (max_over_time(reqs[5m])) / on(route) sum by (route) (increase(reqs[5m]))", T10 + 300, T10 + 300)) == 2
