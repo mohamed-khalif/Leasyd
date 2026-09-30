@@ -203,6 +203,26 @@ def test_the_first_failing_step_ends_the_run_and_nothing_secret_is_recorded(site
     assert PASSWORD not in json.dumps(r) and PASSWORD not in json.dumps(wrong)
 
 
+def test_each_step_records_its_request_and_response_without_credentials(site):
+    r = synthetics.run_check(login_flow(site), {"password": PASSWORD})
+    login, order = r["steps"]
+    assert login["request"]["method"] == "POST" and login["request"]["body"] == '{"remember": true}'
+    assert login["request"]["headers"]["Authorization"] == "••••" and login["request"]["headers"]["Content-Type"] == "application/json"
+    assert login["response"]["headers"]["set-cookie"] == "••••" and login["response"]["headers"]["content-type"] == "application/json"
+    assert '"name": "Ana"' in login["response"]["body"] and TOKEN not in login["response"]["body"]
+    assert order["request"]["headers"]["Authorization"] == "••••" and '"shipped"' in order["response"]["body"]
+    assert PASSWORD not in json.dumps(r) and TOKEN not in json.dumps(r) and "s-777" not in json.dumps(r)
+    attrs = {a["key"]: a["value"] for a in synthetics.telemetry("abc123abc123", login_flow(site), r)["traces"][
+        "resourceSpans"][0]["scopeSpans"][0]["spans"][1]["attributes"]}
+    assert json.loads(attrs["http.request.headers"]["stringValue"])["Authorization"] == "••••"
+    assert attrs["http.request.method"]["stringValue"] == "POST" and "Ana" in attrs["http.response.body"]["stringValue"]
+    # Bodies only when the step records them; headers always. A refused redirect shows where it pointed.
+    quiet = synthetics.run_check(one_step(site + "/ok", record_body=False), {})
+    assert quiet["steps"][0]["response"]["body"] is None and quiet["steps"][0]["response"]["headers"]
+    refused = synthetics.run_check(one_step(site + "/to-inside"), {})
+    assert refused["steps"][0]["response"]["headers"]["location"] == "http://10.0.0.8/admin" and not refused["ok"]
+
+
 @pytest.mark.parametrize("path,constraints,why", [
     ("/broken", [], "status 500, expected <400"),
     ("/ok", [{"type": "body_contains", "value": "Goodbye"}], "does not contain 'Goodbye'"),

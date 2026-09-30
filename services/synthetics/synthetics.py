@@ -414,8 +414,36 @@ def run_check(check, secret_values):
             "steps": steps, "total_ms": round(total, 1), "tls_days": min(tls) if tls else None, "started": started}
 
 
+_SENSITIVE_HEADER = re.compile(r"authorization|cookie|token|secret|password|api[-_]?key|session|signature", re.I)
+MAX_HEADERS_RECORDED = 4096
+
+
+def _headers_view(headers, masked):
+    """Headers as recorded for the run detail: credentials and cookies hidden, secrets masked."""
+    out, size = {}, 0
+    for k, v in headers.items():
+        v = ", ".join(v) if isinstance(v, list) else v
+        v = safety.MASK if _SENSITIVE_HEADER.search(k) else _mask(v, masked)[:512]
+        size += len(k) + len(v)
+        if size > MAX_HEADERS_RECORDED:
+            break
+        out[k] = v
+    return out
+
+
+def _exchange(step, method, headers, body, resp_headers, text, masked):
+    """-> the step's request and response as the run detail shows them (bodies only if record_body)."""
+    keep = step["record_body"]
+    return {"request": {"method": method, "headers": _headers_view(headers, masked),
+                        "body": _mask(body[:BODY_SAMPLE], masked) if keep and body else None},
+            "response": None if resp_headers is None else {
+                "headers": _headers_view(resp_headers, masked),
+                "body": _mask(text[:BODY_SAMPLE], masked) if keep and text else None}}
+
+
 def _run_step(step, values, cookies, deadline, masked):
     started, t, status, content, url = time.time(), {}, None, b"", step["url"]
+    method, headers, body, resp_headers, text = step["method"], {}, None, None, ""
     try:
         url = _sub(step["url"], values)
         method, body = step["method"], _sub(step["body"], values) if "body" in step else None
@@ -464,13 +492,15 @@ def _run_step(step, values, cookies, deadline, masked):
             masked += [v for v in extracted.values() if len(v) >= 4]   # tokens and ids: don't record them
         return {"name": step["name"], "ok": failure is None, "failure": failure, "status": status, "url": _mask(url, masked),
                 "timings": t, "tls_days": tls_days, "extracted": sorted(extracted), "started": started,
-                "body_sample": _mask(text[:BODY_SAMPLE], masked) if failure and step["record_body"] else None}
+                "body_sample": _mask(text[:BODY_SAMPLE], masked) if failure and step["record_body"] else None,
+                **_exchange(step, method, headers, body, resp_headers, text, masked)}
     except (Refused, StepFailed) as e:
         reason = str(e)
     except (OSError, http.client.HTTPException, ssl.SSLError) as e:
         reason = "timed out" if isinstance(e, (socket.timeout, TimeoutError)) else f"{type(e).__name__}: {e}"
     return {"name": step["name"], "ok": False, "failure": _mask(reason[:300], masked), "status": status,
-            "url": _mask(url, masked), "timings": t, "tls_days": None, "extracted": [], "started": started, "body_sample": None}
+            "url": _mask(url, masked), "timings": t, "tls_days": None, "extracted": [], "started": started, "body_sample": None,
+            **_exchange(step, method, headers, body, resp_headers, text, masked)}
 
 
 def _left(deadline):
@@ -679,7 +709,7 @@ def telemetry(check_id, check, r):
                                             "http.response.status_code": s["status"], "step.result": "pass" if s["ok"] else "fail",
                                             "step.failure": s["failure"], "step.extracted": ",".join(s["extracted"]) or None,
                                             **{f"step.{k}": float(v) for k, v in s["timings"].items()},
-                                            **_browser_attrs(s)}),
+                                            **_browser_attrs(s), **_exchange_attrs(s)}),
                       "status": {} if s["ok"] else {"code": 2, "message": s["failure"]}})
     first = r["steps"][0] if r["steps"] else {"url": check["steps"][0]["url"], "status": None}
     spans.insert(0, {"traceId": trace, "spanId": root, "name": check["name"], "kind": 1,
@@ -734,6 +764,16 @@ VITALS = {   # browser step vitals -> metrics
     "cls": ("synthetics.browser.cls", "1", "Cumulative layout shift"),
     "load_ms": ("synthetics.browser.load", "ms", "Time until the page's load event"),
 }
+
+
+def _exchange_attrs(s):
+    """A step's request and response, for the run detail's Request and Response tabs."""
+    req, resp = s.get("request") or {}, s.get("response") or {}
+    return {"http.request.method": req.get("method"),
+            "http.request.headers": json.dumps(req["headers"]) if req.get("headers") else None,
+            "http.request.body": req.get("body"),
+            "http.response.headers": json.dumps(resp["headers"]) if resp.get("headers") else None,
+            "http.response.body": resp.get("body")}
 
 
 def _browser_attrs(s):
