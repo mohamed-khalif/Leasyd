@@ -130,6 +130,29 @@ def _time_bucket(name):
     return f"time_bucket(INTERVAL '{int(m[1])} seconds', ts)"
 
 
+LOG_STEPS = 2                # group_by "log:<field>": buckets per doubling (…, 707 ms, 1 s, 1.41 s, …)
+LOG_BASE = 2 ** (1 / LOG_STEPS)
+_BUCKETABLE = {"duration_ns", "value", "severity_number"}
+_HASHABLE = {"attributes", "resource_attributes"}
+
+
+def _derived(signal, name):
+    """group_by "log:<field>": the log bucket of a number (its lower bound is LOG_BASE**bucket);
+    "hash:<attributes|resource_attributes>": one key per distinct attribute set (a series)."""
+    m = re.fullmatch(r"(log|hash):([a-z_]+)", name) if isinstance(name, str) else None
+    if not m:
+        return None
+    kind, field = m.groups()
+    if kind == "log":
+        if field not in _BUCKETABLE or field not in COLUMNS[signal]:
+            raise BadQuery(f"log buckets are for {sorted(_BUCKETABLE & COLUMNS[signal])}")
+        x = _num(f'"{field}"')
+        return f"CASE WHEN {x} > 0 THEN floor(log2({x}) * {LOG_STEPS})::INTEGER END"   # log2: exact at powers of 2
+    if field not in _HASHABLE:
+        raise BadQuery(f"hash is for {sorted(_HASHABLE)}")
+    return f'hash("{field}"::VARCHAR)::VARCHAR'
+
+
 def _num(expr):
     return f"TRY_CAST({expr} AS DOUBLE)"
 
@@ -196,7 +219,7 @@ def compile_query(q, edges=False):
     increases = []   # per-point rises, computed before grouping (they need each series' previous point)
     group_params, groups = [], []
     for g in q.get("group_by") or []:
-        groups.append(_time_bucket(g) or _field(signal, g, group_params))
+        groups.append(_time_bucket(g) or _derived(signal, g) or _field(signal, g, group_params))
     select, agg_params = [f"{g} AS g{i}" for i, g in enumerate(groups)], []
     for i, a in enumerate(aggs):
         fn = a.get("fn")
@@ -416,7 +439,7 @@ def handler(event, context):
 
 # ------------------------------------------------------------ HTTP API
 
-API_FIELDS = {"signal", "start", "end", "services", "where", "match", "group_by", "aggs", "search", "order", "limit"}
+API_FIELDS = {"signal", "start", "end", "services", "where", "match", "group_by", "aggs", "search", "order", "limit", "collapse"}
 MAX_RESPONSE_BYTES = 5_500_000   # Lambda's response limit is 6 MB
 
 
@@ -608,6 +631,21 @@ def merge(q, partials):
             else:
                 out.append(v if v is not None else (0 if a["fn"] == "count" else None))
         rows.append(out)
+    collapse = q.get("collapse")
+    if collapse is not None:
+        # Count the groups under each of the first `collapse` group columns (e.g. series per metric,
+        # with group_by [metric_name, "hash:attributes"]), summing counts and sums.
+        n = int(collapse)
+        if not 0 <= n < len(groups) or any(a["fn"] not in ("count", "sum") for a in aggs):
+            raise BadQuery("collapse: fewer columns than group_by, with count or sum aggregates only")
+        folded = {}
+        for r in rows:
+            acc = folded.setdefault(tuple(r[:n]), [0] + [0] * len(aggs))
+            acc[0] += 1
+            for j in range(len(aggs)):
+                acc[1 + j] += r[len(groups) + j] or 0
+        rows = [list(k) + v for k, v in folded.items()]
+        groups = list(groups[:n]) + ["groups"]
     i = len(groups)   # order by the first aggregate; empty values last either way
     if q.get("order", "desc") == "desc":
         rows.sort(key=lambda r: (r[i] is not None, r[i] or 0), reverse=True)

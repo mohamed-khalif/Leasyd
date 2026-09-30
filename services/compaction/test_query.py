@@ -446,3 +446,52 @@ def test_not_in_and_not_exists(data):
     assert two == run(**q, where=[{"field": "attributes.http.route", "op": "=", "value": "/b"},
                                   {"field": "severity_text", "op": "=", "value": "ERROR"}])["rows"][0][0] > 0
     assert run(**q, where=[{"field": "attributes.http.route", "op": "not_in", "value": []}])["rows"][0][0] == total
+
+
+def test_log_buckets_hashes_and_collapse(data):
+    out = run(group_by=["log:severity_number"], aggs=[{"fn": "count"}])
+    got = {r[0]: r[1] for r in out["rows"]}
+    want = {}
+    for r in data:   # 9 (INFO) -> 2*log2(9) = 6.3 -> 6; 17 (ERROR) -> 8.2 -> 8
+        b = math.floor(math.log2(r["severityNumber"]) * query.LOG_STEPS)
+        want[b] = want.get(b, 0) + 1
+    assert got == want and set(got) == {6, 8}
+    # Distinct attribute sets per service, as one row each ("groups"), counts summed.
+    out = run(group_by=["service", "hash:attributes"], aggs=[{"fn": "count"}], collapse=1, limit=10)
+    assert out["columns"] == ["service", "groups", "count"]
+    got = {r[0]: (r[1], r[2]) for r in out["rows"]}
+    sets, counts = {}, {}
+    for i, r in enumerate(data):
+        svc = "web" if 150 <= i < 300 else "api"
+        sets.setdefault(svc, set()).add((attr(r, "http.route")["stringValue"], attr(r, "duration_ms")["intValue"]))
+        counts[svc] = counts.get(svc, 0) + 1
+    assert got == {s: (len(sets[s]), counts[s]) for s in sets}
+
+
+def test_series_per_metric(counters):
+    q = {"tenant": "acme", "signal": "metrics", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z",
+         "group_by": ["metric_name", "hash:attributes"], "aggs": [{"fn": "count"}], "collapse": 1}
+    out = query.run(q, invoke_worker=query.run_worker)
+    got = {r[0]: (r[1], r[2]) for r in out["rows"]}
+    assert got == {"reqs": (2, 120), "jobs": (1, 60), "mem": (1, 60), "latency": (1, 60)}
+    got = {r[1]: r[2] for r in query.run({**q, "group_by": ["metric_name", "log:value"], "collapse": None},
+                                          invoke_worker=query.run_worker)["rows"] if r[0] == "mem"}
+    assert got == {19: 24, 20: 36}   # mem is 1000..1059: 1024 starts bucket 20
+
+
+@pytest.mark.parametrize("q, msg", [
+    ({"group_by": ["log:body"]}, "log buckets"),
+    ({"group_by": ["hash:body"]}, "hash is for"),
+])
+def test_bad_derived_groups(q, msg):
+    with pytest.raises(query.BadQuery, match=msg):
+        query.compile_query({"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T01:00:00Z", **q})
+
+
+@pytest.mark.parametrize("q", [
+    {"group_by": ["service"], "aggs": [{"fn": "count"}], "collapse": 1},
+    {"group_by": ["service", "hash:attributes"], "aggs": [{"fn": "max", "field": "severity_number"}], "collapse": 1},
+])
+def test_bad_collapse(data, q):
+    with pytest.raises(query.BadQuery, match="collapse"):
+        run(**q)
