@@ -56,6 +56,7 @@ delete_stack obs-phaseW1          # web app (CloudFront takes 5-15 minutes)
 delete_stack obs-phaseT7
 delete_stack obs-phaseT5
 delete_stack obs-phaseT2
+delete_stack obs-phaseA1          # alerts (rules and channels stay in obs-tenants; email topics stay)
 delete_stack obs-phaseS1          # synthetic checks (their settings stay in obs-tenants)
 delete_stack obs-phaseS1-build    # the browser image (rebuilt by up.sh)
 delete_stack obs-phase4

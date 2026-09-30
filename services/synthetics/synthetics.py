@@ -76,6 +76,7 @@ REGEX_TIMEOUT_S, REGEX_TEXT = 0.2, 256 << 10
 BATCH = 25                                      # checks per runner invocation (run in parallel)
 BROWSER_BATCH = 5                               # browser checks per runner invocation (each waits on a browser)
 BROWSER_FUNCTION = os.environ.get("BROWSER_FUNCTION", "obs-synthetics-browser")
+ALERTS_FUNCTION = os.environ.get("ALERTS_FUNCTION", "")          # obs-alerts: told of each recorded run
 DATA_BUCKET = os.environ.get("DATA_BUCKET", "")
 BROWSER_MAX_MS, BROWSER_TEST_MS = 60_000, 18_000   # a scheduled browser run; one from the portal (fits an API call)
 BROWSER_ACTIONS = {   # action: (required fields, optional fields)
@@ -745,13 +746,21 @@ def _browser_attrs(s):
 
 
 def record(tenant, check_id, check, result):
-    """Put one run's telemetry on the tenant's streams, as ingest would."""
+    """Put one run's telemetry on the tenant's streams, as ingest would; then tell the alerts
+    function (asynchronously; a run is never held up or failed by alerting)."""
     import gzip
     for signal, doc in telemetry(check_id, check, result).items():
         records = list(ingest.to_records(signal, doc))
         if ingest.RECORD_COMPRESSION == "gzip":
             records = [gzip.compress(x, compresslevel=6) for x in records]
         ingest.put_records(f"{ingest.STREAM_PREFIX}{tenant}-{signal}", records)
+    if ALERTS_FUNCTION:
+        try:
+            lam().invoke(FunctionName=ALERTS_FUNCTION, InvocationType="Event", Payload=json.dumps({
+                "action": "on_result", "tenant": tenant, "check_id": check_id, "check_name": check["name"], "ok": result["ok"],
+                "failure": result.get("failure"), "excluded": result.get("excluded"), "run_id": result.get("run_id")}).encode())
+        except Exception as e:  # noqa: BLE001
+            print(json.dumps({"alerts_not_told": check_id, "error": str(e)[:200]}))
 
 
 # ------------------------------------------------------------------ secrets

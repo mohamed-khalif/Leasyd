@@ -500,3 +500,18 @@ def test_tick_sends_browser_checks_in_small_batches(aws, monkeypatch):
     assert synthetics.tick({}, None) == {"due": 15}
     assert [(len(p["checks"]), {c.get("type", "http") for c in p["checks"]}) for p in invoked] == \
         [(3, {"http"}), (5, {"browser"}), (5, {"browser"}), (2, {"browser"})]
+
+
+def test_each_recorded_run_is_passed_to_alerts(aws, monkeypatch):
+    told = []
+    monkeypatch.setattr(synthetics, "ALERTS_FUNCTION", "obs-alerts")
+    monkeypatch.setattr(synthetics, "_lambda", type("L", (), {"invoke": staticmethod(lambda **kw: told.append(kw))})())
+    result = {"ok": False, "failure": "Home: status 503", "failed_step": None, "total_ms": 5.0, "tls_days": None, "started": 1.0,
+              "run_id": "c" * 32, "excluded": None, "steps": []}
+    synthetics.record("acme", "abc123abc123", {"name": "Home", "frequency": 1, "steps": [{"url": "https://example.com/"}]}, result)
+    assert told[0]["InvocationType"] == "Event" and told[0]["FunctionName"] == "obs-alerts"
+    assert json.loads(told[0]["Payload"]) == {"action": "on_result", "tenant": "acme", "check_id": "abc123abc123", "check_name": "Home",
+                                              "ok": False, "failure": "Home: status 503", "excluded": None, "run_id": "c" * 32}
+    # If alerting can't be reached, the run is still recorded.
+    monkeypatch.setattr(synthetics, "_lambda", type("L", (), {"invoke": staticmethod(lambda **kw: 1 / 0)})())
+    synthetics.record("acme", "abc123abc123", {"name": "Home", "frequency": 1, "steps": [{"url": "https://example.com/"}]}, result)

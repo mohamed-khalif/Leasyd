@@ -71,9 +71,9 @@ Resources:
               - Effect: Allow     # save secrets; decrypt them for "run now" and "test"
                 Action: [kms:Encrypt, kms:Decrypt]
                 Resource: !GetAtt SecretsKey.Arn
-              - Effect: Allow     # browser checks' "test" and "run now"
+              - Effect: Allow     # browser checks' "test" and "run now"; alerts, told of "run now" results
                 Action: lambda:InvokeFunction
-                Resource: !GetAtt BrowserFunction.Arn
+                Resource: [!GetAtt BrowserFunction.Arn, !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-alerts"]
               - Effect: Allow     # screenshots: save ("run now"), show (the tenant is checked in code)
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/synthetics/*"
@@ -125,9 +125,9 @@ Resources:
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: !GetAtt SecretsKey.Arn
-              - Effect: Allow
+              - Effect: Allow     # the browser; alerts (obs-phaseA1), told of each recorded run
                 Action: lambda:InvokeFunction
-                Resource: !GetAtt BrowserFunction.Arn
+                Resource: [!GetAtt BrowserFunction.Arn, !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-alerts"]
               - Effect: Allow
                 Action: s3:PutObject
                 Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/synthetics/*"
@@ -187,6 +187,7 @@ Resources:
           STREAM_PREFIX: obs-t-
           KMS_KEY: alias/obs-checks
           BROWSER_FUNCTION: !Ref BrowserFunction
+          ALERTS_FUNCTION: obs-alerts
           DATA_BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
@@ -226,6 +227,7 @@ Resources:
           STREAM_PREFIX: obs-t-
           KMS_KEY: alias/obs-checks
           BROWSER_FUNCTION: !Ref BrowserFunction
+          ALERTS_FUNCTION: obs-alerts
           DATA_BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 

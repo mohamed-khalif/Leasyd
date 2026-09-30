@@ -325,13 +325,17 @@ def test_deleting_a_tenant_removes_its_synthetic_checks(adm):
     call(adm, "create", tenant="acme")
     call(adm, "create", tenant="globex")
     ddb = boto3.resource("dynamodb").Table("obs-tenants")
-    kinds = ("check#{t}#aaaabbbbcccc", "exclude#{t}#aaaabbbbcccc#" + "a" * 32, "window#{t}#bbbbccccdddd", "slo#{t}#ccccddddeeee")
+    kinds = ("check#{t}#aaaabbbbcccc", "exclude#{t}#aaaabbbbcccc#" + "a" * 32, "window#{t}#bbbbccccdddd", "slo#{t}#ccccddddeeee",
+             "alert#{t}#ddddeeeeffff", "astate#{t}#ddddeeeeffff#aaaabbbbcccc", "channel#{t}#eeeeffff0000")
+    sns = boto3.client("sns")
     for t in ("acme", "globex"):
         for k in kinds:
-            ddb.put_item(Item={"pk": k.format(t=t), "tenant": t, "name": "x", "enabled": True})
+            extra = {"topic_arn": sns.create_topic(Name=f"obs-alert-{t}-eeeeffff0000")["TopicArn"]} if k.startswith("channel#") else {}
+            ddb.put_item(Item={"pk": k.format(t=t), "tenant": t, "name": "x", "enabled": True, **extra})
     call(adm, "delete", tenant="acme")
-    left = {i["pk"] for i in ddb.scan()["Items"] if i["pk"].startswith(("check#", "exclude#", "window#", "slo#"))}
+    left = {i["pk"] for i in ddb.scan()["Items"] if i["pk"].startswith(("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#"))}
     assert left == {k.format(t="globex") for k in kinds}
+    assert [t["TopicArn"].rsplit(":", 1)[1] for t in sns.list_topics()["Topics"]] == ["obs-alert-globex-eeeeffff0000"]
 
 
 # ------------------------------------------------------------------ retention

@@ -437,6 +437,14 @@ Resources:
     Type: AWS::ApiGateway::Resource
     Condition: Logins
     Properties: { RestApiId: !Ref Api, ParentId: !Ref SlosResource, PathPart: "{id}" }
+  AlertsResource:   # alert rules and channels (obs-phaseA1)
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AppResource, PathPart: alerts }
+  AlertsProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AlertsResource, PathPart: "{proxy+}" }
   CheckScreenshotResource:   # a browser check's screenshot: ?run=<trace id>&step=<n>
     Type: AWS::ApiGateway::Resource
     Condition: Logins
@@ -598,6 +606,30 @@ Resources:
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-synthetics-api/invocations"
         TimeoutInMillis: 29000
 
+  AlertsMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref AlertsProxyResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-alerts/invocations"
+        TimeoutInMillis: 29000
+
+  AlertsApiPermission:
+    Type: AWS::Lambda::Permission
+    Condition: Logins
+    Properties:
+      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-alerts"
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/v1/app/alerts/*"
+
   ChecksApiPermission:
     Type: AWS::Lambda::Permission
     Condition: Logins
@@ -627,20 +659,20 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV7:
+  DeploymentV8:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, QueryMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV7
+      DeploymentId: !Ref DeploymentV8
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

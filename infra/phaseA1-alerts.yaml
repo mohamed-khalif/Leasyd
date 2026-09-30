@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Alerts (A1): customers' alert rules on synthetic checks and SLOs, sent by email (an SNS topic per
+  email channel, obs-alert-<tenant>-<id>), Slack or webhook (services/alerts/alerts.py). One Lambda,
+  obs-alerts: the portal API /v1/app/alerts/... (routed by obs-phaseT2), the synthetic runner's
+  "a run was recorded" (obs-phaseS1), and an SLO evaluation every 5 minutes through obs-query.
+  Needs obs-phase0 (boundary: SNS obs-alert-*), obs-phase4 and obs-phaseS1 (the checks' KMS key).
+  Deploy with infra/deploy-phaseA1.sh.
+
+Parameters:
+  AppUrl:
+    Type: String
+    Default: https://app.leasyd.com
+    Description: The portal's address, for links in alerts.
+
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-alerts
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: alerts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Settings      # its own items; reads the checks, SLOs and excluded runs they refer to
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                Condition:
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["channel#*", "alert#*", "astate#*", "slo#*"] }
+              - Sid: ListPerTenant
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
+              - Sid: FindSloRules  # every 5 minutes: the tenants' SLO rules
+                Effect: Allow
+                Action: dynamodb:Scan
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+              - Sid: ChannelSecrets
+                Effect: Allow
+                Action: [kms:Encrypt, kms:Decrypt]
+                Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+                Condition:
+                  ForAnyValue:StringEquals: { "kms:ResourceAliases": alias/obs-checks }
+              - Sid: EmailTopics
+                Effect: Allow
+                Action: [sns:CreateTopic, sns:TagResource, sns:Subscribe, sns:Publish, sns:DeleteTopic, sns:ListSubscriptionsByTopic]
+                Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alert-*"
+              - Sid: History       # alert events as the tenant's own logs
+                Effect: Allow
+                Action: firehose:PutRecordBatch
+                Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+              - Sid: SloQueries
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: A1 }]
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/obs-alerts, RetentionInDays: 30 }
+
+  Function:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Properties:
+      FunctionName: obs-alerts
+      Description: Alert rules, channels and notifications (portal API, runner results, SLO schedule)
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: alerts.handler
+      Code: ../services/alerts/build
+      Role: !GetAtt Role.Arn
+      MemorySize: 512
+      Timeout: 300         # the SLO evaluation; API calls are cut at 29 s by API Gateway anyway
+      Environment:
+        Variables:
+          TENANTS_TABLE: obs-tenants
+          KMS_KEY: alias/obs-checks
+          QUERY_FUNCTION: obs-query
+          APP_URL: !Ref AppUrl
+          RECORD_COMPRESSION: gzip
+          STREAM_PREFIX: obs-t-
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: A1 }]
+
+  # A missed "run recorded" is caught by the next run; don't retry (it could notify twice).
+  InvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties: { FunctionName: !Ref Function, Qualifier: $LATEST, MaximumRetryAttempts: 0 }
+
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-alerts-slo
+      Description: Evaluate SLO alert rules
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets: [{ Id: alerts, Arn: !GetAtt Function.Arn, Input: '{"action": "evaluate"}' }]
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+
+  ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-alerts-errors
+      AlarmDescription: The alerts function failed in 3 of the last 5 minutes; customers may not be told of failures.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref Function }]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+Outputs:
+  Function:
+    Value: !Ref Function

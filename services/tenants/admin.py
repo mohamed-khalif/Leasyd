@@ -98,6 +98,7 @@ s3 = boto3.client("s3")
 apigw = boto3.client("apigateway")
 firehose = boto3.client("firehose")
 lam = boto3.client("lambda")
+sns = boto3.client("sns")
 
 
 class Refused(Exception):
@@ -245,9 +246,15 @@ def delete(tenant, context=None):
     for u in _users(tenant):
         if u["status"] == "active":
             _remove_login(u)
-    # Synthetic checks (S1): stop running them; and their excluded runs, maintenance windows, SLOs.
-    for prefix in ("check#", "exclude#", "window#", "slo#"):
+    # Synthetic checks (S1): stop running them; and their excluded runs, maintenance windows, SLOs,
+    # alert rules and channels (A1; an email channel's SNS topic too).
+    for prefix in ("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#"):
         for c in _items(tenant, prefix):
+            if c.get("topic_arn"):
+                try:
+                    sns.delete_topic(TopicArn=c["topic_arn"])
+                except sns.exceptions.NotFoundException:
+                    pass
             tenants.delete_item(Key={"pk": c["pk"]})
     _invoke_self({"action": "purge", "tenant": tenant})
     return {"tenant": tenant, "status": "deleting", "revoked": revoked,

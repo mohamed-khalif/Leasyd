@@ -57,6 +57,10 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
                   - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
+              - Sid: AlertEmailTopics  # a deleted tenant's email alert channels
+                Effect: Allow
+                Action: sns:DeleteTopic
+                Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alert-*"
               - Sid: PurgeIndex        # tenant deletion, and retention (index entries by day)
                 Effect: Allow
                 Action: [dynamodb:Scan, dynamodb:Query, dynamodb:GetItem, dynamodb:BatchWriteItem, dynamodb:DeleteItem]

@@ -183,6 +183,10 @@ Resources:
               - ecr:BatchGetImage
               - ecr:GetDownloadUrlForLayer
             Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/obs-*"
+          - Sid: CustomerAlertEmail    # alerts (A1): one SNS topic per customer email channel
+            Effect: Allow
+            Action: [sns:CreateTopic, sns:TagResource, sns:Subscribe, sns:Publish, sns:DeleteTopic, sns:ListSubscriptionsByTopic]
+            Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alert-*"
           - Sid: PlatformParameters    # e.g. the canary tenant's API key (SecureString)
             Effect: Allow
             Action: ssm:GetParameter
