@@ -16,3 +16,5 @@ export const IconRefresh = () => <svg {...s}><path d="M13 7.5A5 5 0 1 0 12 11M13
 export const IconMoon = () => <svg {...s}><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3 5.5 5.5 0 1 0 13 9.5Z" /></svg>;
 export const IconSun = () => <svg {...s}><circle cx="8" cy="8" r="3" /><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1" /></svg>;
 export const IconOut = () => <svg {...s}><path d="M6 3H3v10h3M10 5l3 3-3 3M13 8H6" /></svg>;
+export const IconFlask = () => <svg {...s}><path d="M6 2h4M6.5 2v4L3 13a1 1 0 0 0 .9 1.4h8.2A1 1 0 0 0 13 13L9.5 6V2M4.7 10h6.6" /></svg>;
+export const IconDb = () => <svg {...s}><ellipse cx="8" cy="4" rx="5" ry="2" /><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2" /></svg>;

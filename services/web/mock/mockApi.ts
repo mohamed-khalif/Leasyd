@@ -244,6 +244,42 @@ function runSpans(trace: string) {
   return { columns: cols, rows: rows.map((x) => cols.map((k) => x[k])) };
 }
 
+/** PromQL: a few plausible series, split by the first "by (...)" label. */
+function promqlMock(q: Q & { promql: string; step: number }) {
+  const text = q.promql;
+  if (/\(\s*$|rate\([^)]*$/.test(text) || (text.match(/\(/g) ?? []).length !== (text.match(/\)/g) ?? []).length)
+    return [400, { status: "error", errorType: "bad_data", error: "expected , or ) but found the end at position " + text.length }];
+  const t0 = Math.floor(Date.parse(q.start) / 1000 / q.step) * q.step, t1 = Math.floor(Date.parse(q.end) / 1000 / q.step) * q.step;
+  const m = text.match(/by \(([^)]*)\)/), label = m ? m[1].split(",")[0].trim().replace(/"/g, "") : null;
+  const values = label === "service_name" || label === "service.name" ? SERVICES.slice(0, 6)
+    : label === "span_name" ? ["GET /api/products", "POST /api/cart", "oteldemo.CheckoutService/PlaceOrder", "Charge", "GetQuote"]
+    : label === "severity_text" ? ["INFO", "DEBUG", "WARN", "ERROR"] : label ? ["a", "b", "c"] : [null];
+  const base = /histogram_quantile/.test(text) ? 120 : /^\s*100 \*/.test(text) ? 1.5 : /increase/.test(text) ? 900 : 60;
+  const result = values.map((v, i) => ({
+    metric: v == null ? {} : { [label!]: v },
+    values: Array.from({ length: Math.floor((t1 - t0) / q.step) + 1 }, (_, k) => {
+      const t = t0 + k * q.step, wave = 1 + 0.25 * Math.sin(t / 900 + i) + 0.1 * Math.sin(t / 97 + i * 3) + (k % 23 === 7 ? 0.6 : 0);
+      return [t, String(Number((base * wave / (1 + i * 0.45)).toFixed(3)))];
+    }),
+  }));
+  return [200, { status: "success", data: { resultType: "matrix", result }, stats: { engine_queries: /\/ sum/.test(text) ? 2 : 1, bytes: 48_000_000 } }];
+}
+
+function sqlMock(q: { sql: string }) {
+  if (!/^\s*(select|with)\b/i.test(q.sql)) return [400, { error: "only one SELECT query is allowed" }];
+  if (/time_bucket/i.test(q.sql)) {
+    const rows: unknown[][] = [];
+    for (let i = 0; i < 30; i++) for (const s of ["checkout", "payment", "cart"])
+      rows.push([new Date(Date.now() - (30 - i) * 60000).toISOString(), s, Math.round(4 + 3 * Math.sin(i / 3 + s.length))]);
+    return [200, { columns: ["minute", "service", "errors"], rows, stats: { files: 42 } }];
+  }
+  return [200, { columns: ["service", "name", "spans", "p95_ms"], rows: [
+    ["checkout", "oteldemo.CheckoutService/PlaceOrder", 18422, 412.7], ["payment", "oteldemo.PaymentService/Charge", 18410, 238.1],
+    ["frontend", "POST /api/checkout", 18433, 201.6], ["shipping", "oteldemo.ShippingService/GetQuote", 36801, 88.4],
+    ["product-catalog", "oteldemo.ProductCatalogService/GetProduct", 240112, 12.9], ["cart", "oteldemo.CartService/GetCart", 90212, 9.7]],
+    stats: { files: 42 } }];
+}
+
 function answer(q: Q) {
   if (q.services?.includes("alerts")) return alertHistory(q);
   if (q.services?.includes("synthetics")) return synthetics(q);
@@ -509,7 +545,13 @@ export function mockApi(): Plugin {
         let body = "";
         req.on("data", (c: Buffer) => (body += c));
         req.on("end", () => {
-          const out = answer(JSON.parse(body || "{}"));
+          const parsed = JSON.parse(body || "{}");
+          if (parsed.promql || parsed.sql) {
+            const [status, out] = parsed.promql ? promqlMock(parsed) : sqlMock(parsed);
+            res.statusCode = status as number;
+            return setTimeout(() => res.end(JSON.stringify(out)), 250);
+          }
+          const out = answer(parsed);
           setTimeout(() => res.end(JSON.stringify(out)), 150 + Math.random() * 250);
         });
       });

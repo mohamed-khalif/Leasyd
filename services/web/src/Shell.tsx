@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell } from "./icons";
+import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 
 type Props = {
@@ -29,6 +29,9 @@ export function Shell(p: Props) {
         {link("/logs", "Logs", <IconLogs />, p.path.startsWith("/logs"))}
         {link("/traces", "Traces", <IconTraces />, p.path.startsWith("/traces"))}
         {link("/metrics", "Metrics", <IconMetrics />, p.path.startsWith("/metrics"))}
+        <div className="nav-section">Query data</div>
+        {link("/query", "Query Builder", <IconFlask />, p.path.startsWith("/query"))}
+        {link("/sql", "SQL", <IconDb />, p.path.startsWith("/sql"))}
         <div className="nav-section">Monitoring</div>
         {link("/synthetics", "Synthetics", <IconPulse />, p.path.startsWith("/synthetics"))}
         {link("/slos", "SLOs", <IconTarget />, p.path.startsWith("/slos"))}

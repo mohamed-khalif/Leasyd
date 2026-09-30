@@ -4,7 +4,8 @@ import { fmtNum, fmtTime, Range } from "../time";
 export type Series = { label: string; color: string; points: [number, number][] }; // [epoch ms, value]
 
 /** Line/area chart over time: y ticks, x time labels, legend, hover readout. */
-export function TimeSeries(props: { series: Series[]; range: Range; height?: number; unit?: string; area?: boolean }) {
+export function TimeSeries(props: { series: Series[]; range: Range; height?: number; unit?: string; area?: boolean;
+                                   threshold?: number | null; legend?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(600);
   const [hover, setHover] = useState<number | null>(null);
@@ -22,7 +23,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
   const now = Date.now();
   const x1 = props.range.to ?? now;
   const x0 = Math.min(props.range.from ?? x1 - props.range.minutes * 60_000, ...(xs.length ? xs : [x1]));
-  const top = Math.max(0, ...props.series.flatMap((s) => s.points.map((p) => p[1])));
+  const top = Math.max(0, props.threshold ?? 0, ...props.series.flatMap((s) => s.points.map((p) => p[1])));
   const ymax = niceMax(top > 0 ? top : 1);   // small values (ratios, rates) get their own scale
   // Room for the longest axis label ("6,000 ms"): about 6 px per character of the 10 px mono font.
   const padL = Math.max(44, 10 + 6.2 * Math.max(...[0, ymax / 2, ymax].map((v) => `${fmtNum(v)}${props.unit ?? ""}`.length)));
@@ -39,7 +40,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
 
   return (
     <div>
-      <div className="legend">{props.series.map((s) => <span key={s.label}><i style={{ background: s.color }} />{s.label}</span>)}</div>
+      {props.legend !== false && <div className="legend">{props.series.map((s) => <span key={s.label}><i style={{ background: s.color }} />{s.label}</span>)}</div>}
       <div ref={box} style={{ position: "relative" }}>
         <svg width={w} height={h} style={{ display: "block" }}
              onMouseMove={(e) => setHover(e.nativeEvent.offsetX)} onMouseLeave={() => setHover(null)}>
@@ -70,6 +71,9 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
               </g>
             );
           })}
+          {props.threshold != null && (
+            <line x1={padL} x2={w - padR} y1={Y(props.threshold)} y2={Y(props.threshold)} stroke="var(--sev-error)" strokeDasharray="5 4" />
+          )}
           {hover != null && hover > padL && hover < w - padR && (
             <line x1={hover} x2={hover} y1={padT} y2={h - padB} stroke="var(--text-3)" strokeDasharray="3 3" />
           )}

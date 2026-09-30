@@ -13,6 +13,8 @@ import { Metrics } from "./pages/Metrics";
 import { Synthetics } from "./pages/Synthetics";
 import { Slos } from "./pages/Slos";
 import { Alerts } from "./pages/Alerts";
+import { QueryBuilder } from "./pages/QueryBuilder";
+import { Sql } from "./pages/Sql";
 import { RANGES, Range, rangeFromKey } from "./time";
 
 export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
@@ -63,6 +65,12 @@ export function App() {
     page = <Alerts ctx={ctx} path={path} params={params} />;
     const [, , tab, sub] = path.split("/");
     crumb = ["Alerts", tab === "rules" && sub ? (sub === "new" ? "New rule" : "Rule") : tab === "channels" ? "Channels" : tab === "history" ? "History" : "Rules"];
+  } else if (path.startsWith("/query")) {
+    page = <QueryBuilder ctx={ctx} params={params} />;
+    crumb = ["Query data", "Query Builder"];
+  } else if (path.startsWith("/sql")) {
+    page = <Sql ctx={ctx} />;
+    crumb = ["Query data", "SQL"];
   } else if (path.startsWith("/metrics")) {
     page = <Metrics ctx={ctx} params={params} />;
     crumb = ["Metrics", params.get("m") ?? "Explorer"];

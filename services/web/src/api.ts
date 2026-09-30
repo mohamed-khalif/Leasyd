@@ -32,6 +32,15 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+// PromQL over all signals, and read-only SQL, through the same route.
+export type PromSeries = { metric: Record<string, string>; values: [number, string][] };
+export type PromResult = { status: string; data: { resultType: string; result: PromSeries[] }; stats?: Record<string, number> };
+export const promql = (q: { promql: string; start: string; end: string; step: number }) =>
+  call<PromResult>("/v1/app/query", { method: "POST", body: JSON.stringify(q) });
+export type SqlResult = { columns: string[]; rows: unknown[][]; truncated?: boolean; stats?: Record<string, number> };
+export const sql = (q: { sql: string; start: string; end: string }) =>
+  call<SqlResult>("/v1/app/query", { method: "POST", body: JSON.stringify(q) });
+
 export const me = () => call<{ tenant: string; email: string }>("/v1/app/me");
 export const query = (q: Query) => call<Result>("/v1/app/query", { method: "POST", body: JSON.stringify(q) });
 
