@@ -68,8 +68,9 @@ JPEG_QUALITY = 55
 ARGS = ["--disable-quic", "--disable-dev-shm-usage", "--disable-gpu", "--disable-background-networking",
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp",
         "--proxy-bypass-list=<-loopback>"]
-if ON_LAMBDA:   # Lambda has no namespaces for Chromium's zygote (adjustable without a new image)
-    ARGS += os.environ.get("CHROMIUM_LAMBDA_ARGS", "--no-zygote --single-process").split()
+if ON_LAMBDA:   # Lambda has no namespaces for Chromium's zygote (adjustable without a new image).
+    # Not --single-process: in Lambda it made Chromium take 20 s to open a page (measured 2026-09-30).
+    ARGS += os.environ.get("CHROMIUM_LAMBDA_ARGS", "--no-zygote").split()
 
 VITALS_JS = """() => new Promise(done => {
   const nav = performance.getEntriesByType('navigation')[0] || {};
