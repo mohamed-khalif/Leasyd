@@ -556,6 +556,19 @@ At most 20 checks per tenant (`obs-tenants` items `check#<tenant>#<id>`).
 `fcp` / `lcp` / `load` / `cls`, and an ERROR log when it fails (first 2 KB of the response, or the
 browser's errors; secrets and extracted values masked).
 
+**Excluded runs and maintenance windows** (`services/synthetics/reliability.py`): a customer can
+exclude a run afterwards (a false alarm during a deployment) with a reason, and undo it; or set
+maintenance windows (once, or weekly in a time zone), during which the chosen checks still run but
+each run is recorded with `check.excluded`. Excluded runs are left out of uptime, charts and SLOs
+(the portal filters on `check.excluded` and on the excluded runs' `check.run_id`). Exclusions last
+as long as the data. Items: `exclude#<tenant>#<check>#<run>`, `window#<tenant>#<id>`.
+
+**SLOs** (`slo#<tenant>#<id>`, portal: Monitoring > SLOs): over one or more checks, availability
+(% of runs that pass) or performance (% of runs within a time), a target such as 99.9% over the last
+7, 14 or 30 days. The portal works them out from the checks' metrics (leaving excluded runs out):
+current level, error budget left, bad runs against allowed, burn rate over the last hour, and each
+day. Alerts on them come with alerting.
+
 **Functions**: `obs-synthetics-api` serves `/v1/app/checks` (routed by `obs-phaseT2`, Cognito: the
 tenant is the user's). `obs-synthetics-tick` (every minute) hands due checks to
 `obs-synthetics-run` in batches (25 HTTP, 5 browser); for a browser check the runner decrypts its
@@ -580,7 +593,28 @@ secrets and invokes `obs-synthetics-browser`, then records the result.
 aws cloudformation deploy --stack-name obs-phase0 --template-file infra/phase0-foundation.yaml \
   --capabilities CAPABILITY_NAMED_IAM      # boundary: the checks' KMS key and the image build
 infra/deploy-phaseS1.sh      # before T2: builds the browser image, then the functions
-infra/deploy-phaseT2.sh      # /v1/app/checks routes (and .../screenshot)
+infra/deploy-phaseT2.sh      # /v1/app/checks routes (and .../screenshot, .../exclusions), /v1/app/windows, /v1/app/slos
 infra/deploy-phaseT5.sh      # deleting a tenant removes its checks and screenshots
 infra/deploy-phaseW1.sh      # the Synthetics pages
+```
+
+
+## Data retention
+
+Customers' data is kept 30 full days plus today (UTC): logs, traces, metrics, and every synthetic
+run, passed or failed. Browser-check screenshots: 30 days.
+
+- `obs-tenant-admin` action `retention`, nightly at 01:17 UTC (`obs-tenant-retention`): for each
+  active tenant, deletes the index entries of files wholly before the cutoff day, then the files,
+  then the old days' Parquet, filters, ID digests and raw arrivals, and their index items. It carries
+  on in a new invocation if it runs short of time.
+- The query API never reads before the cutoff (`RetentionDays` on `obs-phase4`), so a sweep in
+  progress never shows as gaps; the portal's custom range can't start earlier.
+- The data bucket expires anything under `data/` and `_incoming/` after 35 days as a backstop
+  (`infra/state.yaml`; `infra/data-bucket-rules.sh` sets the same rules on a bucket not yet in
+  `obs-state`). Storage-class tiering was removed: nothing lives long enough for it to pay.
+- Change the period with `RetentionDays` on both `obs-phaseT5` and `obs-phase4` (and the backstop).
+
+```bash
+aws lambda invoke --function-name obs-tenant-admin --payload '{"action": "retention"}' out.json   # run it now
 ```

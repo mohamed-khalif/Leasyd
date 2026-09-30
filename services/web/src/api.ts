@@ -91,7 +91,7 @@ export type WindowSchedule = { type: "once"; start: string; end: string }
 export type MaintenanceWindow = { id: string; name: string; checks: string[]; schedule: WindowSchedule; created_at?: string; created_by?: string };
 // SLOs (/v1/app/slos) over synthetic checks, evaluated from their results.
 export type Slo = { id: string; name: string; description: string; type: "availability" | "performance"; checks: string[];
-                    target: number; window_days: number; threshold_ms?: number; created_at?: string; created_by?: string };
+                    target: number; window_days: number; threshold_ms?: number; created_at?: string; updated_at?: string; created_by?: string };
 function settingsApi<T extends { id: string }>(base: string) {
   return {
     list: () => call<{ items: T[]; limit: number }>(base),

@@ -106,7 +106,8 @@ function synthetics(q: Q) {
   const t0 = Date.parse(q.start), t1 = Date.parse(q.end);
   const metric = String(q.where?.find((w) => w.field === "metric_name")?.value ?? "");
   const only = q.where?.find((w) => w.field === "attributes.check.id")?.value;
-  const cs = CHECKS.filter((c) => c.enabled && (!only || c.id === only));
+  const cs = CHECKS.filter((c) => c.enabled && (!only || (Array.isArray(only) ? only.includes(c.id) : c.id === only)));
+  const within = Number(q.where?.find((w) => w.field === "value" && w.op === "<=")?.value ?? NaN);   // an SLO's "fast enough" runs
   const r = rng(Math.floor(t1 / 60000));
   const fail = (c: MockCheck, t: number) => Number(c.up) < 1 && Math.sin(t / 7e5 + c.id.charCodeAt(0)) > 0.93;
   if (q.search) {
@@ -129,7 +130,9 @@ function synthetics(q: Q) {
   const rows: unknown[][] = [];
   for (const c of cs) for (let t = Math.floor(t0 / b) * b; t <= t1; t += b) {
     const up = Number(c.up) + (tsg && fail(c, t) ? -0.3 : 0), ms = Number(c.ms) * (0.9 + 0.2 * Math.sin(t / 3e6 + c.frequency));
-    const v = (a: { fn: string }) => a.fn === "count" ? Math.round((b / 60000) / c.frequency)
+    const runs = Math.round((b / 60000) / c.frequency);
+    const v = (a: { fn: string }) => a.fn === "count" ? (Number.isNaN(within) ? runs : Math.round(runs * (within >= ms * 1.3 ? 0.998 : within >= ms ? 0.9 : 0.3)))
+      : a.fn === "sum" && metric.endsWith("success") ? runs * Math.min(1, up)
       : metric.endsWith("success") ? up : metric.endsWith("tls_days_remaining") ? 58 + c.frequency
       : metric.endsWith("browser.lcp") ? (a.fn === "p95" ? 1.5 : 1) * 1180 : a.fn === "p95" ? ms * 1.6 : ms;
     if (by.includes("attributes.step.index") && metric.endsWith("browser.lcp")) {   // only pages opened have a largest paint
@@ -142,6 +145,15 @@ function synthetics(q: Q) {
     }
     rows.push([...by.map((g) => g.startsWith("ts:") ? new Date(t).toISOString().replace("Z", "000Z") : c.id), ...aggs.map(v)]);
     if (!tsg) break;
+  }
+  if (!by.includes("attributes.check.id") && !by.includes("attributes.step.index")) {   // several checks: one row per group, as the engine answers
+    const merged = new Map<string, unknown[]>();
+    for (const row of rows) {
+      const k = JSON.stringify(row.slice(0, by.length)), m = merged.get(k);
+      if (!m) { merged.set(k, [...row]); continue; }
+      aggs.forEach((a, i) => { const j = by.length + i; m[j] = ["count", "sum"].includes(a.fn) ? Number(m[j]) + Number(row[j]) : (Number(m[j]) + Number(row[j])) / 2; });
+    }
+    rows.splice(0, rows.length, ...merged.values());
   }
   return { columns: [...by, ...aggs.map((a) => (a.fn === "count" ? "count" : `${a.fn}(${a.field})`))], rows };
 }

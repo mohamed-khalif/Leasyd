@@ -11,6 +11,7 @@ import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
 import { Metrics } from "./pages/Metrics";
 import { Synthetics } from "./pages/Synthetics";
+import { Slos } from "./pages/Slos";
 import { RANGES, Range, rangeFromKey } from "./time";
 
 export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
@@ -53,6 +54,10 @@ export function App() {
     page = <Synthetics ctx={ctx} path={path} />;
     const sub = path.split("/")[2];
     crumb = ["Synthetics", sub === "windows" ? "Maintenance windows" : sub === "new" ? "New check" : sub ? (path.endsWith("/edit") ? "Edit check" : "Check") : "Checks"];
+  } else if (path.startsWith("/slos")) {
+    page = <Slos ctx={ctx} path={path} />;
+    const sub = path.split("/")[2];
+    crumb = ["SLOs", sub === "new" ? "New SLO" : sub ? (path.endsWith("/edit") ? "Edit SLO" : "SLO") : "All SLOs"];
   } else if (path.startsWith("/metrics")) {
     page = <Metrics ctx={ctx} params={params} />;
     crumb = ["Metrics", params.get("m") ?? "Explorer"];
