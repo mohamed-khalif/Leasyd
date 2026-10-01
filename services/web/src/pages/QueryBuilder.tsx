@@ -143,7 +143,9 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
         <span className="spacer" style={{ flex: 1 }} />
         <button className="btn" onClick={() => { navigator.clipboard?.writeText(location.href); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
           {copied ? "Link copied" : "Copy link"}</button>
-        <button className="btn" disabled title="Coming next: alert rules on any query">Create check rule</button>
+        <button className="btn" disabled={!texts[idx]?.trim()} title="Alert when this query crosses a threshold"
+                onClick={() => ctx.go(`/alerts/rules/new?name=${encodeURIComponent(cur.name.replace(/\{\{[^}]*\}\}/g, "").trim() || "")}`
+                  + `&promql=${encodeURIComponent(texts[idx].replace(/\$__rate_interval|\$__interval/g, "5m"))}`)}>Create check rule</button>
         <button className="btn" disabled title="Coming next: dashboards">Add to dashboard</button>
       </div>
       <div className="qb">

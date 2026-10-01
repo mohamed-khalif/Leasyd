@@ -203,3 +203,10 @@ def test_every_series_has_service_name_and_labels_match_by_either_spelling(count
     b = prange("sum by (route) (increase(reqs[5m]))", T10 + 300, T10 + 300)   # pushed down
     assert a.keys() == b.keys()
     assert len(prange("max by (route) (max_over_time(reqs[5m])) / on(route) sum by (route) (increase(reqs[5m]))", T10 + 300, T10 + 300)) == 2
+
+
+def test_direct_invocation_for_alerts(counters, monkeypatch):
+    monkeypatch.setattr(query, "_invoke_worker", query.run_worker)
+    out = query.handler({"tenant": "acme", "promql": "sum by (route) (increase(reqs[5m]))", "time": T10 + 300}, None)
+    assert out["data"]["resultType"] == "vector" and {r["metric"]["route"] for r in out["data"]["result"]} == {"/a", "/b"}
+    assert "error" in query.handler({"tenant": "acme", "promql": "rate(", "time": T10}, None)

@@ -101,10 +101,20 @@ const RULES: Record<string, unknown>[] = [
     channels: ["c1a2b3c4d5e6", "c2b3c4d5e6f1"], enabled: true, firing: ["e5f6a1b2c3d4"] },
   { id: "r2b3c4d5e6f1", name: "Checkout budget", type: "slo_burn", slo: "s1a2b3c4d5e6", burn_rate: 10, budget_below: 25,
     channels: ["c2b3c4d5e6f1"], enabled: true, firing: [] },
+  { id: "r3c4d5e6f1a2", name: "Error rate by service", type: "query", op: ">", critical: 5, degraded: 2, for_minutes: 2, every_minutes: 1,
+    promql: '100 * sum by (service_name) (rate(leasyd.spans{status_code="ERROR"}[5m])) / sum by (service_name) (rate(leasyd.spans[5m]))',
+    channels: ["c1a2b3c4d5e6"], enabled: true, firing: ["service_name=checkout (critical)", "service_name=payment (degraded)"] },
 ];
 
 function alertsRoute(path: string, method: string, body: Record<string, unknown>): [number, unknown] {
   const [kind, id, sub] = path.split("/");
+  if (kind === "rules" && id === "preview") {
+    const crit = Number(body.critical), deg = body.degraded == null ? null : Number(body.degraded);
+    const series = [["checkout", 7.4], ["payment", 3.1], ["cart", 0.6], ["frontend", 0.2]].map(([svc, v]) => ({
+      labels: { service_name: svc }, name: `service_name=${svc}`, value: v,
+      level: (v as number) > crit ? "critical" : deg != null && (v as number) > deg ? "degraded" : "ok" }));
+    return [200, { time: Math.floor(Date.now() / 1000), total: series.length, series }];
+  }
   const list = kind === "channels" ? CHANNELS : RULES;
   if (!id && method === "GET") return [200, { items: list, limit: 20 }];
   if (!id && method === "POST") {

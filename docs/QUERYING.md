@@ -40,6 +40,23 @@ API: `{"promql": "...", "start": "2026-10-01T00:00:00Z", "end": "...", "step": 6
 `{"promql": "...", "time": ...}` (one moment). Times can be ISO-8601 or epoch seconds. The answer has
 the Prometheus HTTP API's format.
 
+## Check rules (alerts on any query)
+
+From the Query Builder (**Create check rule**) or Alerts → New rule → *A query crosses a threshold*:
+a PromQL query, a condition (above, below, ...), a critical threshold and optionally a degraded one.
+Every series the query returns is checked on its own (e.g. one per service with `sum by (service_name)`):
+
+- checked every 1, 5 or 15 minutes, on the data as of a minute before (it takes ~30 s to arrive);
+- a series must stay degraded or critical for the chosen minutes (0-60) before you're told; a blip
+  back to normal starts the wait again;
+- you're told when series become degraded or critical, when they get worse, and when they're back to
+  normal (or gone from the result); changes of the same kind come as one message, through your
+  email, Slack or webhook channels, and are kept in Alerts → History;
+- the query is run when the rule is saved, so a mistake shows at once. The rule form shows the last
+  3 hours with the thresholds, and what each series would be right now.
+
+Use a range in rates (`[5m]`); `$__interval` from the Query Builder becomes `5m`.
+
 ## SQL
 
 One read-only `SELECT` in DuckDB SQL over three tables, for the chosen time range:

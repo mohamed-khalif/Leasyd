@@ -628,7 +628,13 @@ def _jsonable(v):
 # --------------------------------------------------------- coordinator
 
 def handler(event, context):
+    """Direct invocations (other Leasyd functions, e.g. alerts): a JSON query, or
+    {"tenant", "promql", "time"} for one PromQL evaluation (the Prometheus API's vector result)."""
     try:
+        if "promql" in event:
+            import promql
+            tenant = layout.check_tenant(event["tenant"])
+            return promql.query_instant(tenant, event["promql"], _epoch_of(event.get("time") or time.time(), "time"))
         return run(event)
     except BadQuery as e:
         return {"error": str(e)}

@@ -3,7 +3,8 @@ Description: >
   Alerts (A1): customers' alert rules on synthetic checks and SLOs, sent by email (an SNS topic per
   email channel, obs-alert-<tenant>-<id>), Slack or webhook (services/alerts/alerts.py). One Lambda,
   obs-alerts: the portal API /v1/app/alerts/... (routed by obs-phaseT2), the synthetic runner's
-  "a run was recorded" (obs-phaseS1), and an SLO evaluation every 5 minutes through obs-query.
+  "a run was recorded" (obs-phaseS1), and every minute check rules (PromQL) and every 5 minutes SLO
+  rules, through obs-query.
   Needs obs-phase0 (boundary: SNS obs-alert-*), obs-phase4 and obs-phaseS1 (the checks' KMS key).
   Deploy with infra/deploy-phaseA1.sh.
 
@@ -95,14 +96,21 @@ Resources:
     Type: AWS::Lambda::EventInvokeConfig
     Properties: { FunctionName: !Ref Function, Qualifier: $LATEST, MaximumRetryAttempts: 0 }
 
+  # Every minute: check rules (PromQL) due that minute, and SLO rules on every 5th minute. The
+  # scheduled time is passed in, so a late or retried invocation still knows which minute it is.
   Schedule:
     Type: AWS::Events::Rule
     Properties:
       Name: obs-alerts-slo
-      Description: Evaluate SLO alert rules
-      ScheduleExpression: rate(5 minutes)
+      Description: Evaluate check rules (every minute) and SLO alert rules (every 5 minutes)
+      ScheduleExpression: rate(1 minute)
       State: ENABLED
-      Targets: [{ Id: alerts, Arn: !GetAtt Function.Arn, Input: '{"action": "evaluate"}' }]
+      Targets:
+        - Id: alerts
+          Arn: !GetAtt Function.Arn
+          InputTransformer:
+            InputPathsMap: { time: $.time }
+            InputTemplate: '{"action": "evaluate", "time": "<time>"}'
 
   SchedulePermission:
     Type: AWS::Lambda::Permission

@@ -16,6 +16,10 @@ Settings (obs-tenants items, attribute tenant; managed in the portal through /v1
                             slo_burn       an SLO burned its budget faster than `burn_rate` over the
                                            last hour, or has less than `budget_below` % of it left;
                                            resolved when neither holds
+                            query          a check rule: a PromQL query over logs, spans and metrics;
+                                           each series it returns is critical when `value op critical`,
+                                           else degraded when `value op degraded`, held `for_minutes`;
+                                           resolved when neither holds (or the series is gone)
   astate#<tenant>#<rule>#<subject>   a rule's state per check or SLO (consecutive failures, firing)
 
 Runs excluded by hand or in a maintenance window never count. Each firing and resolution is also
@@ -25,7 +29,8 @@ with the rest of the data.
 Handlers (one Lambda, obs-alerts):
   api        /v1/app/alerts/{proxy+}: rules, channels, channels/{id}/test (Cognito; the tenant is the user's)
   on_result  invoked (async) by the synthetic runner after each recorded run
-  evaluate   every 5 minutes: SLO rules, through the query engine (obs-query) as the portal does
+  evaluate   every minute: check rules (PromQL), and every 5 minutes SLO rules, through the query
+             engine (obs-query) as the portal does
 """
 
 import base64
@@ -39,7 +44,9 @@ import secrets as _secrets
 import socket
 import ssl
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
@@ -138,7 +145,42 @@ def validate_rule(body, checks, slos, channels):
             raise Refused("budget_below: 0-100 (%)")
         return {**out, "slo": body["slo"], **({"burn_rate": rate} if rate is not None else {}),
                 **({"budget_below": below} if below is not None else {})}
-    raise Refused("type: check_failing or slo_burn")
+    if kind == "query":
+        promql = _text(body.get("promql"), "promql", 1, 2000)
+        op = body.get("op", ">")
+        if op not in OPS:
+            raise Refused(f"op: one of {' '.join(OPS)}")
+        def num(v, what, required):
+            if v in (None, ""):
+                if required:
+                    raise Refused(f"{what}: a number")
+                return None
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                raise Refused(f"{what}: a number")
+            if x != x or abs(x) == float("inf"):
+                raise Refused(f"{what}: a number")
+            return x
+        critical, degraded = num(body.get("critical"), "critical", True), num(body.get("degraded"), "degraded", False)
+        if degraded is not None and OPS[op](degraded, critical) and degraded != critical:
+            raise Refused(f"degraded must come before critical: with {op}, degraded {degraded:g} is already past critical {critical:g}")
+        minutes = int(body.get("for_minutes") or 0)
+        if not 0 <= minutes <= 60:
+            raise Refused("for_minutes: 0-60")
+        every = int(body.get("every_minutes") or 1)
+        if every not in (1, 5, 15):
+            raise Refused("every_minutes: 1, 5 or 15")
+        return {**out, "promql": promql, "op": op, "critical": critical, **({"degraded": degraded} if degraded is not None else {}),
+                "for_minutes": minutes, "every_minutes": every,
+                "summary": _text(body.get("summary") or "", "summary", 0, 300) or None}
+    raise Refused("type: check_failing, slo_burn or query")
+
+
+OPS = {">": lambda a, b: a > b, ">=": lambda a, b: a >= b, "<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
+       "==": lambda a, b: a == b, "!=": lambda a, b: a != b}
+LAG_S = 60            # check rules look at the data as of a minute ago (it is searchable within ~30 s)
+MAX_SERIES_PER_RULE = 500
 
 
 # ------------------------------------------------------------------ storage
@@ -306,12 +348,13 @@ def record(tenant, rule, state, subject, detail, link, results):
 
 # ------------------------------------------------------------------ check rules (after each run)
 
-def _state(tenant, rule_id, subject):
-    return client("table").get_item(Key={"pk": f"astate#{tenant}#{rule_id}#{subject}"}).get("Item") or {}
+def _state(tenant, rule_id, key):
+    return client("table").get_item(Key={"pk": f"astate#{tenant}#{rule_id}#{key}"}).get("Item") or {}
 
 
-def _set_state(tenant, rule_id, subject, **kw):
-    client("table").put_item(Item={"pk": f"astate#{tenant}#{rule_id}#{subject}", "tenant": tenant, **kw, "updated_at": _now()})
+def _set_state(tenant, rule_id, key, **kw):
+    """A rule's state for one check, SLO or series (key); kw: its fields."""
+    client("table").put_item(Item={"pk": f"astate#{tenant}#{rule_id}#{key}", "tenant": tenant, **kw, "updated_at": _now()})
 
 
 def on_result(event, context=None):
@@ -390,15 +433,26 @@ def _query(q):
 
 
 def evaluate(event=None, context=None):
-    """Every 5 minutes: each enabled slo_burn rule of each tenant."""
+    """Every minute: check rules (PromQL) due this minute; every 5 minutes also SLO rules."""
     now = datetime.now(timezone.utc)
-    rules, kw = [], {"FilterExpression": Attr("pk").begins_with("alert#")}
+    scheduled = isinstance(event, dict) and bool(event.get("time"))
+    if scheduled:                                              # EventBridge: the scheduled minute
+        now = datetime.fromisoformat(event["time"].replace("Z", "+00:00"))
+    minute = int(now.timestamp() // 60) if scheduled else 0    # run by hand: every rule now
+    all_rules, kw = [], {"FilterExpression": Attr("pk").begins_with("alert#")}
     while True:
         page = client("table").scan(**kw)
-        rules += [_plain(i) for i in page["Items"] if i.get("type") == "slo_burn" and i.get("enabled", True)]
+        all_rules += [_plain(i) for i in page["Items"] if i.get("enabled", True)]
         if "LastEvaluatedKey" not in page:
             break
         kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    checks = [r for r in all_rules if r.get("type") == "query" and minute % int(r.get("every_minutes") or 1) == 0]
+    with ThreadPoolExecutor(8) as pool:
+        list(pool.map(lambda r: _safe_eval_query(r, now), checks))
+    if minute % 5:
+        print(json.dumps({"check_rules": len(checks)}))
+        return {"check_rules": [_id_of(r) for r in checks], "evaluated": []}
+    rules = [r for r in all_rules if r.get("type") == "slo_burn"]
     done = []
     for rule in rules:
         tenant = rule["tenant"]
@@ -429,8 +483,118 @@ def evaluate(event=None, context=None):
             fire(tenant, rule, "resolved", subject, f"Back within limits. Now: {level}.", link)
             _set_state(tenant, rid, rule["slo"], firing=False)
         done.append(rid)
-    print(json.dumps({"evaluated": len(done)}))
-    return {"evaluated": done}
+    print(json.dumps({"check_rules": len(checks), "evaluated": len(done)}))
+    return {"check_rules": [_id_of(r) for r in checks], "evaluated": done}
+
+
+# ------------------------------------------------------------------ check rules (PromQL, every minute)
+
+LEVELS = {"ok": 0, "degraded": 1, "critical": 2}
+
+
+def run_promql(tenant, text, at):
+    """One instant PromQL evaluation in the query engine -> [(labels, value)]."""
+    out = _query({"tenant": tenant, "promql": text, "time": int(at)})
+    if out.get("error") and "data" not in out:
+        raise Refused(out["error"])
+    data = out.get("data") or {}
+    if data.get("resultType") == "scalar":
+        return [({}, float(data["result"][1]))]
+    return [(r["metric"], float(r["value"][1])) for r in data.get("result") or []]
+
+
+def level_of(rule, value):
+    if value != value:   # NaN: no answer
+        return "ok"
+    if OPS[rule["op"]](value, float(rule["critical"])):
+        return "critical"
+    if rule.get("degraded") is not None and OPS[rule["op"]](value, float(rule["degraded"])):
+        return "degraded"
+    return "ok"
+
+
+def series_name(labels):
+    shown = {k: v for k, v in labels.items() if k != "__name__"}
+    return ", ".join(f"{k}={v}" for k, v in sorted(shown.items())) or "the query"
+
+
+def _series_id(labels):
+    return hashlib.sha256(json.dumps(labels, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _safe_eval_query(rule, now):
+    try:
+        return evaluate_query_rule(rule, now)
+    except Exception as e:  # noqa: BLE001  one rule's failure mustn't stop the rest
+        print(json.dumps({"check_rule_failed": _id_of(rule), "tenant": rule.get("tenant"), "error": str(e)[:300]}))
+        return None
+
+
+def evaluate_query_rule(rule, now):
+    """Each series: ok / degraded / critical. A level must hold for_minutes before it is notified
+    (resolving to ok is notified at once). One message per rule and kind of change."""
+    tenant, rid = rule["tenant"], _id_of(rule)
+    at = (int(now.timestamp()) - LAG_S) // 10 * 10
+    results = run_promql(tenant, rule["promql"], at)[:MAX_SERIES_PER_RULE]
+    states = {s["pk"].split("#", 3)[3]: s for s in _items(tenant, f"astate#{tenant}#{rid}#")}
+    hold = int(rule.get("for_minutes") or 0) * 60
+    changes = {"critical": [], "degraded": [], "ok": []}
+    seen = set()
+    for labels, value in results:
+        sid = _series_id(labels)
+        seen.add(sid)
+        st, lvl = states.get(sid) or {}, level_of(rule, value)
+        notified = st.get("level", "ok")
+        pending, since = st.get("pending"), int(st.get("pending_since") or at)
+        if lvl == notified:
+            if lvl == "ok" and st:          # was pending, back to ok before it was notified
+                client("table").delete_item(Key={"pk": st["pk"]})
+            elif st and (pending or st.get("value") != value):
+                _set_state(tenant, rid, sid, level=notified, firing=notified != "ok", subject=series_name(labels), value=_dynamo(value))
+            continue
+        if lvl != pending:
+            pending, since = lvl, at
+        if lvl == "ok" or at - since >= hold:
+            changes[lvl].append((series_name(labels), value, notified))
+            if lvl == "ok":
+                client("table").delete_item(Key={"pk": f"astate#{tenant}#{rid}#{sid}"})
+            else:
+                _set_state(tenant, rid, sid, level=lvl, firing=True, subject=series_name(labels), value=_dynamo(value))
+        else:
+            _set_state(tenant, rid, sid, level=notified, firing=notified != "ok", subject=series_name(labels), value=_dynamo(value),
+                       pending=pending, pending_since=since)
+    for sid, st in states.items():   # series no longer in the result: resolved
+        if sid not in seen:
+            if st.get("level", "ok") != "ok":
+                changes["ok"].append((st.get("subject", "a series"), None, st["level"]))
+            client("table").delete_item(Key={"pk": st["pk"]})
+    link = f"{APP_URL}/#/query?promql={quote(rule['promql'])}"
+    cond = f"{rule['op']} {float(rule['critical']):g}"
+    for lvl in ("critical", "degraded", "ok"):
+        items = changes[lvl]
+        if not items:
+            continue
+        shown = items[:20]
+        lines = [f"{name} = {_fmt(v)}" + (f" (was {was})" if lvl != "ok" and was != "ok" else "") for name, v, was in shown]
+        more = f" and {len(items) - len(shown)} more" if len(items) > len(shown) else ""
+        subject = shown[0][0] if len(items) == 1 else f"{len(items)} series"
+        if lvl == "ok":
+            detail = f"Back to normal: {'; '.join(lines)}{more}."
+        else:
+            threshold = float(rule["critical"]) if lvl == "critical" else float(rule["degraded"])
+            held = f" for {int(rule['for_minutes'])} min" if int(rule.get("for_minutes") or 0) else ""
+            detail = f"{lvl.capitalize()}: the value is {rule['op']} {threshold:g}{held}: {'; '.join(lines)}{more}."
+        if rule.get("summary"):
+            detail = f"{rule['summary']}\n{detail}"
+        fire(tenant, rule, "resolved" if lvl == "ok" else "firing", f"{subject} ({lvl})" if lvl != "ok" else subject,
+             f"{detail}\nQuery: {rule['promql']} (critical {cond})", link)
+    return {k: len(v) for k, v in changes.items()}
+
+
+def _fmt(v):
+    if v is None:
+        return "no data"
+    return f"{v:.4g}" if abs(v) < 1e6 else f"{v:.3e}"
 
 
 # ------------------------------------------------------------------ API
@@ -489,6 +653,17 @@ def _route(tenant, user, method, parts, body):
             return _http(200, {"sent": error is None, "error": error})
         if len(parts) == 2 and method == "GET":
             return _http(200, _public_channel(item))
+    if kind == "rules" and len(parts) == 2 and parts[1] == "preview" and method == "POST":
+        # A check rule's query, now: each series with its value and level (for the rule form).
+        rule = {"op": body.get("op", ">"), "critical": body.get("critical"), "degraded": body.get("degraded")}
+        if rule["op"] not in OPS:
+            raise Refused(f"op: one of {' '.join(OPS)}")
+        rule["critical"] = float(rule["critical"]) if rule["critical"] not in (None, "") else float("inf")
+        rule["degraded"] = float(rule["degraded"]) if rule["degraded"] not in (None, "") else None
+        at = (int(time.time()) - LAG_S) // 10 * 10
+        series = run_promql(tenant, _text(body.get("promql"), "promql", 1, 2000), at)
+        return _http(200, {"time": at, "series": [{"labels": l, "name": series_name(l), "value": v, "level": level_of(rule, v)}
+                                                  for l, v in series[:MAX_SERIES_PER_RULE]], "total": len(series)})
     if kind == "rules":
         channels = {_id_of(c) for c in _items(tenant, f"channel#{tenant}#")}
         checks = {_id_of(c) for c in _items(tenant, f"check#{tenant}#")}
@@ -499,10 +674,13 @@ def _route(tenant, user, method, parts, body):
             firing = {}
             for s in _items(tenant, f"astate#{tenant}#"):
                 if s.get("firing"):
-                    firing.setdefault(s["pk"].split("#")[2], []).append(s["pk"].split("#", 3)[3])
+                    subject = s.get("subject") or s["pk"].split("#", 3)[3]
+                    firing.setdefault(s["pk"].split("#")[2], []).append(f"{subject} ({s['level']})" if s.get("level") else subject)
             return _http(200, {"items": [{**r, "firing": firing.get(r["id"], [])} for r in rules], "limit": MAX_RULES})
         if len(parts) == 1 and method == "POST":
             rule = validate_rule(body, checks, slos, channels)
+            if rule["type"] == "query":      # the query must run (a typo is caught now, not at 3 am)
+                run_promql(tenant, rule["promql"], (int(time.time()) - LAG_S) // 10 * 10)
             if len(_items(tenant, f"alert#{tenant}#")) >= MAX_RULES:
                 raise Refused(f"at most {MAX_RULES} rules")
             item = {"pk": f"alert#{tenant}#{_secrets.token_hex(6)}", "tenant": tenant, **rule, "created_by": user, "created_at": _now()}
@@ -514,7 +692,10 @@ def _route(tenant, user, method, parts, body):
         if method == "GET":
             return _http(200, view(item))
         if method == "PUT":
-            item = {**item, **validate_rule({**view(item), **body}, checks, slos, channels), "updated_at": _now()}
+            new = validate_rule({**view(item), **body}, checks, slos, channels)
+            if new["type"] == "query":
+                run_promql(tenant, new["promql"], (int(time.time()) - LAG_S) // 10 * 10)
+            item = {**{k: v for k, v in item.items() if k in ("pk", "tenant", "created_by", "created_at")}, **new, "updated_at": _now()}
             client("table").put_item(Item=_dynamo(item))
             return _http(200, view(item))
         if method == "DELETE":

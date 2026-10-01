@@ -1,9 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AlertChannel, AlertRule, alerts, Check, checks, records, Slo, slos } from "../api";
+import { AlertChannel, AlertRule, alerts, Check, checks, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
 import type { Ctx } from "../App";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
-import { rangeWindow } from "../time";
+import { Series, TimeSeries } from "../components/TimeSeries";
+import { fmtNum, rangeWindow } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "./Logs";
 
@@ -43,6 +44,10 @@ function useSettings(tick: number) {
 }
 
 export function describeRule(r: AlertRule, all: { checks: Check[]; slos: Slo[] }): string {
+  if (r.type === "query") {
+    const q = (r.promql ?? "").length > 70 ? `${r.promql!.slice(0, 70)}…` : r.promql;
+    return `${q} ${r.op} ${r.critical} (critical)${r.degraded != null ? `, ${r.op} ${r.degraded} (degraded)` : ""}${r.for_minutes ? ` for ${r.for_minutes} min` : ""}`;
+  }
   if (r.type === "check_failing") {
     const which = r.checks?.[0] === "*" ? "any check" : (r.checks ?? []).map((id) => all.checks.find((c) => c.id === id)?.name ?? "(deleted check)").join(", ");
     return `${which} fails ${r.failures} run${r.failures === 1 ? "" : "s"} in a row`;
@@ -61,7 +66,7 @@ function Rules({ ctx }: { ctx: Ctx }) {
     <Panel title="Alert rules" flush>
       {!s.rules.length ? (
         <div className="state" style={{ minHeight: 180, flexDirection: "column", gap: 10 }}>
-          <div>No alert rules yet. A rule sends a message when a check keeps failing or an SLO burns its error budget, and again when it recovers.</div>
+          <div>No alert rules yet. A rule sends a message when a check keeps failing, an SLO burns its error budget, or any query (PromQL over logs, spans and metrics) crosses a threshold, and again when it recovers.</div>
           {s.channels.length ? <button className="btn primary" onClick={() => ctx.go("/alerts/rules/new")}>Create a rule</button>
                              : <button className="btn primary" onClick={() => ctx.go("/alerts/channels")}>First, add where alerts go</button>}
         </div>
@@ -70,7 +75,7 @@ function Rules({ ctx }: { ctx: Ctx }) {
                    rows={s.rules.map((r) => [
                      <span className="dot" style={{ background: !r.enabled ? "var(--text-3)" : r.firing?.length ? "var(--sev-error)" : "var(--ok, #3fb68b)" }} />,
                      <span className="link">{r.name} ›</span>, describeRule(r, s), r.channels.map((c) => names.get(c) ?? "(deleted)").join(", "),
-                     !r.enabled ? "off" : r.firing?.length ? <b style={{ color: "var(--sev-error)" }}>firing ({r.firing.length})</b> : "ok"])} />
+                     !r.enabled ? "off" : r.firing?.length ? <b style={{ color: "var(--sev-error)" }} title={r.firing.join("\n")}>firing ({r.firing.length})</b> : "ok"])} />
       )}
     </Panel>
   );
@@ -79,8 +84,9 @@ function Rules({ ctx }: { ctx: Ctx }) {
 function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearchParams }) {
   const { s, error: loadError } = useSettings(0);
   const [r, setR] = useState<Omit<AlertRule, "id">>({
-    name: "", type: params.get("slo") ? "slo_burn" : "check_failing", channels: [], enabled: true,
+    name: params.get("name") ?? "", type: params.get("promql") ? "query" : params.get("slo") ? "slo_burn" : "check_failing", channels: [], enabled: true,
     checks: params.get("check") ? [params.get("check")!] : ["*"], failures: 2, slo: params.get("slo") ?? undefined, burn_rate: 10, budget_below: 25,
+    promql: params.get("promql") ?? "", op: ">", critical: undefined, degraded: null, for_minutes: 2, every_minutes: 1,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,8 +100,11 @@ function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearc
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setBusy(true); setError(null);
-    const body = r.type === "check_failing" ? { ...r, slo: undefined, burn_rate: undefined, budget_below: undefined }
-                                            : { ...r, checks: undefined, failures: undefined };
+    const clean = { slo: undefined, burn_rate: undefined, budget_below: undefined, checks: undefined, failures: undefined,
+                    promql: undefined, op: undefined, critical: undefined, degraded: undefined, for_minutes: undefined, every_minutes: undefined };
+    const body = r.type === "check_failing" ? { ...r, ...clean, checks: r.checks, failures: r.failures }
+      : r.type === "slo_burn" ? { ...r, ...clean, slo: r.slo, burn_rate: r.burn_rate, budget_below: r.budget_below }
+      : { ...r, ...clean, promql: r.promql, op: r.op, critical: r.critical, degraded: r.degraded, for_minutes: r.for_minutes, every_minutes: r.every_minutes };
     try {
       if (id) await alerts.updateRule(id, body); else await alerts.addRule(body);
       ctx.go("/alerts/rules");
@@ -137,8 +146,11 @@ function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearc
                     title={s.slos.length ? "" : "Create an SLO first"} onClick={() => set({ type: "slo_burn" })}>
               <b>An SLO is at risk</b><span>Alert when it uses its error budget too fast, or has little left.</span>
             </button>
+            <button type="button" role="radio" aria-checked={r.type === "query"} className={r.type === "query" ? "on" : ""} onClick={() => set({ type: "query" })}>
+              <b>A query crosses a threshold</b><span>Any PromQL over logs, spans and metrics: alert on each series that is degraded or critical.</span>
+            </button>
           </div>
-          {r.type === "check_failing" ? (<>
+          {r.type === "query" ? <QueryRuleFields r={r} set={set} ctx={ctx} /> : r.type === "check_failing" ? (<>
             <div className="form-grid" style={{ marginTop: 10 }}>
               <label>Failed runs in a row
                 <input className="input" type="number" min={1} max={10} required value={r.failures ?? 2} onChange={(e) => set({ failures: Number(e.target.value) })} />
@@ -275,5 +287,97 @@ function History({ ctx }: { ctx: Ctx }) {
                           })} />}
       </Loads>
     </Panel>
+  );
+}
+
+const OPS: [string, string][] = [[">", "above"], [">=", "at or above"], ["<", "below"], ["<=", "at or below"], ["==", "equal to"], ["!=", "not equal to"]];
+
+/** A check rule: the query, its thresholds, and what it gives now (chart of the last 3 hours, each series' level). */
+function QueryRuleFields({ r, set, ctx }: { r: Omit<AlertRule, "id">; set: (p: Partial<AlertRule>) => void; ctx: Ctx }) {
+  const [shown, setShown] = useState(r.promql ?? "");
+  const [chart, setChart] = useState<{ series: Series[]; error?: string } | null>(null);
+  const [now, setNow] = useState<RulePreview | { error: string } | null>(null);
+  const run = (text: string) => {
+    setShown(text); setChart(null); setNow(null);
+    if (!text.trim()) return;
+    const end = Date.now(), start = end - 3 * 3600_000;
+    runPromQL({ promql: text, start: new Date(start).toISOString(), end: new Date(end).toISOString(), step: 60 }).then(
+      (res) => setChart({ series: res.data.result.slice(0, 10).map((s, i) => ({
+        label: Object.entries(s.metric).filter(([k]) => k !== "__name__").map(([k, v]) => `${k}=${v}`).join(", ") || "value",
+        color: `var(--series-${(i % 6) + 1})`, points: s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1])) })) }),
+      (e: Error) => setChart({ series: [], error: e.message }));
+  };
+  useEffect(() => { if (r.promql) run(r.promql); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!shown.trim() || r.critical == null || Number.isNaN(r.critical)) return;
+    let live = true;
+    alerts.preview({ promql: shown, op: r.op ?? ">", critical: r.critical, degraded: r.degraded ?? null })
+      .then((p) => live && setNow(p), (e: Error) => live && setNow({ error: e.message }));
+    return () => { live = false; };
+  }, [shown, r.op, r.critical, r.degraded]);
+  const num = (v: string) => (v === "" ? undefined : Number(v));
+  const range = { key: "3h", label: "Last 3 hours", minutes: 180 };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <label className="step-body block" style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "var(--text-2)" }}>PromQL
+        <textarea className="input mono qb-editor" rows={3} required spellCheck={false} value={r.promql ?? ""} onChange={(e) => set({ promql: e.target.value })}
+                  placeholder='100 * sum by (service_name) (rate(leasyd.spans{status_code="ERROR"}[5m])) / sum by (service_name) (rate(leasyd.spans[5m]))' />
+      </label>
+      <div className="qb-editor-bar">
+        <button type="button" className="btn" onClick={() => run(r.promql ?? "")}>Preview</button>
+        <a href={`#/query?promql=${encodeURIComponent(r.promql ?? "")}`} onClick={(e) => { e.preventDefault(); ctx.go(`/query?promql=${encodeURIComponent(r.promql ?? "")}`); }}>Open in Query Builder</a>
+        <span className="faint">Checked every {r.every_minutes ?? 1} min on the data as of a minute before. Use a range like [5m] for rates.</span>
+      </div>
+      <div className="form-grid" style={{ marginTop: 10, gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}>
+        <label>Alert when the value is
+          <select className="select" value={r.op ?? ">"} onChange={(e) => set({ op: e.target.value })}>{OPS.map(([o, l]) => <option key={o} value={o}>{l} ({o})</option>)}</select>
+        </label>
+        <label>Critical at
+          <input className="input" type="number" step="any" required value={r.critical ?? ""} onChange={(e) => set({ critical: num(e.target.value) })} placeholder="5" />
+        </label>
+        <label>Degraded at (optional)
+          <input className="input" type="number" step="any" value={r.degraded ?? ""} onChange={(e) => set({ degraded: e.target.value === "" ? null : Number(e.target.value) })} placeholder="2" />
+        </label>
+        <label>For at least
+          <select className="select" value={r.for_minutes ?? 0} onChange={(e) => set({ for_minutes: Number(e.target.value) })}>
+            {[0, 1, 2, 5, 10, 15, 30, 60].map((m) => <option key={m} value={m}>{m ? `${m} min` : "at once"}</option>)}
+          </select>
+        </label>
+        <label>Check every
+          <select className="select" value={r.every_minutes ?? 1} onChange={(e) => set({ every_minutes: Number(e.target.value) })}>
+            {[1, 5, 15].map((m) => <option key={m} value={m}>{m} min</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="panel" style={{ marginTop: 12 }}>
+        <header className="panel-head"><span>Last 3 hours</span><span className="spacer" />
+          <span className="faint"><i className="swatch" style={{ background: "var(--sev-error)" }} />critical{r.degraded != null ? <> <i className="swatch" style={{ background: "var(--sev-warn)", marginLeft: 8 }} />degraded</> : null}</span></header>
+        <div className="panel-body">
+          {!shown.trim() ? <div className="state" style={{ minHeight: 120 }}>Write a query and press Preview</div>
+            : !chart ? <div className="skeleton" style={{ height: 180 }} />
+            : chart.error ? <div className="state error" style={{ minHeight: 120 }}>{chart.error}</div>
+            : !chart.series.length ? <div className="state" style={{ minHeight: 120 }}>The query returns nothing in the last 3 hours</div>
+            : <TimeSeries series={chart.series} range={range} height={180}
+                          thresholds={[...(r.critical != null && !Number.isNaN(r.critical) ? [{ value: r.critical, color: "var(--sev-error)" }] : []),
+                                       ...(r.degraded != null ? [{ value: r.degraded, color: "var(--sev-warn)" }] : [])]} />}
+        </div>
+      </div>
+      {now && (
+        <div className="panel" style={{ marginTop: 12 }}>
+          <header className="panel-head"><span>Right now</span></header>
+          {"error" in now ? <div className="state error" style={{ minHeight: 60 }}>{now.error}</div> : !now.series.length
+            ? <div className="state" style={{ minHeight: 60 }}>No series: nothing would fire</div> : (
+            <div className="table-scroll" style={{ maxHeight: 220 }}>
+              <table className="dtable"><colgroup><col /><col style={{ width: 120 }} /><col style={{ width: 110 }} /></colgroup>
+                <thead><tr><th>Series</th><th className="num">Value</th><th>Would be</th></tr></thead>
+                <tbody>{now.series.map((x) => (
+                  <tr key={x.name} style={{ cursor: "default" }}><td>{x.name}</td><td className="num">{fmtNum(x.value)}</td>
+                    <td><span className={`pill ${x.level === "critical" ? "bad" : x.level === "ok" ? "ok" : ""}`}
+                              style={x.level === "degraded" ? { color: "var(--sev-warn)", borderColor: "var(--sev-warn)" } : undefined}>{x.level}</span></td></tr>))}</tbody>
+              </table>
+            </div>)}
+        </div>
+      )}
+    </div>
   );
 }

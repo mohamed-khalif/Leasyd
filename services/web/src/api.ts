@@ -117,9 +117,13 @@ export const slos = settingsApi<Slo>("/v1/app/slos");
 // Alerts (/v1/app/alerts/...): where they go (channels) and when (rules).
 export type AlertChannel = { id: string; name: string; type: "email" | "slack" | "webhook"; email?: string; url_hint?: string;
                              status?: string; signing_secret?: string; created_at?: string };
-export type AlertRule = { id: string; name: string; type: "check_failing" | "slo_burn"; channels: string[]; enabled: boolean;
+export type AlertRule = { id: string; name: string; type: "check_failing" | "slo_burn" | "query"; channels: string[]; enabled: boolean;
                           checks?: string[]; failures?: number; slo?: string; burn_rate?: number; budget_below?: number;
+                          // check rules (type "query"): a PromQL query and thresholds on each series it returns
+                          promql?: string; op?: string; critical?: number; degraded?: number | null; for_minutes?: number;
+                          every_minutes?: number; summary?: string | null;
                           firing?: string[]; created_at?: string };
+export type RulePreview = { time: number; total: number; series: { labels: Record<string, string>; name: string; value: number; level: "ok" | "degraded" | "critical" }[] };
 export const alerts = {
   channels: () => call<{ items: AlertChannel[]; limit: number }>("/v1/app/alerts/channels"),
   addChannel: (c: { type: string; name: string; email?: string; url?: string }) => call<AlertChannel>("/v1/app/alerts/channels", json("POST", c)),
@@ -130,6 +134,8 @@ export const alerts = {
   addRule: (r: Omit<AlertRule, "id">) => call<AlertRule>("/v1/app/alerts/rules", json("POST", r)),
   updateRule: (id: string, r: Partial<AlertRule>) => call<AlertRule>(`/v1/app/alerts/rules/${id}`, json("PUT", r)),
   removeRule: (id: string) => call<{ deleted: string }>(`/v1/app/alerts/rules/${id}`, json("DELETE")),
+  preview: (r: { promql: string; op: string; critical?: number; degraded?: number | null }) =>
+    call<RulePreview>("/v1/app/alerts/rules/preview", json("POST", r)),
 };
 
 /** Where-conditions that leave excluded runs out: maintenance windows, and runs excluded by hand. */

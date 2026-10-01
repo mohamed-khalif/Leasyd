@@ -115,7 +115,7 @@ def test_rules_validation_and_isolation(aws, hook):
     s, r = call("acme", "POST", "rules", good)
     assert s == 201 and r["failures"] == 3
     for change, why in [({"channels": []}, "channels"), ({"checks": ["nope00000000"]}, "checks"), ({"failures": 20}, "1-10"),
-                        ({"type": "slo_burn", "slo": "sssstttttttt"}, "burn_rate, budget_below"), ({"type": "x"}, "check_failing or slo_burn")]:
+                        ({"type": "slo_burn", "slo": "sssstttttttt"}, "burn_rate, budget_below"), ({"type": "x"}, "check_failing, slo_burn or query")]:
         s, e = call("acme", "POST", "rules", {**good, **change})
         assert s == 400 and why in e["error"], (change, e)
     assert call("globex", "POST", "rules", good)[0] == 400                 # not their channel
@@ -180,3 +180,118 @@ def test_slo_burn(aws, hook, monkeypatch):
     alerts.evaluate()
     assert len(Hook.got) == 2 and json.loads(Hook.got[1][2])["state"] == "resolved"
     assert alerts.evaluate_numbers(99.9, 997, 1000)["budget_left"] == pytest.approx(-2.0)
+
+
+# ------------------------------------------------------------------ check rules (PromQL)
+
+class FakeProm:
+    """The query engine's answer to {"tenant", "promql", "time"}: whatever the test sets."""
+    def __init__(self):
+        self.series, self.calls, self.error = [], [], None
+
+    def __call__(self, q):
+        self.calls.append(q)
+        if self.error:
+            return {"error": self.error}
+        assert "promql" in q and isinstance(q["time"], int)
+        return {"status": "success", "data": {"resultType": "vector",
+                "result": [{"metric": m, "value": [q["time"], str(v)]} for m, v in self.series]}}
+
+
+def query_rule(tenant, channel, **kw):
+    body = {"name": "Error rate", "type": "query", "channels": [channel], "promql": "sum by (service_name) (rate(leasyd.spans[5m]))",
+            "op": ">", "critical": 5, "degraded": 2, **kw}
+    s, r = call(tenant, "POST", "rules", body)
+    assert s == 201, r
+    return r
+
+
+def test_check_rule_validation(aws, monkeypatch):
+    prom = FakeProm()
+    monkeypatch.setattr(alerts, "_query", prom)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    for bad, why in [({"op": "~"}, "op: one of"), ({"critical": "high"}, "critical: a number"), ({"critical": None}, "critical: a number"),
+                     ({"degraded": 9}, "degraded must come before critical"), ({"for_minutes": 90}, "for_minutes"),
+                     ({"every_minutes": 2}, "every_minutes"), ({"promql": ""}, "promql")]:
+        body = {"name": "x", "type": "query", "channels": [ch], "promql": "up", "op": ">", "critical": 5, **bad}
+        s, e = call("acme", "POST", "rules", body)
+        assert s == 400 and why in e["error"], (bad, e)
+    prom.error = "expected , or ) but found the end at position 11"
+    s, e = call("acme", "POST", "rules", {"name": "x", "type": "query", "channels": [ch], "promql": "rate(x[5m]", "op": ">", "critical": 1})
+    assert s == 400 and "expected , or )" in e["error"]                       # a broken query is refused when saved
+    prom.error = None
+    assert query_rule("acme", ch)["promql"].startswith("sum by")
+    assert call("globex", "GET", "rules")[1]["items"] == []                   # rules are per tenant
+    prom.series = [({"service_name": "checkout"}, 7.0), ({"service_name": "cart"}, 3.0), ({"service_name": "ad"}, 0.5)]
+    s, p = call("acme", "POST", "rules/preview", {"promql": "x", "op": ">", "critical": 5, "degraded": 2})
+    assert s == 200 and [(x["name"], x["level"]) for x in p["series"]] == [("service_name=checkout", "critical"), ("service_name=cart", "degraded"), ("service_name=ad", "ok")]
+    assert prom.calls[-1]["tenant"] == "acme"                                 # always the caller's tenant
+
+
+def test_check_rule_fires_escalates_and_resolves_per_series(aws, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    prom, sent = FakeProm(), []
+    monkeypatch.setattr(alerts, "_query", prom)
+    monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    rule = query_rule("acme", ch)
+    item = alerts._plain(alerts._get(f"alert#acme#{rule['id']}", "acme"))
+    t0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    ev = lambda m: alerts.evaluate_query_rule(item, t0 + timedelta(minutes=m))  # noqa: E731
+    prom.series = [({"service_name": "checkout"}, 7.0), ({"service_name": "cart"}, 3.0), ({"service_name": "ad"}, 0.5)]
+    assert ev(0) == {"critical": 1, "degraded": 1, "ok": 0}
+    titles = [m["title"] for m in sent]
+    assert any("FIRING" in t and "service_name=checkout (critical)" in t for t in titles)
+    assert any("FIRING" in t and "service_name=cart (degraded)" in t for t in titles)
+    assert "rate(leasyd.spans" in sent[0]["text"] and "/#/query?promql=" in sent[0]["text"]
+    s, listing = call("acme", "GET", "rules")
+    assert sorted(listing["items"][0]["firing"]) == ["service_name=cart (degraded)", "service_name=checkout (critical)"]
+    sent.clear()
+    assert ev(1) == {"critical": 0, "degraded": 0, "ok": 0} and not sent      # nothing changed: no message
+    prom.series = [({"service_name": "checkout"}, 6.0), ({"service_name": "cart"}, 9.0)]
+    assert ev(2) == {"critical": 1, "degraded": 0, "ok": 0}                    # cart escalates
+    assert "(was degraded)" in sent[0]["text"]
+    sent.clear()
+    prom.series = [({"service_name": "checkout"}, 1.0)]
+    assert ev(3) == {"critical": 0, "degraded": 0, "ok": 2}                    # checkout ok, cart gone: both resolved, one message
+    assert len(sent) == 1 and "RESOLVED" in sent[0]["title"] and "2 series" in sent[0]["title"]
+    assert call("acme", "GET", "rules")[1]["items"][0]["firing"] == []
+    assert not alerts._items("acme", f"astate#acme#{rule['id']}#")            # no state kept for healthy series
+    logs = [json.loads(__import__("gzip").decompress(r)) if r[:2] == b"\x1f\x8b" else json.loads(r) for _, rs in aws for r in rs]
+    assert len(logs) == 4                                                      # history: critical, degraded, escalated, resolved
+
+
+def test_check_rule_waits_for_minutes(aws, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    prom, sent = FakeProm(), []
+    monkeypatch.setattr(alerts, "_query", prom)
+    monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    item = alerts._plain(alerts._get(f"alert#acme#{query_rule('acme', ch, for_minutes=3, degraded=None)['id']}", "acme"))
+    t0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    prom.series = [({}, 9.0)]
+    for m in (0, 1, 2):
+        alerts.evaluate_query_rule(item, t0 + timedelta(minutes=m))
+    assert not sent                                                            # held 2 minutes: not yet
+    prom.series = [({}, 1.0)]
+    alerts.evaluate_query_rule(item, t0 + timedelta(minutes=3))                # a blip back to normal resets the clock
+    prom.series = [({}, 9.0)]
+    for m in (4, 5, 6):
+        alerts.evaluate_query_rule(item, t0 + timedelta(minutes=m))
+    assert not sent
+    alerts.evaluate_query_rule(item, t0 + timedelta(minutes=7))                # held 3 minutes
+    assert len(sent) == 1 and "the query (critical)" in sent[0]["title"] and "for 3 min" in sent[0]["text"]
+
+
+def test_schedule_runs_check_rules_every_minute_and_slos_every_five(aws, monkeypatch):
+    prom = FakeProm()
+    monkeypatch.setattr(alerts, "_query", prom)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    every1, every5 = query_rule("acme", ch)["id"], query_rule("acme", ch, every_minutes=5)["id"]
+    s, off = call("acme", "POST", "rules", {"name": "off", "type": "query", "channels": [ch], "promql": "x", "op": ">", "critical": 1, "enabled": False})
+    seen = {}
+    monkeypatch.setattr(alerts, "slo_status", lambda *a: seen.setdefault("slo", True) and {"attainment": None, "budget_left": None, "burn1h": None})
+    out = alerts.evaluate({"time": "2026-10-01T12:01:00Z"})
+    assert out["check_rules"] == [every1] and out["evaluated"] == []           # minute 1: 1-minute rules only
+    out = alerts.evaluate({"time": "2026-10-01T12:05:00Z"})
+    assert sorted(out["check_rules"]) == sorted([every1, every5])             # minute 5: both, and SLO rules too
