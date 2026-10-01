@@ -279,7 +279,7 @@ Resources:
       EvaluationPeriods: 2
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: breaching
+      TreatMissingData: notBreaching   # the canary not running is obs-canary-logs' alarm
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
       OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
 
@@ -296,7 +296,7 @@ Resources:
       EvaluationPeriods: 2
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: breaching
+      TreatMissingData: notBreaching   # the canary not running is obs-canary-logs' alarm
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
       OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
 
