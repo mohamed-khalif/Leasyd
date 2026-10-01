@@ -3,8 +3,8 @@ Description: >
   Failure visibility (T7): a freshness canary that sends a log and a span every minute through
   the real endpoint and checks the one sent 2 minutes earlier is findable, and that the web app
   and app API answer; error alarms on ingest, query and the other functions; alarms when a
-  scheduled job stops running, on Lambda throttling and on email reputation; a monthly cost
-  budget; and the Leasyd-health dashboard. Alarms go to the obs-alerts topic (Phase 2). Compaction and fast-lane alarms
+  scheduled job stops running, on Lambda throttling and on email reputation; and the
+  Leasyd-health dashboard. (The monthly cost budget is obs-phase0's obs-account-monthly.) Alarms go to the obs-alerts topic (Phase 2). Compaction and fast-lane alarms
   live in Phase 2 next to what they watch.
 
 Parameters:
@@ -18,20 +18,10 @@ Parameters:
     Type: String
     Default: ""
     Description: The web app's address (obs-phaseW1 output WebUrl); empty = not checked.
-  AlertEmail:
-    Type: String
-    Default: ""
-    Description: Who gets the monthly cost budget emails (alarms go to the obs-alerts topic). Empty = no budget.
-  MonthlyBudgetUsd:
-    Type: Number
-    Default: 100
   CanaryRate:
     Type: String
     Default: rate(1 minute)
     AllowedValues: [rate(1 minute), rate(5 minutes)]
-
-Conditions:
-  HasEmail: !Not [!Equals [!Ref AlertEmail, ""]]
 
 Resources:
   CanaryRole:
@@ -540,22 +530,6 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
       OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
-
-  # ---- The AWS bill: an email at 80% of the monthly budget (actual) and at 100% (forecast).
-  Budget:
-    Type: AWS::Budgets::Budget
-    Condition: HasEmail
-    Properties:
-      Budget:
-        BudgetName: obs-monthly
-        BudgetType: COST
-        TimeUnit: MONTHLY
-        BudgetLimit: { Amount: !Ref MonthlyBudgetUsd, Unit: USD }
-      NotificationsWithSubscribers:
-        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80, ThresholdType: PERCENTAGE }
-          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
-        - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
-          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
 
   # ---- One page with the platform's health (CloudWatch > Dashboards > Leasyd-health).
   HealthDashboard:
