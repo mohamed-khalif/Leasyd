@@ -2,29 +2,22 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Phase AI: Leasyd's AI SRE (obs-ai). Answers questions about a tenant's logs, traces, metrics,
   synthetic checks and alerts by investigating them with read-only tools (through obs-query, for the
-  signed-in user's tenant only) and Claude on Claude Platform on AWS (SigV4, this role). Routes
+  signed-in user's tenant only) and Claude on Amazon Bedrock (its Messages API endpoint, this role). Routes
   /v1/app/ai/conversations[/{id}] are in obs-phaseT2; the permission for them to invoke this function
-  is here. Requires obs-phase0 (its boundary allows aws-external-anthropic:CreateInference),
+  is here. Requires obs-phase0 (its boundary allows bedrock-mantle:CreateInference),
   obs-phase4 and obs-phaseT2. Deploy with infra/deploy-phaseAI.sh.
 
 Parameters:
-  ClaudeWorkspaceId:
-    Type: String
-    Default: ""
-    Description: The Claude Platform on AWS workspace (wrkspc_...). Empty = the AI SRE says it isn't set up.
-  ClaudeRegion:
-    Type: String
-    Default: us-east-1
-    Description: The region the workspace is bound to.
   ClaudeModel:
     Type: String
-    Default: claude-opus-5-5
+    Default: anthropic.claude-opus-5-5
+    Description: The Bedrock model ID (model access enabled in the Bedrock console). Empty = the AI SRE is off.
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
   ApiId:
     Type: String
     Description: obs-phaseT2 output ApiId.
-
-Conditions:
-  HasWorkspace: !Not [!Equals [!Ref ClaudeWorkspaceId, ""]]
 
 Resources:
   Role:
@@ -61,13 +54,10 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-ai"
-              - !If
-                - HasWorkspace
-                - Sid: Claude
-                  Effect: Allow
-                  Action: [aws-external-anthropic:CreateInference, aws-external-anthropic:CountTokens]
-                  Resource: !Sub "arn:aws:aws-external-anthropic:${ClaudeRegion}:${AWS::AccountId}:workspace/${ClaudeWorkspaceId}"
-                - !Ref AWS::NoValue
+              - Sid: Claude          # Bedrock's Messages API endpoint (Mantle), this account's projects
+                Effect: Allow
+                Action: bedrock-mantle:CreateInference
+                Resource: !Sub "arn:aws:bedrock-mantle:${BedrockRegion}:${AWS::AccountId}:project/*"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: AI }
@@ -96,8 +86,7 @@ Resources:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
           TENANTS_TABLE: obs-tenants
           QUERY_FUNCTION: obs-query
-          CLAUDE_WORKSPACE_ID: !Ref ClaudeWorkspaceId
-          CLAUDE_REGION: !Ref ClaudeRegion
+          BEDROCK_REGION: !Ref BedrockRegion
           CLAUDE_MODEL: !Ref ClaudeModel
       Tags:
         - { Key: project, Value: obs }

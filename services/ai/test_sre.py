@@ -8,7 +8,7 @@ import pytest
 from moto import mock_aws
 
 os.environ.update(AWS_DEFAULT_REGION="us-east-1", AWS_ACCESS_KEY_ID="testing", AWS_SECRET_ACCESS_KEY="testing",
-                  BUCKET="obs-data-test", TENANTS_TABLE="obs-tenants", CLAUDE_WORKSPACE_ID="wrkspc_test")
+                  BUCKET="obs-data-test", TENANTS_TABLE="obs-tenants")
 os.environ.pop("AWS_SESSION_TOKEN", None)
 
 
@@ -79,10 +79,11 @@ def test_a_question_is_investigated_with_tools_and_answered(sre):
             return {"services": [{"service": "checkout", "p95_ms": 2100}]} if name == "list_services" else {"spans": [{"trace_id": "ab"}]}
     out = sre.run_turn("acme", conv["id"], claude=claude, tools=Tools())
     assert out["done"] == conv["id"] and [c[0] for c in calls] == ["list_services", "search_spans", "run_sql"]
-    # The request: Opus 5.5 with progress updates, fallbacks, caching; the question carries time and range.
+    # The request: Opus 5.5 on Bedrock with progress updates, the system prompt cached; the question carries time and range.
     r0 = claude.requests[0]
-    assert r0["model"] == "claude-opus-5-5" and r0["fallbacks"] == "default" and r0["thinking"] == {"type": "adaptive", "display": "updates"}
-    assert "server-side-fallback-2026-07-01" in r0["betas"] and r0["cache_control"] == {"type": "ephemeral"}
+    assert r0["model"] == "anthropic.claude-opus-5-5" and r0["thinking"] == {"type": "adaptive", "display": "updates"}
+    assert r0["betas"] == ["thinking-display-updates-2026-08-18"] and "fallbacks" not in r0 and "cache_control" not in r0
+    assert r0["system"][0]["cache_control"] == {"type": "ephemeral"} and "AI SRE" in r0["system"][0]["text"]
     assert "Time range on screen: 2026-10-01T08:00:00Z to 2026-10-01T09:00:00Z" in r0["messages"][0]["content"][0]["text"]
     # History is append-only: each request starts with the previous one's messages, unchanged.
     for a, b in zip(claude.requests, claude.requests[1:]):
@@ -109,8 +110,11 @@ def test_out_of_steps_it_answers_with_what_it_has(sre, monkeypatch):
     ran = []
     sre.run_turn("acme", conv["id"], claude=claude, tools=types.SimpleNamespace(run=lambda n, a: ran.append(n) or {"services": []}))
     assert len(ran) == 2                                         # the third call after the stop was refused
-    stop = claude.requests[2]["messages"][-1]
-    assert stop["role"] == "system" and "Stop investigating" in stop["content"]
+    stop = claude.requests[2]["messages"][-1]             # said with the last tool results
+    assert stop["role"] == "user" and stop["content"][-1]["text"].startswith("Stop investigating")
+    assert stop["content"][0]["type"] == "tool_result"
+    for a, b in zip(claude.requests, claude.requests[1:]):
+        assert b["messages"][:len(a["messages"])] == a["messages"]
     assert claude.requests[3]["messages"][-1]["content"][0]["is_error"]
     v = sre.view(sre.load("acme", conv["id"]))
     assert v["view"][-1] == {"type": "answer", "text": "So far: nothing unusual."} and v["status"] == "done"
@@ -130,6 +134,40 @@ def test_refusals_and_failures_are_shown(sre):
     assert v["status"] == "failed" and v["view"][-1]["text"].startswith("Something went wrong")
 
 
+class ApiError(Exception):
+    def __init__(self, status, msg):
+        super().__init__(msg)
+        self.status_code = status
+
+
+def test_without_progress_updates_it_falls_back_to_summaries(sre):
+    s, conv = api(sre, "POST", {"message": "hi"})
+    claude = Claude([Resp([{"type": "text", "text": "Fine."}], "end_turn")] * 2)
+    real = claude.create
+    def create(**kw):
+        if kw.get("betas"):
+            claude.requests.append(kw)
+            raise ApiError(400, "thinking.display: 'updates' is not supported")
+        return real(**kw)
+    claude.beta.messages.create = create
+    sre.run_turn("acme", conv["id"], claude=claude, tools=None)
+    assert claude.requests[-1]["thinking"] == {"type": "adaptive", "display": "summarized"} and "betas" not in claude.requests[-1]
+    assert sre.view(sre.load("acme", conv["id"]))["view"][-1] == {"type": "answer", "text": "Fine."}
+    s, conv = api(sre, "POST", {"message": "again", "conversation_id": conv["id"]})
+    n = len(claude.requests)
+    sre.run_turn("acme", conv["id"], claude=claude, tools=None)
+    assert len(claude.requests) == n + 1                       # remembered: no second try with updates
+
+
+def test_without_model_access_it_says_so(sre):
+    s, conv = api(sre, "POST", {"message": "hi"})
+    class NoAccess:
+        beta = types.SimpleNamespace(messages=types.SimpleNamespace(create=lambda **kw: (_ for _ in ()).throw(ApiError(403, "not authorized"))))
+    with pytest.raises(ApiError):
+        sre.run_turn("acme", conv["id"], claude=NoAccess(), tools=None)
+    assert "can't reach its AI model" in sre.view(sre.load("acme", conv["id"]))["view"][-1]["text"]
+
+
 def test_conversations_belong_to_their_tenant_and_turns_are_limited(sre, monkeypatch):
     s, conv = api(sre, "POST", {"message": "hi"})
     assert api(sre, "GET", cid=conv["id"], tenant="globex")[0] == 404
@@ -141,8 +179,9 @@ def test_conversations_belong_to_their_tenant_and_turns_are_limited(sre, monkeyp
     assert api(sre, "POST", {"message": "two"})[0] == 202
     s, e = api(sre, "POST", {"message": "three"})
     assert s == 429 and "2 questions today" in e["error"]
-    monkeypatch.setattr(sre, "WORKSPACE", "")
+    monkeypatch.setattr(sre, "MODEL", "")
     assert api(sre, "POST", {"message": "x"}, tenant="other")[0] == 503
+    assert api(sre, "GET", tenant="other")[1]["enabled"] is False
 
 
 def test_tools_always_query_the_tenant_and_shape_results(sre):

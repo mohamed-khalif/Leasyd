@@ -12,9 +12,10 @@ Data access: every tool goes through obs-query (or the tenant's own settings ite
 signed-in user's tenant, which comes only from the token. The model never chooses the tenant and
 has no tool that changes anything.
 
-Claude: Claude Opus 5.5 on Claude Platform on AWS (IAM/SigV4, the workspace in CLAUDE_WORKSPACE_ID,
-CLAUDE_REGION); adaptive thinking with progress updates (shown while it works), server-side
-fallback on a refusal. The conversation is replayed exactly as returned (append-only), so thinking
+Claude: Claude (CLAUDE_MODEL, Opus 5.5 by default) on Amazon Bedrock (the Messages API endpoint,
+"Mantle"; this function's IAM role, SigV4; BEDROCK_REGION); adaptive thinking with progress updates
+(shown while it works; plain summarized thinking where the model or endpoint lacks them). The
+conversation is replayed exactly as returned (append-only), so thinking
 stays valid across turns.
 
 Storage: the conversation (API messages and the app's view of them) in S3 under
@@ -34,9 +35,8 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
-WORKSPACE = os.environ.get("CLAUDE_WORKSPACE_ID", "")
-CLAUDE_REGION = os.environ.get("CLAUDE_REGION") or os.environ.get("AWS_REGION", "us-east-1")
+MODEL = os.environ.get("CLAUDE_MODEL", "anthropic.claude-opus-5-5")     # empty = the AI SRE is off
+BEDROCK_REGION = os.environ.get("BEDROCK_REGION") or os.environ.get("AWS_REGION", "us-east-1")
 BUCKET = os.environ.get("BUCKET", "")
 TABLE = os.environ.get("TENANTS_TABLE", "obs-tenants")
 QUERY_FUNCTION = os.environ.get("QUERY_FUNCTION", "obs-query")
@@ -47,7 +47,8 @@ TURN_SECONDS = 600             # then it answers with what it has
 RESULT_CHARS = 12_000          # a tool result is cut to this (the model is told)
 MAX_MESSAGE = 4_000
 _ID = re.compile(r"^[0-9a-f]{16}$")
-BETAS = ["server-side-fallback-2026-07-01", "thinking-display-updates-2026-08-18"]
+UPDATES_BETA = "thinking-display-updates-2026-08-18"
+_progress = {"updates": True}   # turned off for good if the endpoint refuses progress updates
 
 _clients = {}
 
@@ -55,8 +56,8 @@ _clients = {}
 def client(name):
     if name not in _clients:
         if name == "claude":
-            from anthropic import AnthropicAWS
-            _clients[name] = AnthropicAWS(aws_region=CLAUDE_REGION, workspace_id=WORKSPACE, max_retries=3)
+            from anthropic import AnthropicBedrockMantle
+            _clients[name] = AnthropicBedrockMantle(aws_region=BEDROCK_REGION, max_retries=3)
         elif name == "table":
             _clients[name] = boto3.resource("dynamodb").Table(TABLE)
         else:
@@ -456,8 +457,8 @@ def start_turn(tenant, user, body, plan):
         raise Refused(400, "message: what to ask")
     if len(message) > MAX_MESSAGE:
         raise Refused(400, f"message: at most {MAX_MESSAGE} characters")
-    if not WORKSPACE:
-        raise Refused(503, "the AI SRE isn't set up yet (no Claude workspace configured)")
+    if not MODEL:
+        raise Refused(503, "the AI SRE isn't turned on for this installation")
     cid = body.get("conversation_id")
     conv = None
     if cid:
@@ -500,6 +501,25 @@ def _count_turn(tenant, plan):
         raise
 
 
+STOP = "Stop investigating now: answer with what you have found so far, and say what you would check next."
+
+
+def _create(claude, messages):
+    """One model call: the system prompt cached, adaptive thinking with progress updates when the
+    endpoint has them (else summarized thinking, from then on)."""
+    kw = dict(model=MODEL, max_tokens=16000, tools=TOOLS, messages=messages, output_config={"effort": "high"},
+              system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}])
+    if _progress["updates"]:
+        try:
+            return claude.beta.messages.create(**kw, thinking={"type": "adaptive", "display": "updates"}, betas=[UPDATES_BETA])
+        except Exception as e:
+            if getattr(e, "status_code", None) != 400 or not re.search(r"display|beta|updates", str(e), re.I):
+                raise
+            _progress["updates"] = False
+            print(json.dumps({"ai_progress_updates": "unavailable", "error": str(e)[:300]}))
+    return claude.beta.messages.create(**kw, thinking={"type": "adaptive", "display": "summarized"})
+
+
 def run_turn(tenant, cid, claude=None, tools=None, clock=time.monotonic):
     """The investigation: Claude calls tools until it answers (or the step/time limit), every step
     saved for the app to show. The API messages are kept exactly as returned (append-only)."""
@@ -513,13 +533,10 @@ def run_turn(tenant, cid, claude=None, tools=None, clock=time.monotonic):
     try:
         for step in range(MAX_STEPS + 3):
             if not wrapped and (step >= MAX_STEPS or clock() - t0 > TURN_SECONDS):
-                # A turn-scoped operator instruction, kept in the history like every message (append-only).
-                conv["messages"].append({"role": "system", "content": "Stop investigating now: answer with what you have found so far, and say what you would check next."})
+                # Said alongside the last tool results (not yet sent), so the history stays append-only.
+                conv["messages"][-1]["content"].append({"type": "text", "text": STOP})
                 wrapped = True
-            resp = claude.beta.messages.create(
-                model=MODEL, max_tokens=16000, system=SYSTEM, tools=TOOLS, messages=conv["messages"],
-                thinking={"type": "adaptive", "display": "updates"}, output_config={"effort": "high"},
-                cache_control={"type": "ephemeral"}, betas=BETAS, fallbacks="default")
+            resp = _create(claude, conv["messages"])
             content = resp.to_dict()["content"] if hasattr(resp, "to_dict") else resp["content"]
             conv["messages"].append({"role": "assistant", "content": content})
             for b in content:
@@ -555,7 +572,9 @@ def run_turn(tenant, cid, claude=None, tools=None, clock=time.monotonic):
             save(conv)
         conv["status"] = "done"
     except Exception as e:
-        conv["view"].append({"type": "error", "text": "Something went wrong while investigating; please ask again."})
+        no_model = getattr(e, "status_code", None) in (403, 404)   # Bedrock: no access to the model yet
+        conv["view"].append({"type": "error", "text": "The AI SRE can't reach its AI model right now (it may not be enabled yet); please try again later." if no_model
+                             else "Something went wrong while investigating; please ask again."})
         conv["status"] = "failed"
         save(conv)
         print(json.dumps({"ai_turn_failed": cid, "tenant": tenant, "error": str(e)[:500]}))
@@ -600,7 +619,7 @@ def handler(event, context):
             items = sorted(_items(tenant, f"ai#{tenant}#"), key=lambda i: i.get("updated_at", ""), reverse=True)
             mine = [i for i in items if i.get("created_by") == user][:30]
             return _http(200, {"conversations": [{"id": i["pk"].rsplit("#", 1)[1], **{k: i.get(k) for k in ("title", "status", "updated_at")}}
-                                                 for i in mine], "enabled": bool(WORKSPACE)})
+                                                 for i in mine], "enabled": bool(MODEL)})
         if method == "GET" and _ID.match(cid):
             conv = load(tenant, cid)
             if not conv:

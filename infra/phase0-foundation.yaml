@@ -183,10 +183,10 @@ Resources:
               - ecr:BatchGetImage
               - ecr:GetDownloadUrlForLayer
             Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/obs-*"
-          - Sid: ClaudeInference       # the AI SRE (obs-ai): Claude on Claude Platform on AWS, any workspace of this account
+          - Sid: ClaudeInference       # the AI SRE (obs-ai): Claude on Amazon Bedrock's Messages API endpoint
             Effect: Allow
-            Action: [aws-external-anthropic:CreateInference, aws-external-anthropic:CountTokens]
-            Resource: !Sub "arn:aws:aws-external-anthropic:*:${AWS::AccountId}:workspace/*"
+            Action: bedrock-mantle:CreateInference
+            Resource: !Sub "arn:aws:bedrock-mantle:*:${AWS::AccountId}:project/*"
           - Sid: PeopleEmail           # invitations and sign-up emails (T5), from the platform's SES domain
             Effect: Allow
             Action: [ses:SendEmail, ses:SendRawEmail]

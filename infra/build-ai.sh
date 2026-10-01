@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the AI SRE Lambda bundle (Python 3.12, arm64) into services/ai/build/: the Anthropic SDK
-# (with its AWS signing support, for Claude Platform on AWS) and sre.py.
+# (with its AWS signing support, for Claude on Amazon Bedrock) and sre.py.
 set -euo pipefail
 cd "$(dirname "$0")/../services/ai"
 rm -rf build && mkdir build
