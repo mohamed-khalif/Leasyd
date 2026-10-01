@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Deploys the AI SRE (obs-phaseAI): Claude on Amazon Bedrock. Enable access to the model first
-# (Bedrock console > Model access). Optional: CLAUDE_MODEL=anthropic.claude-opus-4-8 (another model;
+# Deploys the AI SRE (obs-phaseAI): Claude on Amazon Bedrock. Models turn on when first used; for
+# Anthropic models, send one message in the Bedrock playground first to submit the use-case form. Optional: CLAUDE_MODEL=anthropic.claude-opus-4-8 (another model;
 # empty turns the AI SRE off), BEDROCK_REGION=us-east-1. Later runs reuse the values deployed.
 # Needs obs-phase0, obs-phase4, obs-phaseT2.
 set -euo pipefail
