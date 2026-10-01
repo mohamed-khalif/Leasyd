@@ -174,6 +174,8 @@ Resources:
             - { AttributeName: pk, KeyType: RANGE }
           Projection: { ProjectionType: ALL }
       PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      # Short-lived items (per-minute query counters) carry "expires" (epoch seconds).
+      TimeToLiveSpecification: { AttributeName: expires, Enabled: true }
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: state }
@@ -215,8 +217,9 @@ Resources:
         project: obs
         phase: state
 
-  # The web app: a public client (no secret). Users can read custom:tenant
-  # but never write it.
+  # The web app: a public client (no secret). Users can read custom:tenant and their email but
+  # change neither (the email is who they are in every account check; "name" is listed only
+  # because an empty list would mean "every attribute").
   AppClient:
     Type: AWS::Cognito::UserPoolClient
     DeletionPolicy: Retain
@@ -228,12 +231,12 @@ Resources:
       ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
       PreventUserExistenceErrors: ENABLED
       EnableTokenRevocation: true
-      IdTokenValidity: 60
-      AccessTokenValidity: 60
+      IdTokenValidity: 15                     # a removed person's last token works at most this long
+      AccessTokenValidity: 15
       RefreshTokenValidity: 30
       TokenValidityUnits: { IdToken: minutes, AccessToken: minutes, RefreshToken: days }
       ReadAttributes: [email, email_verified, custom:tenant]
-      WriteAttributes: [email]
+      WriteAttributes: [name]
 
 Outputs:
   BucketName:

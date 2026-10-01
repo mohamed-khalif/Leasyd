@@ -750,6 +750,8 @@ def api(event, context):
         return _http(200, {"tenant": tenant, "email": claims.get("email")})
     if event.get("httpMethod") == "GET":
         return job_status(tenant, ((event.get("pathParameters") or {}).get("job") or ""))
+    if (refused := over_limit(tenant, "query")):
+        return refused
     body = event.get("body") or ""
     if event.get("isBase64Encoded"):
         body = base64.b64decode(body)
@@ -804,12 +806,49 @@ def _job_key(tenant, job):
 
 def start_job(tenant, q):
     """Run the query in the background (obs-query-worker, async) -> 202 with the job's id."""
+    if (refused := over_limit(tenant, "job")):
+        return refused
     job = secrets.token_hex(16)
     _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job), ContentType="application/json",
                      Body=json.dumps({"status": "running", "started": _now().strftime("%Y-%m-%dT%H:%M:%SZ")}))
     _run_in_background({"job": {"id": job, "tenant": tenant, "query": {k: v for k, v in q.items() if k != "async"}}})
     return _http(202, {"job": job, "status": "running",
                        "message": "the query runs in the background; GET /v1/app/query/{job} (or /v1/query/{job}) for its answer"})
+
+
+# Per tenant and minute, by plan: queries, and background jobs (each up to 5 minutes of a worker).
+# One customer can't use up the account's Lambda capacity (shared with everyone's ingest) or run
+# up the bill. Counted in obs-tenants (rate#query#<tenant>#<minute>, expiring with its TTL).
+RATE_LIMITS = {"query": {"free": 120, "standard": 600}, "job": {"free": 4, "standard": 20}}
+_plans = {}   # tenant -> (plan, read at)
+
+
+def _plan(table, tenant):
+    plan, at = _plans.get(tenant, (None, 0))
+    if time.time() - at > 300:
+        item = table.get_item(Key={"pk": f"tenant#{tenant}"}).get("Item") or {}
+        plan = item.get("plan") or "standard"
+        _plans[tenant] = (plan, time.time())
+    return plan
+
+
+def over_limit(tenant, kind):
+    """None, or the 429 answer when the tenant is over this minute's limit. Fails open (logged):
+    a counting problem must not stop customers' queries."""
+    try:
+        table = boto3.resource("dynamodb").Table(os.environ.get("TENANTS_TABLE", "obs-tenants"))
+        limit = RATE_LIMITS[kind].get(_plan(table, tenant), RATE_LIMITS[kind]["standard"])
+        minute = int(time.time() // 60)
+        table.update_item(Key={"pk": f"rate#{kind}#{tenant}#{minute}"}, UpdateExpression="ADD n :one SET expires = :exp",
+                          ConditionExpression="attribute_not_exists(n) OR n < :max",
+                          ExpressionAttributeValues={":one": 1, ":max": limit, ":exp": minute * 60 + 3600})
+        return None
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            what = "queries" if kind == "query" else "long-running queries"
+            return _http(429, {"error": f"too many {what}: at most {limit} a minute on this plan; try again in a minute"})
+        print(json.dumps({"rate_limit_unavailable": str(e)[:300]}))
+        return None
 
 
 def _run_in_background(payload):

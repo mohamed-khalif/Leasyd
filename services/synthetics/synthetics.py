@@ -102,6 +102,29 @@ HEADER_OPS = ("exists", "equals", "contains")
 _table = _kms = _lambda = _s3 = None
 
 
+# "Test" and "Run now" run at once, outside the schedule: limited per tenant and minute, so the
+# runner can't be used to send floods of requests to a site (or run up the bill).
+MANUAL_RUNS_PER_MINUTE = int(os.environ.get("MANUAL_RUNS_PER_MINUTE", "10"))
+
+
+class TooMany(Refused):
+    """Over a rate limit (HTTP 429)."""
+
+
+def _count_manual_run(tenant):
+    """Raises TooMany past this minute's limit. Fails open (logged) if counting itself fails."""
+    from botocore.exceptions import ClientError
+    minute = int(time.time() // 60)
+    try:
+        table().update_item(Key={"pk": f"rate#checkrun#{tenant}#{minute}"}, UpdateExpression="ADD n :one SET expires = :exp",
+                            ConditionExpression="attribute_not_exists(n) OR n < :max",
+                            ExpressionAttributeValues={":one": 1, ":max": MANUAL_RUNS_PER_MINUTE, ":exp": minute * 60 + 3600})
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise TooMany(f"at most {MANUAL_RUNS_PER_MINUTE} test runs a minute; try again in a minute")
+        print(json.dumps({"rate_limit_unavailable": str(e)[:300]}))
+
+
 def table():
     global _table
     _table = _table or boto3.resource("dynamodb").Table(TABLE)
@@ -930,6 +953,7 @@ def api(event, context):
             plain = {**(decrypt_secrets(tenant, body["id"], saved.get("secrets")) if saved else {}),
                      **{k: v for k, v in (body.get("secrets") or {}).items() if v is not None}}
             check = validate({**body, "secret_names": list(plain)})
+            _count_manual_run(tenant)
             return _http(200, {"result": _view_result(run_any(check, plain, BROWSER_TEST_MS))})
         item = get_check(tenant, check_id)
         if item is None:
@@ -961,6 +985,7 @@ def api(event, context):
                 table().delete_item(Key={"pk": e["pk"]})
             return _http(200, {"deleted": check_id})
         if resource == "/v1/app/checks/{id}/run" and method == "POST":
+            _count_manual_run(tenant)
             result = run_any(item, decrypt_secrets(tenant, check_id, item.get("secrets")), BROWSER_TEST_MS)
             window = rel.open_window(windows(tenant), check_id, datetime.now(timezone.utc))
             if window:
@@ -978,7 +1003,7 @@ def api(event, context):
                 return _http(404, {"error": "no screenshot for that run and step (they are kept 30 days)"})
             return _http(200, {"image": base64.b64encode(obj["Body"].read()).decode(), "content_type": "image/jpeg"})
     except Refused as e:
-        return _http(400, {"error": str(e)})
+        return _http(429 if isinstance(e, TooMany) else 400, {"error": str(e)})
     return _http(404, {"error": "unknown route"})
 
 

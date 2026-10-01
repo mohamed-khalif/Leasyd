@@ -635,3 +635,29 @@ def test_failed_jobs_say_so(data, monkeypatch):
     with pytest.raises(ZeroDivisionError):
         query.worker(started[-1], None)                   # still a Lambda error (alarmed)
     assert get_job("acme", out["job"]) == (500, {"error": "the query failed; try a shorter time range"})
+
+
+def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
+    """Per tenant and minute, by plan; another tenant is unaffected; jobs have a lower limit."""
+    boto3.client("dynamodb").create_table(
+        TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
+        AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+        KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(Item={"pk": "tenant#acme", "plan": "free"})
+    query._plans.clear()
+    monkeypatch.setitem(query.RATE_LIMITS, "query", {"free": 3, "standard": 5})
+    monkeypatch.setitem(query.RATE_LIMITS, "job", {"free": 1, "standard": 2})
+    monkeypatch.setattr(query, "_run_in_background", lambda p: None)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    ana, bo = {"custom:tenant": "acme"}, {"custom:tenant": "globex"}
+    assert [http_user(ana, q)[0] for _ in range(4)] == [200, 200, 200, 429]
+    assert "at most 3 a minute" in http_user(ana, q)[1]["error"]
+    assert [http_user(bo, q)[0] for _ in range(2)] == [200] * 2          # no plan item: standard (5, async ones included)
+    assert http_user(bo, {**q, "async": True})[0] == 202
+    assert http_user(bo, {**q, "async": True})[0] == 202
+    status, out = http_user(bo, {**q, "async": True})
+    assert status == 429 and "long-running" in out["error"]
+    # A counting problem (e.g. no permission yet) never stops queries.
+    query._plans.clear()
+    boto3.client("dynamodb").delete_table(TableName="obs-tenants")
+    assert http_user({"custom:tenant": "initech"}, q)[0] == 200

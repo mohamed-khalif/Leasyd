@@ -535,3 +535,18 @@ def test_each_recorded_run_is_passed_to_alerts(aws, monkeypatch):
     # If alerting can't be reached, the run is still recorded.
     monkeypatch.setattr(synthetics, "_lambda", type("L", (), {"invoke": staticmethod(lambda **kw: 1 / 0)})())
     synthetics.record("acme", "abc123abc123", {"name": "Home", "frequency": 1, "steps": [{"url": "https://example.com/"}]}, result)
+
+
+def test_test_and_run_now_are_limited_per_tenant(aws, monkeypatch):
+    monkeypatch.setattr(synthetics, "MANUAL_RUNS_PER_MINUTE", 2)
+    monkeypatch.setattr(synthetics, "run_any", lambda check, plain, ms: {"ok": True, "steps": [], "duration_ms": 1})
+    monkeypatch.setattr(synthetics, "_view_result", lambda r: r)
+    monkeypatch.setattr(synthetics, "record", lambda *a: None)
+    monkeypatch.setattr(synthetics, "store_screenshots", lambda t, c, r: r)
+    s, a = call("acme", "POST", "/v1/app/checks", settings())
+    assert call("acme", "POST", "/v1/app/checks/test", settings())[0] == 200
+    assert call("acme", "POST", "/v1/app/checks/{id}/run", None, a["id"])[0] == 200
+    s, out = call("acme", "POST", "/v1/app/checks/test", settings())
+    assert s == 429 and "at most 2 test runs a minute" in out["error"]
+    assert call("acme", "POST", "/v1/app/checks/{id}/run", None, a["id"])[0] == 429
+    assert call("globex", "POST", "/v1/app/checks/test", settings())[0] == 200      # each tenant its own

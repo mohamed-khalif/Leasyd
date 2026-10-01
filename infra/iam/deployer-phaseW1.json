@@ -16,7 +16,8 @@
                  "cloudfront:UpdateOriginAccessControl", "cloudfront:DeleteOriginAccessControl",
                  "cloudfront:GetOriginAccessControlConfig", "cloudfront:ListOriginAccessControls",
                  "cloudfront:GetCachePolicy", "cloudfront:GetOriginRequestPolicy", "cloudfront:GetResponseHeadersPolicy",
-                 "cloudfront:ListCachePolicies", "cloudfront:ListOriginRequestPolicies", "cloudfront:ListResponseHeadersPolicies"],
+                 "cloudfront:ListCachePolicies", "cloudfront:ListOriginRequestPolicies", "cloudfront:ListResponseHeadersPolicies",
+                 "cloudfront:CreateResponseHeadersPolicy", "cloudfront:UpdateResponseHeadersPolicy", "cloudfront:DeleteResponseHeadersPolicy"],
       "Resource": "*" }
   ]
 }

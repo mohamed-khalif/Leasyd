@@ -62,6 +62,11 @@ Resources:
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
                 Condition:   # checks, excluded runs, maintenance windows, SLOs; never tenants, keys or users
                   ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["check#*", "exclude#*", "window#*", "slo#*"] }
+              - Effect: Allow   # per-tenant limit on Test / Run now
+                Action: dynamodb:UpdateItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                Condition:
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["rate#checkrun#*"] }
               - Effect: Allow
                 Action: dynamodb:Query
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
