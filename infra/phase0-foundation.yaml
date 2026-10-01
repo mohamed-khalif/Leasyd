@@ -183,6 +183,12 @@ Resources:
               - ecr:BatchGetImage
               - ecr:GetDownloadUrlForLayer
             Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/obs-*"
+          - Sid: PeopleEmail           # invitations and sign-up emails (T5), from the platform's SES domain
+            Effect: Allow
+            Action: [ses:SendEmail, ses:SendRawEmail]
+            Resource:
+              - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
           - Sid: CustomerAlertEmail    # alerts (A1): one SNS topic per customer email channel
             Effect: Allow
             Action: [sns:CreateTopic, sns:TagResource, sns:Subscribe, sns:Publish, sns:DeleteTopic, sns:ListSubscriptionsByTopic]

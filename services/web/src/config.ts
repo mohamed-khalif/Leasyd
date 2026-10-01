@@ -1,6 +1,7 @@
 // Settings come from /config.json at runtime (written by the deploy script),
 // so one build works in any environment.
-export type Config = { region: string; userPoolId: string; clientId: string; apiBase: string; mock?: boolean };
+// ingestUrl: where customers' OpenTelemetry SDKs send data (the API's public name), for Settings.
+export type Config = { region: string; userPoolId: string; clientId: string; apiBase: string; ingestUrl?: string; mock?: boolean };
 
 let config: Config | null = null;
 

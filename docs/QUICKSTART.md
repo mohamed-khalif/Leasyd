@@ -13,7 +13,8 @@ log and a trace through `https://ingest.leasyd.com` every minute and alarms if t
 | | |
 |---|---|
 | **Endpoint** | `https://ingest.leasyd.com` |
-| **Ingest key** | Given to you when your account is created. It may only send data. A new key can take up to ~10 minutes to be fully active. |
+| **Account** | Sign up at https://app.leasyd.com ("Create an account"): free, 1 GB of data a day, kept 30 days. |
+| **Ingest key** | In the app, **Settings → API keys → Create key** ("Send data"); shown once. It may only send data. A new key can take up to ~10 minutes to be fully active. |
 
 ## 1. Set four environment variables
 

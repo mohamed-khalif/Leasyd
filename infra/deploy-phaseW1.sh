@@ -31,7 +31,7 @@ LOGINS=obs-state; aws cloudformation describe-stacks --stack-name obs-state >/de
 (cd services/web && npm ci --no-audit --no-fund && npm run build)
 cat > services/web/dist/config.json <<JSON
 { "region": "${AWS_DEFAULT_REGION}", "userPoolId": "$(out "$LOGINS" UserPoolId)",
-  "clientId": "$(out "$LOGINS" AppClientId)", "apiBase": "" }
+  "clientId": "$(out "$LOGINS" AppClientId)", "apiBase": "", "ingestUrl": "$(out obs-phaseT2 IngestEndpoint)" }
 JSON
 
 # Hashed assets can be cached for a year; the page and its settings never.

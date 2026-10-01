@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb } from "./icons";
+import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 
 type Props = {
@@ -37,6 +37,8 @@ export function Shell(p: Props) {
         {link("/synthetics", "Synthetics", <IconPulse />, p.path.startsWith("/synthetics"))}
         {link("/slos", "SLOs", <IconTarget />, p.path.startsWith("/slos"))}
         {link("/alerts", "Alerts", <IconBell />, p.path.startsWith("/alerts"))}
+        <div className="nav-section">Account</div>
+        {link("/settings", "Settings", <IconGear />, p.path.startsWith("/settings"))}
         <div className="nav-foot">
           <div className="whoami" title={p.user.email}>{p.user.email}<div className="faint mono">{p.user.tenant}</div></div>
           <button className="btn ghost" onClick={p.onSignOut}><IconOut />Sign out</button>

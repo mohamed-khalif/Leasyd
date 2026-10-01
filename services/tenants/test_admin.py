@@ -28,7 +28,8 @@ def adm(monkeypatch):
         apigw.put_integration(restApiId=api, resourceId=root, httpMethod="POST", type="MOCK")
         apigw.create_deployment(restApiId=api, stageName="ingest")
         plan = apigw.create_usage_plan(name="obs-standard", apiStages=[{"apiId": api, "stage": "ingest"}])["id"]
-        monkeypatch.setenv("USAGE_PLANS", f'{{"standard": "{plan}"}}')
+        free = apigw.create_usage_plan(name="obs-free", apiStages=[{"apiId": api, "stage": "ingest"}])["id"]
+        monkeypatch.setenv("USAGE_PLANS", f'{{"standard": "{plan}", "free": "{free}"}}')
         ddb = boto3.client("dynamodb")
         ddb.create_table(
             TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
@@ -272,7 +273,7 @@ def test_invite_list_remove_users(adm):
     call(adm, "create", tenant="acme")
     call(adm, "create", tenant="beta")
     out = call(adm, "invite-user", tenant="acme", email=" Ana@Example.com ", send_email=False)
-    assert out == {"tenant": "acme", "email": "ana@example.com", "status": "invited", "email_sent": False}
+    assert out == {"tenant": "acme", "email": "ana@example.com", "role": "owner", "status": "invited", "email_sent": False}
     assert login("ana@example.com")["custom:tenant"] == "acme"
     # one login per email, and only for an active tenant
     assert "already a user of this tenant" in call(adm, "invite-user", tenant="acme", email="ana@example.com")["error"]
@@ -396,3 +397,69 @@ def test_retention_carries_on_in_a_new_invocation(adm, monkeypatch):
     assert out["continuing"] and adm.invoked[-1] == {"action": "retention", "after": None}
     out = adm.handler({"action": "retention", "after": "acme"}, CTX)
     assert out["tenants"] == ["beta"]
+
+
+# ------------------------------------------------------------------ self-service (sign-up, SES emails)
+
+@pytest.fixture
+def mail(adm, monkeypatch):
+    """SES on: the sending domain verified, emails.EMAIL_FROM set. -> the sent messages."""
+    import emails
+    boto3.client("ses").verify_domain_identity(Domain="app.leasyd.com")
+    monkeypatch.setattr(emails, "EMAIL_FROM", "Leasyd <no-reply@app.leasyd.com>")
+    monkeypatch.setattr(emails, "_ses", None)
+    from moto.ses.models import ses_backends
+    return ses_backends["123456789012"]["us-east-1"].sent_messages
+
+
+def message(m):
+    import html
+    return {"to": m.destinations["ToAddresses"], "subject": m.subject, "text": html.unescape(m.body)}
+
+
+def test_signup_makes_a_free_tenant_and_welcomes_its_owner(adm, mail):
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(
+        Item={"pk": "tenant#acme-inc", "tenant": "acme-inc", "status": "creating", "company": "Acme Inc"})
+    out = call(adm, "signup", tenant="acme-inc", email="Ana@Acme.com", company="Acme Inc")
+    assert out == {"tenant": "acme-inc", "email": "ana@acme.com", "status": "signed up", "email_sent": True}
+    st = call(adm, "status", tenant="acme-inc")
+    assert st["status"] == "active" and st["plan"] == "free" and st["daily_cap_bytes"] == 10**9
+    assert st["keys"] == [] and st["company"] == "Acme Inc" and st["signed_up_by"] == "ana@acme.com"
+    assert streams() == ["obs-t-acme-inc-logs", "obs-t-acme-inc-metrics", "obs-t-acme-inc-traces"]
+    assert call(adm, "users", tenant="acme-inc")["users"][0]["role"] == "owner"
+    assert login("ana@acme.com")["custom:tenant"] == "acme-inc"
+    (m,) = [message(x) for x in mail]
+    assert m["to"] == ["ana@acme.com"] and m["subject"] == "Your Leasyd account is ready"
+    password = __import__("re").search(r"Temporary password</td><td[^>]*>([^<]+)<", m["text"]).group(1)   # moto keeps the HTML
+    assert len(password) == 14 and "Acme Inc" in m["text"] and "https://app.leasyd.com" in m["text"]
+    # only a reserved name can be signed up
+    assert "not reserved" in call(adm, "signup", tenant="other", email="b@b.com", company="B")["error"]
+
+
+def test_invitations_are_sent_with_ses_and_name_the_inviter(adm, mail):
+    call(adm, "create", tenant="acme", company="Acme")
+    out = call(adm, "invite-user", tenant="acme", email="bo@acme.com", role="member", invited_by="ana@acme.com")
+    assert out["role"] == "member" and out["email_sent"] is True
+    (m,) = [message(x) for x in mail]
+    assert m["subject"] == "You're invited to Acme on Leasyd" and "ana@acme.com invited you" in m["text"]
+    assert "Temporary password</td>" in m["text"]
+    assert "unknown role" in call(adm, "invite-user", tenant="acme", email="c@acme.com", role="admin")["error"]
+    call(adm, "invite-user", tenant="acme", email="d@acme.com", send_email=False)
+    assert len(mail) == 1                                      # send_email=False: nothing sent
+
+
+def test_more_keys_and_daily_caps(adm):
+    call(adm, "create", tenant="acme")
+    first = call(adm, "status", tenant="acme")["keys"][0]["api_key_id"]
+    out = call(adm, "add-key", tenant="acme", scope="read")
+    assert out["scope"] == "read" and out["api_key"].startswith("obs_")
+    assert key_status(adm, "acme") == {first: "active", out["key_id"]: "active"}     # others unchanged
+    assert "daily_cap_bytes" not in call(adm, "status", tenant="acme")                  # standard: no cap
+    assert call(adm, "set-cap", tenant="acme", daily_gb=2.5)["daily_cap_bytes"] == 2_500_000_000
+    assert call(adm, "status", tenant="acme")["daily_cap_bytes"] == 2_500_000_000
+    assert call(adm, "set-cap", tenant="acme", daily_gb=0)["daily_cap_bytes"] is None
+    assert "daily_cap_bytes" not in call(adm, "status", tenant="acme")
+    assert "number of GB" in call(adm, "set-cap", tenant="acme", daily_gb="lots")["error"]
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(
+        Item={"pk": f"meter#acme#{adm._now():%Y-%m-%d}", "tenant": "acme", "bytes": 1234, "records": 5})
+    assert call(adm, "status", tenant="acme")["today"] == {"bytes": 1234, "records": 5, "refused_bytes": 0}

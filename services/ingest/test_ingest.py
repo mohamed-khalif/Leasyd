@@ -294,3 +294,66 @@ def test_same_parquet_with_and_without_record_compression(monkeypatch, tmp_path)
         out[mode + "_bytes"] = len(data)
     assert out["gzip"] == out["none"] and sorted(out["none"]) == ["api", "big"]
     assert out["gzip_bytes"] < out["none_bytes"] / 4   # what Firehose would bill
+
+
+# ------------------------------------------------------------------ metering and daily caps
+
+@pytest.fixture
+def metered(fh, monkeypatch):
+    import boto3
+    from moto import mock_aws
+    with mock_aws():
+        ddb = boto3.client("dynamodb")
+        ddb.create_table(TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
+                         AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+                         KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
+        monkeypatch.setattr(ingest, "ddb", ddb)
+        monkeypatch.setattr(ingest, "TENANTS_TABLE", "obs-tenants")
+        monkeypatch.setattr(ingest, "meter", ingest.Meter())
+        yield ddb
+
+
+def meter_item(ddb, tenant):
+    it = ddb.get_item(TableName="obs-tenants", Key={"pk": {"S": f"meter#{tenant}#{ingest._day()}"}}).get("Item") or {}
+    return {k: int(v["N"]) for k, v in it.items() if "N" in v}
+
+
+def test_bytes_are_metered_and_a_daily_cap_refuses_until_midnight(metered, fh, monkeypatch):
+    ddb = metered
+    ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "tenant#acme"}, "daily_cap_bytes": {"N": "2000"}})
+    body = logs_pb(n=3, body="x" * 200).SerializeToString()
+    assert ingest.handler(event(body), None)["statusCode"] == 200
+    ingest.meter.flush()
+    m = meter_item(ddb, "acme")
+    assert m["records"] == 3 and m["bytes"] == sum(len(r) for _, r in fh.puts) and m["refused_bytes"] == 0
+    # Accepted until today's bytes reach the cap (this container's unflushed bytes count too)...
+    statuses = [ingest.handler(event(body), None)["statusCode"] for _ in range(5)]
+    assert statuses[0] == 200 and statuses[-1] == 429
+    out = ingest.handler(event(body), None)
+    assert out["statusCode"] == 429 and "daily data limit reached (2e-06 GB" in out["body"]
+    assert 0 < int(out["headers"]["Retry-After"]) <= 86400
+    ingest.meter.flush()
+    assert meter_item(ddb, "acme")["refused_bytes"] > 0
+    # ...for that tenant only; one without a cap is metered, never refused.
+    for _ in range(5):
+        assert ingest.handler(event(body, tenant="beta"), None)["statusCode"] == 200
+    ingest.meter.flush()
+    assert meter_item(ddb, "beta")["records"] == 15
+
+
+def test_metering_never_fails_a_request(fh, monkeypatch):
+    class Broken:
+        def get_item(self, **kw): raise RuntimeError("DynamoDB is down")
+        def update_item(self, **kw): raise RuntimeError("DynamoDB is down")
+    monkeypatch.setattr(ingest, "ddb", Broken())
+    monkeypatch.setattr(ingest, "TENANTS_TABLE", "obs-tenants")
+    monkeypatch.setattr(ingest, "meter", ingest.Meter())
+    monkeypatch.setattr(ingest, "METER_FLUSH_S", 0)
+    assert ingest.handler(event(logs_pb().SerializeToString()), None)["statusCode"] == 200
+    assert ingest.meter.pending                               # kept for the next flush
+
+
+def test_counts_metric_points():
+    doc = {"resourceMetrics": [{"scopeMetrics": [{"metrics": [
+        {"name": "a", "gauge": {"dataPoints": [{}, {}]}}, {"name": "b", "histogram": {"dataPoints": [{}]}}]}]}]}
+    assert ingest._count("metrics", doc) == 3

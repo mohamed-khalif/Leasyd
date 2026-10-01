@@ -137,6 +137,10 @@ Resources:
               - Effect: Allow
                 Action: [firehose:PutRecord, firehose:PutRecordBatch]
                 Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+              # Daily caps: the tenant's cap (tenant#), and today's bytes (meter#<tenant>#<day>).
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T2" }
@@ -164,6 +168,7 @@ Resources:
         Variables:
           STREAM_PREFIX: obs-t-
           RECORD_COMPRESSION: !Ref RecordCompression
+          TENANTS_TABLE: obs-tenants
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T2" }
@@ -395,6 +400,62 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-api/invocations"
+        TimeoutInMillis: 29000
+
+  # Self-service (obs-account-api, obs-phaseT5; its permission to be invoked is in that stack):
+  # POST /v1/signup is public (throttled hard, below); /v1/app/account[/...] needs a signed-in user.
+  SignupResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: signup }
+  SignupMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref SignupResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
+        TimeoutInMillis: 29000
+  AccountResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AppResource, PathPart: account }
+  AccountProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AccountResource, PathPart: "{proxy+}" }
+  AccountMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref AccountResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
+        TimeoutInMillis: 29000
+  AccountProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref AccountProxyResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
         TimeoutInMillis: 29000
 
   # A long query's answer for signed-in users: GET /v1/app/query/{job}.
@@ -752,20 +813,20 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV10:
+  DeploymentV11:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, QueryMethod, QueryJobMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${AccountMethod}, ${AccountProxyMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV10
+      DeploymentId: !Ref DeploymentV11
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"
@@ -774,6 +835,12 @@ Resources:
           # Whole-API ceiling; each tenant is further limited by its usage plan.
           ThrottlingRateLimit: 5000
           ThrottlingBurstLimit: 10000
+        # Public sign-up: a trickle (the function also limits per address and per day).
+        - ResourcePath: "/~1v1~1signup"
+          HttpMethod: POST
+          MetricsEnabled: true
+          ThrottlingRateLimit: 1
+          ThrottlingBurstLimit: 5
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T2" }
@@ -791,6 +858,19 @@ Resources:
       Throttle:
         RateLimit: !Ref StandardRateLimit
         BurstLimit: !Ref StandardBurstLimit
+
+  # Self-service sign-ups (T5 "free" plan): lower rate limits; its daily data cap is enforced by ingest.
+  FreePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: Stage
+    Properties:
+      UsagePlanName: obs-free
+      Description: Free plan (self-service sign-ups)
+      ApiStages:
+        - { ApiId: !Ref Api, Stage: !Ref StageName }
+      Throttle:
+        RateLimit: 50
+        BurstLimit: 100
 
   # Deliberately tiny, for the throttling test in infra/phaseT2-test.sh.
   TestTinyPlan:
@@ -852,6 +932,10 @@ Outputs:
     Value: !Ref StandardPlan
   TestTinyPlanId:
     Value: !Ref TestTinyPlan
+  FreePlanId:
+    Value: !Ref FreePlan
+  ApiId:
+    Value: !Ref Api
   FirehoseRoleArn:
     Description: Delivery role for tenant streams (used by infra/tenant.sh).
     Value: !GetAtt FirehoseRole.Arn

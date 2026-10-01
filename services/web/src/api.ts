@@ -70,6 +70,32 @@ export const sql = (q: { sql: string; start: string; end: string }, opts?: Param
   runQuery<SqlResult>(q, opts);
 
 export const me = () => call<{ tenant: string; email: string }>("/v1/app/me");
+
+/** Public: self-service sign-up. The account is made in the background; its owner is emailed. */
+export async function signup(email: string, company: string, website = ""): Promise<void> {
+  const res = await fetch(getConfig().apiBase + "/v1/signup", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, company, website }) });
+  if (!res.ok) throw apiError(res.status, await res.json().catch(() => ({})));
+}
+
+// The tenant's own account (Settings): plan and today's data, users, API keys.
+export type AccountUser = { email: string; role: "owner" | "member"; created_at?: string; invited_by?: string };
+export type AccountKey = { key_id: string; scope: "ingest" | "read"; status: string; created_at?: string; expires_at?: string };
+export type Account = {
+  tenant: string; company: string; plan: string; daily_cap_bytes?: number | null; created_at?: string;
+  today: { bytes: number; records: number; refused_bytes: number };
+  you: { email: string; role: "owner" | "member" }; users: AccountUser[]; keys: AccountKey[];
+  limits: { keys: number; users: number };
+};
+export const account = {
+  get: () => call<Account>("/v1/app/account"),
+  invite: (email: string, role: "owner" | "member" = "member") =>
+    call<AccountUser>("/v1/app/account/users", { method: "POST", body: JSON.stringify({ email, role }) }),
+  remove: (email: string) => call<unknown>(`/v1/app/account/users/${encodeURIComponent(email)}`, { method: "DELETE" }),
+  createKey: (scope: "ingest" | "read") =>
+    call<{ key_id: string; scope: string; api_key: string }>("/v1/app/account/keys", { method: "POST", body: JSON.stringify({ scope }) }),
+  revokeKey: (id: string) => call<unknown>(`/v1/app/account/keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
 export const query = (q: Query, opts?: Parameters<typeof runQuery>[1]) => runQuery<Result>(q, opts);
 
 // Synthetic checks (/v1/app/checks): the signed-in user's tenant's own checks.

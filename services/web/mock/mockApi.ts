@@ -286,6 +286,17 @@ function promqlMock(q: Q & { promql: string; step: number }) {
   return [200, { status: "success", data: { resultType: "matrix", result }, stats: { engine_queries: /\/ sum/.test(text) ? 2 : 1, bytes: 48_000_000 } }];
 }
 
+const ACCOUNT = {
+  tenant: "acme", company: "Acme Inc.", plan: "free", daily_cap_bytes: 1e9, created_at: "2026-09-20T10:00:00Z",
+  today: { bytes: 642_000_000, records: 1_284_211, refused_bytes: 0 },
+  you: { email: "ana@acme.io", role: "owner" },
+  users: [{ email: "ana@acme.io", role: "owner", created_at: "2026-09-20T10:00:00Z" },
+          { email: "bo@acme.io", role: "member", created_at: "2026-09-22T08:12:00Z", invited_by: "ana@acme.io" }],
+  keys: [{ key_id: "k3xq9a7b2c", scope: "ingest", status: "active", created_at: "2026-09-20T10:05:00Z" },
+         { key_id: "r8mn2p4q1z", scope: "read", status: "active", created_at: "2026-09-24T15:40:00Z" }],
+  limits: { keys: 20, users: 50 },
+};
+
 const JOBS = new Map<string, { ready: number; status: number; out: unknown }>();
 
 function sqlMock(q: { sql: string }) {
@@ -530,6 +541,11 @@ export function mockApi(): Plugin {
     name: "leasyd-mock-api",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
+        if (req.url === "/v1/signup" && req.method === "POST") {   // public sign-up: always "check your inbox"
+          res.setHeader("Content-Type", "application/json");
+          res.statusCode = 202;
+          return setTimeout(() => res.end(JSON.stringify({ status: "accepted", message: "Check your inbox" })), 400);
+        }
         if (!req.url?.startsWith("/v1/app/")) return next();
         res.setHeader("Content-Type", "application/json");
         if (req.url === "/v1/app/me") return res.end(JSON.stringify({ tenant: "acme", email: "ana@acme.io" }));
@@ -552,6 +568,26 @@ export function mockApi(): Plugin {
             const [status, out] = settingsRoute(settings[1], settings[2], req.method ?? "GET", raw ? JSON.parse(raw) : {});
             res.statusCode = status;
             setTimeout(() => res.end(JSON.stringify(out)), 150);
+          });
+          return;
+        }
+        if (req.url.startsWith("/v1/app/account")) {
+          let raw = "";
+          req.on("data", (c: Buffer) => (raw += c));
+          req.on("end", () => {
+            const [, , , , what, id] = req.url!.split("?")[0].split("/").map(decodeURIComponent);
+            const body = raw ? JSON.parse(raw) : {};
+            let status = 200, out: unknown = ACCOUNT;
+            if (what === "keys" && req.method === "POST") {
+              const k = { key_id: hex(Math.random, 10), scope: body.scope, status: "active", created_at: new Date().toISOString() };
+              ACCOUNT.keys.push(k); status = 201; out = { ...k, api_key: "obs_" + hex(Math.random, 40) };
+            } else if (what === "keys" && req.method === "DELETE") { ACCOUNT.keys = ACCOUNT.keys.filter((k) => k.key_id !== id); out = { revoked: [id] }; }
+            else if (what === "users" && req.method === "POST") {
+              const u = { email: body.email, role: body.role, created_at: new Date().toISOString(), invited_by: "ana@acme.io" };
+              ACCOUNT.users.push(u); status = 201; out = u;
+            } else if (what === "users" && req.method === "DELETE") { ACCOUNT.users = ACCOUNT.users.filter((u) => u.email !== id); out = { status: "removed" }; }
+            res.statusCode = status;
+            setTimeout(() => res.end(JSON.stringify(out)), 200);
           });
           return;
         }

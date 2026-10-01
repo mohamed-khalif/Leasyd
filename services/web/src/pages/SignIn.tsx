@@ -1,16 +1,20 @@
 import { FormEvent, useState } from "react";
+import { signup } from "../api";
 import { forgotPassword, resetPassword, signIn } from "../auth";
 import { IconLogo } from "../icons";
 
 // signin: email + password. new-password: first sign-in with an invitation's temporary password.
 // forgot: email -> Cognito emails a code. reset: code + new password, then signed in.
-type Step = "signin" | "new-password" | "forgot" | "reset";
+// signup: company + email -> the account is made and a temporary password emailed. sent: says so.
+type Step = "signin" | "new-password" | "forgot" | "reset" | "signup" | "sent";
 
 const HEADINGS: Record<Step, [string, string]> = {
   signin: ["Sign in to Leasyd", "Logs, traces and metrics for your services."],
   "new-password": ["Choose a new password", "Your invitation used a temporary password."],
   forgot: ["Reset your password", "We'll email you a code to set a new one."],
   reset: ["Enter your code", "If an account exists for that email, a code is on its way. It expires in 1 hour."],
+  signup: ["Create your Leasyd account", "Free: 1 GB of logs, traces and metrics a day, kept 30 days. No card needed."],
+  sent: ["Check your inbox", "We're setting up your account. Within a couple of minutes you'll get an email with a temporary password; sign in with it here."],
 };
 
 export function SignIn(props: { onSignedIn: () => void }) {
@@ -23,6 +27,8 @@ export function SignIn(props: { onSignedIn: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [company, setCompany] = useState("");
+  const [website, setWebsite] = useState("");   // hidden: only bots fill it in
 
   const go = (s: Step) => { setStep(s); setError(null); setNote(null); };
   const submit = async (e: FormEvent) => {
@@ -36,6 +42,9 @@ export function SignIn(props: { onSignedIn: () => void }) {
       } else if (step === "new-password") {
         await complete!(newPw);
         props.onSignedIn();
+      } else if (step === "signup") {
+        await signup(email.trim(), company.trim(), website);
+        go("sent");
       } else if (step === "forgot") {
         await forgotPassword(email);
         setCode(""); setNewPw("");
@@ -67,7 +76,8 @@ export function SignIn(props: { onSignedIn: () => void }) {
     </label>
   );
   const button = { signin: ["Sign in", "Signing in…"], "new-password": ["Set password and continue", "Saving…"],
-                   forgot: ["Email me a code", "Sending…"], reset: ["Set new password", "Saving…"] }[step];
+                   forgot: ["Email me a code", "Sending…"], reset: ["Set new password", "Saving…"],
+                   signup: ["Create account", "Creating…"], sent: ["Sign in", "Sign in"] }[step];
 
   return (
     <div className="signin">
@@ -86,6 +96,19 @@ export function SignIn(props: { onSignedIn: () => void }) {
             </>
           )}
           {step === "new-password" && newPasswordField(true)}
+          {step === "signup" && (
+            <>
+              <label>Company or team
+                <input className="input" required minLength={2} maxLength={80} autoComplete="organization" value={company}
+                       onChange={(e) => setCompany(e.target.value)} autoFocus />
+              </label>
+              <label>Work email
+                <input className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+              </label>
+              <input className="hp" tabIndex={-1} autoComplete="off" aria-hidden="true" value={website}
+                     onChange={(e) => setWebsite(e.target.value)} name="website" />
+            </>
+          )}
           {step === "forgot" && emailField}
           {step === "reset" && (
             <>
@@ -98,8 +121,13 @@ export function SignIn(props: { onSignedIn: () => void }) {
           )}
           {note && <div className="form-note" role="status">{note}</div>}
           {error && <div className="form-error" role="alert">{error}</div>}
-          <button className="btn primary" disabled={busy}>{busy ? button[1] : button[0]}</button>
+          {step === "sent"
+            ? <button type="button" className="btn primary" onClick={() => { setPassword(""); go("signin"); }}>Sign in</button>
+            : <button className="btn primary" disabled={busy}>{busy ? button[1] : button[0]}</button>}
           {step === "signin" && <button type="button" className="linkbtn" onClick={() => go("forgot")}>Forgot password?</button>}
+          {step === "signin" && <span className="faint signin-alt">New to Leasyd? <button type="button" className="linkbtn" onClick={() => go("signup")}>Create an account</button></span>}
+          {step === "signup" && <span className="faint signin-alt">Already have an account? <button type="button" className="linkbtn" onClick={() => go("signin")}>Sign in</button></span>}
+          {step === "sent" && <span className="faint">No email after a few minutes? Check your spam folder; you can sign up again after an hour.</span>}
           {step === "reset" && (
             <button type="button" className="linkbtn" disabled={busy}
                     onClick={async () => {

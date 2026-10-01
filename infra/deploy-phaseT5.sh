@@ -12,6 +12,11 @@ LOGINS=obs-state; aws cloudformation describe-stacks --stack-name obs-state >/de
 u1() { aws cloudformation describe-stacks --stack-name "$LOGINS" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || true; }
 
+# Invitations and sign-up emails from the SES domain of obs-phaseE1, once it's verified.
+EMAIL_FROM="$(aws cloudformation describe-stacks --stack-name obs-phaseE1 \
+  --query "Stacks[0].Outputs[?OutputKey=='EmailFrom'].OutputValue" --output text 2>/dev/null || true)"
+[[ "$EMAIL_FROM" == None ]] && EMAIL_FROM=""
+
 infra/build-tenants.sh
 infra/data-bucket-rules.sh      # retention backstop (and screenshots) on the data bucket
 aws cloudformation package \
@@ -22,4 +27,5 @@ aws cloudformation deploy --stack-name obs-phaseT5 \
   --template-file infra/phaseT5-tenants.packaged.yaml \
   --capabilities CAPABILITY_NAMED_IAM --tags project=obs phase=T5 \
   --parameter-overrides "StandardPlanId=$(t2 StandardPlanId)" "TestTinyPlanId=$(t2 TestTinyPlanId)" \
-                        "UserPoolId=$(u1 UserPoolId)" "$@"
+                        "FreePlanId=$(t2 FreePlanId)" "ApiId=$(t2 ApiId)" \
+                        "UserPoolId=$(u1 UserPoolId)" "EmailFrom=${EMAIL_FROM}" "$@"

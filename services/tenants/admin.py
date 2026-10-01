@@ -8,9 +8,17 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
                                  (default 24), then are refused
   read-key {tenant}              an extra key that may only query (POST /v1/query), never send;
                                  revoke it with revoke {tenant, key_id}
-  invite-user {tenant, email, send_email?}  a person who signs in to the product (Cognito
-                                 user pool, U1) as a member of the tenant; they get an email
-                                 with a temporary password (send_email=false: none, for tests)
+  invite-user {tenant, email, send_email?, role?, invited_by?}  a person who signs in to the
+                                 product (Cognito user pool, U1) as a member of the tenant; they
+                                 get an email with a temporary password (send_email=false: none,
+                                 for tests). Sent with SES (emails.py) when EMAIL_FROM is set, else
+                                 by Cognito. role: owner (manages users and keys) or member
+  signup  {tenant, email, company}  self-service sign-up (obs-account-api reserves the tenant
+                                 name, then invokes this): a free-plan tenant without keys (its
+                                 owner creates them in the app), and the owner's login, welcomed
+                                 by email
+  add-key {tenant, scope}        one more key of that scope (ingest or read), others unchanged
+  set-cap {tenant, daily_gb}     the most data a day ingest accepts (null: the plan's; 0: no cap)
   remove-user {tenant, email}    sign them out everywhere and delete the login
   users   {tenant}               the tenant's users
   revoke  {tenant, key_id?}      refuse one key, or all of the tenant's keys
@@ -30,6 +38,10 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
                                  tenant's streams exist and its live keys are in the current
                                  usage plans. Safe to repeat
   purge   {tenant}               internal: one purge pass (re-invokes itself if long)
+
+Plans: "free" (self-service sign-ups) and "standard"; each has an API Gateway usage plan (rate
+limits) and a daily data cap (PLAN_DAILY_GB; the tenant record's daily_cap_bytes, enforced by
+ingest, which meters bytes per tenant per day in meter#<tenant>#<day>).
 
 Keys: only their SHA-256 is stored (obs-tenants, pk "key#<hash>"); the
 authorizer maps a key to its tenant and scope from there. Scope "ingest"
@@ -72,12 +84,16 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
+import emails
+
 TENANTS = os.environ["TENANTS_TABLE"]
 INDEX = os.environ["INDEX_TABLE"]
 USAGE = os.environ["USAGE_TABLE"]
 BUCKET = os.environ["BUCKET"]
 FIREHOSE_ROLE = os.environ["FIREHOSE_ROLE_ARN"]
 PLANS = json.loads(os.environ.get("USAGE_PLANS", "{}"))  # plan name -> API Gateway usage plan id
+PLAN_DAILY_GB = {"free": 1, "standard": None, "test-tiny": None}   # data a day ingest accepts (None: no cap)
+GB = 10**9
 SELF = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "obs-tenant-admin")
 BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
 SETTLE = timedelta(minutes=int(os.environ.get("SETTLE_MINUTES", "20")))
@@ -177,7 +193,7 @@ def _items(tenant, prefix):
 
 # ------------------------------------------------------------------ actions
 
-def create(tenant, plan="standard", buffer_seconds=None, context=None):
+def create(tenant, plan="standard", buffer_seconds=None, company=None, issue_key=True, context=None):
     if plan not in PLANS:
         raise Refused(f"unknown plan {plan!r}; one of {sorted(PLANS)}")
     secs = _buffer_seconds(BUFFER_SECONDS if buffer_seconds is None else buffer_seconds)
@@ -187,10 +203,55 @@ def create(tenant, plan="standard", buffer_seconds=None, context=None):
     if rec and rec["status"] == "active":
         raise Refused(f"{tenant} already exists; use rotate for a new key")
     _provision_streams(tenant, secs)
-    tenants.put_item(Item={"pk": f"tenant#{tenant}", "tenant": tenant, "status": "active", "plan": plan,
-                           "buffer_seconds": secs, "created_at": _iso(_now())})
+    item = {"pk": f"tenant#{tenant}", "tenant": tenant, "status": "active", "plan": plan,
+            "buffer_seconds": secs, "created_at": _iso(_now()), "company": company or (rec or {}).get("company") or tenant}
+    if PLAN_DAILY_GB.get(plan):
+        item["daily_cap_bytes"] = PLAN_DAILY_GB[plan] * GB
+    tenants.put_item(Item=item)
+    if not issue_key:
+        return {"tenant": tenant, "plan": plan}
     key, key_id = _issue_key(tenant, plan)
     return {"tenant": tenant, "plan": plan, "key_id": key_id, "api_key": key}
+
+
+def signup(tenant, email, company, context=None):
+    """A self-service sign-up: the free-plan tenant (reserved by obs-account-api as "creating"),
+    then its owner's login and welcome email. Its keys are made in the app."""
+    rec = _record(tenant)
+    if not rec or rec["status"] not in ("creating", "active"):
+        raise Refused(f"{tenant} was not reserved for a sign-up")
+    if rec["status"] == "creating":
+        create(tenant, plan="free", company=company, issue_key=False)
+    tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET signed_up_by = :e",
+                        ExpressionAttributeValues={":e": _email(email)})
+    out = invite_user(tenant, email, role="owner", welcome=True)
+    return {"tenant": tenant, "email": out["email"], "status": "signed up", "email_sent": out["email_sent"]}
+
+
+def add_key(tenant, scope="ingest", context=None):
+    if scope not in SCOPES:
+        raise Refused(f"unknown scope {scope!r}; one of {sorted(SCOPES)}")
+    rec = _active(tenant)
+    key, key_id = _issue_key(tenant, rec.get("plan", "standard"), scope)
+    return {"tenant": tenant, "scope": scope, "key_id": key_id, "api_key": key}
+
+
+def set_cap(tenant, daily_gb=None, context=None):
+    rec = _active(tenant)
+    if daily_gb is None:
+        daily_gb = PLAN_DAILY_GB.get(rec.get("plan", "standard"))
+    try:
+        cap = int(float(daily_gb) * GB) if daily_gb else 0
+    except (TypeError, ValueError):
+        raise Refused("daily_gb: a number of GB a day (0: no cap)")
+    if cap < 0:
+        raise Refused("daily_gb: a number of GB a day (0: no cap)")
+    if cap:
+        tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET daily_cap_bytes = :c",
+                            ExpressionAttributeValues={":c": cap})
+    else:
+        tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="REMOVE daily_cap_bytes")
+    return {"tenant": tenant, "daily_cap_bytes": cap or None}
 
 
 def rotate(tenant, grace_hours=24, scope="ingest", context=None):
@@ -248,7 +309,7 @@ def delete(tenant, context=None):
             _remove_login(u)
     # Synthetic checks (S1): stop running them; and their excluded runs, maintenance windows, SLOs,
     # alert rules and channels (A1; an email channel's SNS topic too).
-    for prefix in ("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#", "dash#"):
+    for prefix in ("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#", "dash#", "meter#"):
         for c in _items(tenant, prefix):
             if c.get("topic_arn"):
                 try:
@@ -262,16 +323,25 @@ def delete(tenant, context=None):
                     "until one finds nothing"}
 
 
-def invite_user(tenant, email, send_email=True, context=None):
+ROLES = {"owner", "member"}
+
+
+def invite_user(tenant, email, send_email=True, role="owner", invited_by=None, welcome=False, context=None):
+    """role: owners manage the tenant's users and API keys in the app; members use everything else.
+    (Users invited before roles existed, by the platform, are owners.)"""
     if not USER_POOL:
         raise Refused("logins are not set up (no USER_POOL_ID; deploy obs-state, then obs-phaseT5)")
-    _active(tenant)
+    rec_t = _active(tenant)
     email = _email(email)
+    if role not in ROLES:
+        raise Refused(f"unknown role {role!r}; one of {sorted(ROLES)}")
     rec = tenants.get_item(Key={"pk": f"user#{email}"}, ConsistentRead=True).get("Item")
     if rec and rec["status"] == "active":
         # A login belongs to exactly one tenant (its username is the email).
         raise Refused(f"{email} is already a user of {'this tenant' if rec['tenant'] == tenant else 'another tenant'}")
-    kw = {} if send_email else {"MessageAction": "SUPPRESS"}
+    ours = bool(send_email) and emails.enabled()       # our own email (SES), not Cognito's
+    password = _temp_password()
+    kw = {"MessageAction": "SUPPRESS", "TemporaryPassword": password} if ours or not send_email else {}
     try:
         cognito.admin_create_user(
             UserPoolId=USER_POOL, Username=email, DesiredDeliveryMediums=["EMAIL"],
@@ -280,8 +350,23 @@ def invite_user(tenant, email, send_email=True, context=None):
     except cognito.exceptions.UsernameExistsException:
         raise Refused(f"{email} already has a login")
     tenants.put_item(Item={"pk": f"user#{email}", "tenant": tenant, "status": "active", "email": email,
-                           "created_at": _iso(_now())})
-    return {"tenant": tenant, "email": email, "status": "invited", "email_sent": bool(send_email)}
+                           "role": role, "created_at": _iso(_now()), **({"invited_by": invited_by} if invited_by else {})})
+    if ours:
+        company = rec_t.get("company") or tenant
+        if welcome:
+            emails.welcome(email, password, company)
+        else:
+            emails.invitation(email, password, company, invited_by)
+    return {"tenant": tenant, "email": email, "role": role, "status": "invited", "email_sent": bool(send_email)}
+
+
+def _temp_password():
+    """Meets the pool's policy (12+ characters, upper, lower, digit); easy to type."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    while True:
+        p = "".join(secrets.choice(alphabet) for _ in range(14))
+        if any(c.isupper() for c in p) and any(c.islower() for c in p) and any(c.isdigit() for c in p):
+            return p
 
 
 def remove_user(tenant, email, context=None):
@@ -294,8 +379,9 @@ def remove_user(tenant, email, context=None):
 
 
 def users(tenant, context=None):
-    return {"tenant": tenant, "users": sorted(({"email": u["email"], "status": u["status"],
-                                                "created_at": u.get("created_at")} for u in _users(tenant)),
+    return {"tenant": tenant, "users": sorted(({"email": u["email"], "status": u["status"], "role": u.get("role", "owner"),
+                                                "created_at": u.get("created_at"), "invited_by": u.get("invited_by")}
+                                               for u in _users(tenant)),
                                               key=lambda u: u["email"])}
 
 
@@ -347,7 +433,10 @@ def _buffer_seconds(v):
 def status(tenant, context=None):
     rec = _record(tenant) or {"status": "unknown (no tenant record)"}
     keys = [{k: v for k, v in key.items() if k != "pk"} for key in _keys(tenant)]
+    meter = tenants.get_item(Key={"pk": f"meter#{tenant}#{_now():%Y-%m-%d}"}).get("Item") or {}
     return {"tenant": tenant, **{k: v for k, v in rec.items() if k not in ("pk", "tenant")},
+            "today": {"bytes": int(meter.get("bytes", 0)), "records": int(meter.get("records", 0)),
+                      "refused_bytes": int(meter.get("refused_bytes", 0))},
             "keys": sorted(keys, key=lambda k: k.get("created_at", ""))}
 
 
@@ -554,7 +643,8 @@ def purge(tenant, deleted=0, context=None):
     return {"tenant": tenant, "deleted": deleted, "pass_complete": True}
 
 
-ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key,
+ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key, "signup": signup, "add-key": add_key,
+           "set-cap": set_cap,
            "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
            "usage": usage, "list": list_tenants, "sweep": sweep, "restore": restore, "purge": purge,
            "retention": retention}

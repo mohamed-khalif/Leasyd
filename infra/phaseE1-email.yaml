@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase E1: the platform's own email (invitations, sign-up), sent with Amazon SES from
+  app.<domain>. The domain identity signs with DKIM; its records go in the app.<domain> zone of
+  obs-dns (already delegated to Route 53), so nothing changes at the domain's own DNS provider.
+  DMARC: reports only (p=none). Deploy with infra/deploy-phaseE1.sh, then redeploy obs-phaseT5.
+
+Parameters:
+  MailDomain:
+    Type: String
+    Description: The sending domain, app.<domain> (deploy-phaseE1.sh passes it from obs-dns).
+  HostedZoneId:
+    Type: String
+    Description: obs-dns output AppZoneId (the MailDomain's zone).
+  SenderName:
+    Type: String
+    Default: Leasyd
+  SenderLocalPart:
+    Type: String
+    Default: no-reply
+
+Resources:
+  Identity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref MailDomain
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+      FeedbackAttributes:
+        EmailForwardingEnabled: false
+
+  DkimRecord1:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName1
+      Type: CNAME
+      TTL: "1800"
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue1]
+  DkimRecord2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName2
+      Type: CNAME
+      TTL: "1800"
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue2]
+  DkimRecord3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName3
+      Type: CNAME
+      TTL: "1800"
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue3]
+
+  Dmarc:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "_dmarc.${MailDomain}"
+      Type: TXT
+      TTL: "3600"
+      ResourceRecords: ['"v=DMARC1; p=none;"']
+
+Outputs:
+  EmailFrom:
+    Description: The sender obs-phaseT5 uses (EmailFrom).
+    Value: !Sub "${SenderName} <${SenderLocalPart}@${MailDomain}>"
+  MailDomain:
+    Value: !Ref MailDomain

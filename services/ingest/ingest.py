@@ -9,6 +9,11 @@ s3://.../_incoming/tenant=<T>/<signal>/dt=/hour=/ for compaction.
 - Tenant: only from the authorizer's context (i.e. from the API key). Nothing
   the client sends can choose it; obs.* resource attributes from the client
   are stripped.
+- Daily caps: bytes (OTLP JSON, before compression) are metered per tenant and UTC day in
+  obs-tenants (meter#<tenant>#<day>, flushed every METER_FLUSH_S per container). A tenant
+  whose record has daily_cap_bytes (the free plan's 1 GB) gets 429 with Retry-After once
+  today's bytes reach it, until midnight UTC. Metering never fails a request: if DynamoDB is
+  unreachable the data is accepted (and counted when it can be).
 - Durability: Firehose has stored the records durably when PutRecordBatch
   succeeds, so the client gets 200 only then. On failure it gets 503 and its
   SDK retries. (At least once: a retry after a partial failure can duplicate
@@ -31,6 +36,9 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportM
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
+TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "")   # empty: no metering, no caps
+METER_FLUSH_S = 10    # how often a container adds its counts to the day's meter
+CAP_CHECK_S = 30      # how long a container trusts what it read of a tenant's cap and usage
 RECORD_COMPRESSION = os.environ.get("RECORD_COMPRESSION", "none")   # "gzip": compress records before Firehose
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 
@@ -49,6 +57,7 @@ TRUNCATED_BODY_BYTES = 256 * 1024
 _ID_KEYS = {"traceId", "spanId", "parentSpanId"}
 
 firehose = boto3.client("firehose")
+ddb = boto3.client("dynamodb")
 
 
 class HttpError(Exception):
@@ -68,6 +77,16 @@ def handler(event, context):
         headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
         ctype = (headers.get("content-type") or "application/x-protobuf").split(";")[0].strip().lower()
 
+        cap = meter.over_cap(tenant)
+        if cap:
+            meter.add(tenant, 0, 0, refused=len(event.get("body") or ""))
+            wait = 86400 - int(time.time()) % 86400
+            print(json.dumps({"tenant": tenant, "signal": signal, "refused": "daily cap", "cap_bytes": cap}))
+            out = _response(429, "application/json",
+                            f"daily data limit reached ({cap / 1e9:g} GB a day for this account); data is "
+                            "accepted again from 00:00 UTC, or raise the limit in Leasyd")
+            out["headers"]["Retry-After"] = str(wait)
+            return out
         doc = parse(signal, _body(event, headers), ctype)
         records = list(to_records(signal, doc))
         raw_bytes = sum(len(r) for r in records)
@@ -77,12 +96,96 @@ def handler(event, context):
             # read as one gzip stream; the tenant's streams pass them through.
             records = [gzip.compress(r, compresslevel=6) for r in records]
         put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
+        meter.add(tenant, raw_bytes, _count(signal, doc))
         print(json.dumps({"tenant": tenant, "signal": signal, "records": len(records),
                           "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records)}))
         return _response(200, ctype, None)
     except HttpError as e:
         print(json.dumps({"status": e.status, "error": str(e)}))
         return _response(e.status, "application/json", str(e))
+
+
+# ------------------------------------------------------------------ metering and daily caps
+
+class Meter:
+    """Per container: bytes and records accepted per (tenant, UTC day), added to obs-tenants'
+    meter#<tenant>#<day> every METER_FLUSH_S; and each tenant's cap and usage, re-read every
+    CAP_CHECK_S (so a cap is enforced within about that, plus the other containers' unflushed counts)."""
+
+    def __init__(self):
+        self.pending, self.caps, self.flushed_at = {}, {}, time.time()
+
+    def over_cap(self, tenant):
+        """-> the tenant's daily cap in bytes if today's usage has reached it, else None."""
+        if not TENANTS_TABLE:
+            return None
+        day, now = _day(), time.time()
+        c = self.caps.get(tenant)
+        if not c or c[1] != day or now - c[0] > CAP_CHECK_S:
+            try:
+                rec = ddb.get_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"tenant#{tenant}"}},
+                                   ProjectionExpression="daily_cap_bytes").get("Item") or {}
+                cap = int(rec["daily_cap_bytes"]["N"]) if "daily_cap_bytes" in rec else None
+                used = 0
+                if cap:
+                    m = ddb.get_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"meter#{tenant}#{day}"}},
+                                     ProjectionExpression="#b", ExpressionAttributeNames={"#b": "bytes"}).get("Item") or {}
+                    used = int(m.get("bytes", {}).get("N", 0))
+            except Exception as e:   # never fail ingest on metering
+                print(json.dumps({"meter": "cap check failed", "error": str(e)[:200]}))
+                return None
+            c = self.caps[tenant] = (now, day, cap, used)
+        _, _, cap, used = c
+        pending = self.pending.get((tenant, day), (0, 0, 0))[0]
+        return cap if cap is not None and used + pending >= cap else None
+
+    def add(self, tenant, nbytes, records, refused=0):
+        if not TENANTS_TABLE:
+            return
+        k = (tenant, _day())
+        b, r, x = self.pending.get(k, (0, 0, 0))
+        self.pending[k] = (b + nbytes, r + records, x + refused)
+        if time.time() - self.flushed_at >= METER_FLUSH_S:
+            self.flush()
+
+    def flush(self):
+        self.flushed_at = time.time()
+        for (tenant, day), (b, r, x) in list(self.pending.items()):
+            try:
+                ddb.update_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"meter#{tenant}#{day}"}},
+                                UpdateExpression="ADD #b :b, records :r, refused_bytes :x SET tenant = :t, #d = :d",
+                                ExpressionAttributeNames={"#b": "bytes", "#d": "day"},
+                                ExpressionAttributeValues={":b": {"N": str(b)}, ":r": {"N": str(r)}, ":x": {"N": str(x)},
+                                                           ":t": {"S": tenant}, ":d": {"S": day}})
+            except Exception as e:   # keep the counts for the next flush
+                print(json.dumps({"meter": "flush failed", "error": str(e)[:200]}))
+                continue
+            del self.pending[(tenant, day)]
+            c = self.caps.get(tenant)
+            if c and c[1] == day:
+                self.caps[tenant] = (c[0], day, c[2], c[3] + b)
+
+
+def _day():
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _count(signal, doc):
+    """Log records, spans or metric data points in an OTLP JSON document."""
+    _, top, scope_key, item_key = SIGNALS[signal]
+    n = 0
+    for res in doc.get(top) or []:
+        for scope in res.get(scope_key) or []:
+            for item in scope.get(item_key) or []:
+                if signal == "metrics":
+                    for kind in ("gauge", "sum", "histogram", "exponentialHistogram", "summary"):
+                        n += len((item.get(kind) or {}).get("dataPoints") or [])
+                else:
+                    n += 1
+    return n
+
+
+meter = Meter()
 
 
 # ------------------------------------------------------------------ parsing

@@ -12,6 +12,27 @@ Parameters:
     Description: obs-phaseT2 output StandardPlanId (deploy-phaseT5.sh passes it).
   TestTinyPlanId:
     Type: String
+  FreePlanId:
+    Type: String
+    Default: ""
+    Description: obs-phaseT2 output FreePlanId (self-service sign-ups' plan).
+  ApiId:
+    Type: String
+    Default: ""
+    Description: obs-phaseT2 output ApiId; empty = no self-service routes to allow.
+  EmailFrom:
+    Type: String
+    Default: ""
+    Description: >
+      Sender of invitations and sign-up emails, e.g. "Leasyd <no-reply@app.leasyd.com>"
+      (obs-phaseE1's verified SES domain). Empty = Cognito sends invitations (about 50 a day).
+  AppUrl:
+    Type: String
+    Default: https://app.leasyd.com
+  SignupsPerDay:
+    Type: Number
+    Default: 100
+    Description: Self-service sign-ups accepted a day, across the platform.
   UserPoolId:
     Type: String
     Default: ""
@@ -30,6 +51,10 @@ Parameters:
       Gap between purge passes when deleting a tenant. Longer than a
       compaction worker's lease (16 min), so a pass that finds nothing
       proves no worker was still writing.
+
+Conditions:
+  HasFreePlan: !Not [!Equals [!Ref FreePlanId, ""]]
+  SelfService: !Not [!Equals [!Ref ApiId, ""]]
 
 Resources:
   AdminRole:
@@ -109,6 +134,10 @@ Resources:
                 Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-tenant-admin"
+              - Sid: PeopleEmail    # invitations and sign-up emails (emails.py), from the platform's domain
+                Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T5" }
@@ -139,7 +168,12 @@ Resources:
           USAGE_TABLE: obs-usage
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
           FIREHOSE_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-firehose"
-          USAGE_PLANS: !Sub '{"standard": "${StandardPlanId}", "test-tiny": "${TestTinyPlanId}"}'
+          USAGE_PLANS: !If
+            - HasFreePlan
+            - !Sub '{"standard": "${StandardPlanId}", "test-tiny": "${TestTinyPlanId}", "free": "${FreePlanId}"}'
+            - !Sub '{"standard": "${StandardPlanId}", "test-tiny": "${TestTinyPlanId}"}'
+          EMAIL_FROM: !Ref EmailFrom
+          APP_URL: !Ref AppUrl
           SETTLE_MINUTES: !Ref SettleMinutes
           RETENTION_DAYS: !Ref RetentionDays
           USER_POOL_ID: !Ref UserPoolId
@@ -196,6 +230,82 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt SweepSchedule.Arn
+
+  # ---------- Self-service: sign-up and a tenant's own account (/v1/signup, /v1/app/account) ----------
+
+  # Only checks who may ask; every change is made by obs-tenant-admin, which it invokes.
+  AccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-account-api
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: account-api
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Registry       # users (roles), sign-up records and limits, tenant name reservations
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+              - Sid: TenantAdmin
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt AdminFunction.Arn
+              - Sid: AlreadyRegisteredEmail
+                Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T5" }
+
+  AccountLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-account-api
+      RetentionInDays: 90
+
+  AccountFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: AccountLogGroup
+    Properties:
+      FunctionName: obs-account-api
+      Description: Self-service sign-up and a tenant's own account (users, API keys)
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: account.handler
+      Code: ../services/tenants/build
+      Role: !GetAtt AccountRole.Arn
+      MemorySize: 256
+      Timeout: 28
+      Environment:
+        Variables:
+          TENANTS_TABLE: obs-tenants
+          ADMIN_FUNCTION: !Ref AdminFunction
+          SIGNUPS_PER_DAY: !Ref SignupsPerDay
+          EMAIL_FROM: !Ref EmailFrom
+          APP_URL: !Ref AppUrl
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: "T5" }
+
+  AccountApiPermission:
+    Type: AWS::Lambda::Permission
+    Condition: SelfService
+    Properties:
+      FunctionName: !Ref AccountFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/v1/*"
 
 Outputs:
   AdminFunction:

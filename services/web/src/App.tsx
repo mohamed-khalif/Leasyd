@@ -1,3 +1,4 @@
+import { Settings } from "./pages/Settings";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 import { me } from "./api";
@@ -81,6 +82,9 @@ export function App() {
   } else if (path.startsWith("/logs")) {
     page = <Logs ctx={ctx} params={params} />;
     crumb = ["Logs", "Explorer"];
+  } else if (path.startsWith("/settings")) {
+    page = <Settings ctx={ctx} />;
+    crumb = ["Settings", "Account"];
   } else if (path.startsWith("/usage")) {
     page = <Usage ctx={ctx} />;
     crumb = ["Dashboards", "Usage & Cost"];
