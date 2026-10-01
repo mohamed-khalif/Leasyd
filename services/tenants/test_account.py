@@ -125,7 +125,15 @@ def test_reserved_and_short_names(acc):
     assert item["status"] == "creating" and item["company"] == "Ünïcode & Co!!"
 
 
-def test_trial_upgrade_and_extension(acc, adm, mail):  # noqa: F811
+def test_trial_upgrade_and_extension(acc, adm, mail, monkeypatch):  # noqa: F811
+    # As API Gateway: a key can't be in two usage plans of one stage at once.
+    real = adm.apigw.create_usage_plan_key
+    def one_plan(usagePlanId, keyId, keyType):
+        for p in adm.apigw.get_usage_plans()["items"]:
+            if keyId in [k["id"] for k in adm.apigw.get_usage_plan_keys(usagePlanId=p["id"])["items"]]:
+                raise RuntimeError(f"ConflictException: {keyId} is already in usage plan {p['id']}")
+        return real(usagePlanId=usagePlanId, keyId=keyId, keyType=keyType)
+    monkeypatch.setattr(adm.apigw, "create_usage_plan_key", one_plan)
     signup(acc, {"email": "ana@acme.com", "company": "Acme"})
     adm.handler(acc.started[-1], CTX)
     key = app(acc, "ana@acme.com", "acme", "POST", "keys", {"scope": "ingest"})[1]

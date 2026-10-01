@@ -272,11 +272,17 @@ def upgrade(tenant, context=None):
     moved = []
     for k in _keys(tenant):
         if k["status"] in ("active", "expiring") and k.get("plan", "standard") != "standard":
-            apigw.create_usage_plan_key(usagePlanId=PLANS["standard"], keyId=k["api_key_id"], keyType="API_KEY")
+            # A key may be in only one usage plan of the stage: out of the old one, then into the new
+            # (put back if that fails, so the key keeps working).
             try:
                 apigw.delete_usage_plan_key(usagePlanId=PLANS[k["plan"]], keyId=k["api_key_id"])
             except apigw.exceptions.NotFoundException:
                 pass
+            try:
+                apigw.create_usage_plan_key(usagePlanId=PLANS["standard"], keyId=k["api_key_id"], keyType="API_KEY")
+            except Exception:
+                apigw.create_usage_plan_key(usagePlanId=PLANS[k["plan"]], keyId=k["api_key_id"], keyType="API_KEY")
+                raise
             tenants.update_item(Key={"pk": k["pk"]}, UpdateExpression="SET #p = :s",
                                 ExpressionAttributeNames={"#p": "plan"}, ExpressionAttributeValues={":s": "standard"})
             moved.append(k["api_key_id"])

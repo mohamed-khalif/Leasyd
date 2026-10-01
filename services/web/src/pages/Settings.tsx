@@ -82,6 +82,7 @@ OTEL_SERVICE_NAME=my-service`}</pre>
         {newKey && (
           <div className="newkey">
             <b>New key: copy it now, it won't be shown again.</b>
+            <span className="faint">It starts working within about 2 minutes (until then, data sent with it is refused with 403).</span>
             <div className="newkey-row">
               <code className="mono">{newKey.api_key}</code>
               <button className="btn" onClick={() => navigator.clipboard?.writeText(newKey.api_key).then(() => setNote("Copied."))}>Copy</button>
