@@ -210,6 +210,27 @@ function MetricDetail({ ctx, name, params }: { ctx: Ctx; name: string; params: U
 
 type Line = { label: string; points: [number, number][] };
 
+/** Prometheus' histogram_quantile over {upper bound: count}: interpolate inside the bucket holding
+ *  the q-th measurement (the first starts at 0; in the +Inf bucket, the highest finite bound). */
+export function bucketQuantile(q: number, buckets: Record<string, number>): number | null {
+  const bs = Object.entries(buckets).map(([le, c]) => [le === "+Inf" ? Infinity : Number(le), Math.max(0, Number(c) || 0)] as [number, number]).sort((a, b) => a[0] - b[0]);
+  const total = bs.reduce((s, [, c]) => s + c, 0);
+  if (!bs.length || total <= 0) return null;
+  const finite = bs.filter(([le]) => isFinite(le)), top = finite.length ? finite[finite.length - 1][0] : null;
+  const rank = q * total;
+  let seen = 0;
+  for (let i = 0; i < bs.length; i++) {
+    const [hi, c] = bs[i];
+    if (seen + c >= rank && c > 0) {
+      if (!isFinite(hi)) return top;
+      const lo = i ? bs[i - 1][0] : hi > 0 ? 0 : hi;
+      return lo + ((hi - lo) * (rank - seen)) / c;
+    }
+    seen += c;
+  }
+  return top;
+}
+
 /** The metric's chart(s) and a table of every group, from one query. */
 function Charts(p: { ctx: Ctx; m: Info; kind: Kind; agg: string; split: string; service: string; window: { start: string; end: string } }) {
   const b = bucketSeconds(p.ctx.range);
@@ -222,7 +243,22 @@ function Charts(p: { ctx: Ctx; m: Info; kind: Kind; agg: string; split: string; 
                      ...(p.service ? { services: [p.service] } : {}),
                      group_by: [`ts:${b}`, ...(p.split ? [p.split] : [])], aggs, limit: 10000 };
   const res = useQuery(q, JSON.stringify(q) + p.ctx.tick);
+  // Explicit-bucket histograms: the buckets too, for a p95 line (exponential histograms have none)
+  const bq: Query = { ...q, aggs: [{ fn: "buckets" }] };
+  const withBuckets = p.kind === "histogram" && p.m.type === "histogram";
+  const bres = useQuery(withBuckets ? bq : null, JSON.stringify(bq) + p.ctx.tick);
   const unit = unitLabel(p.m.unit);
+  const p95 = useMemo(() => {
+    const out = new Map<string, Line>();
+    for (const row of bres.data?.rows ?? []) {
+      const t = Date.parse(String(row[0])), label = p.split ? String(row[1] ?? "(none)") : p.m.name;
+      const v = bucketQuantile(0.95, (row[p.split ? 2 : 1] ?? {}) as Record<string, number>);
+      if (v == null) continue;
+      if (!out.has(label)) out.set(label, { label, points: [] });
+      out.get(label)!.points.push([t, v]);
+    }
+    return [...out.values()];
+  }, [bres.data]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // [time, group, a0, a1?] rows -> one line per group, for each chart.
   const { primary, rate } = useMemo(() => {
@@ -253,6 +289,7 @@ function Charts(p: { ctx: Ctx; m: Info; kind: Kind; agg: string; split: string; 
       {() => (
         <div style={{ display: "grid", gap: 14 }}>
           <Chart title={title} lines={primary} colors={colors} ctx={p.ctx} unit={primaryUnit} />
+          {withBuckets && p95.length > 0 && <Chart title="p95 (from the buckets)" lines={p95} colors={colors} ctx={p.ctx} unit={unit ? ` ${unit}` : ""} />}
           {p.kind === "histogram" && <Chart title="Observations per second" lines={rate} colors={colors} ctx={p.ctx} unit="/s" />}
           <GroupTable lines={primary} split={p.split} unit={primaryUnit} />
         </div>

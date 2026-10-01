@@ -64,6 +64,8 @@ export function toPromQL(q: Q, metricKind?: string): string {
   }
   if (!b.metric) return "";
   if (metricKind === "counter") return `${b.agg} ${by(b.groupBy)}(rate(${selector(b.metric, b.filters)}${w}))`;
+  if (metricKind === "histogram" && /^p\d+$/.test(b.agg))
+    return `histogram_quantile(${Number(b.agg.slice(1)) / 100}, sum by (${["le", ...b.groupBy].map(quoteLabel).join(", ")}) (rate(${selector(b.metric + "_bucket", b.filters)}${w})))`;
   if (metricKind === "histogram")
     return `sum ${by(b.groupBy)}(rate(${selector(b.metric + "_sum", b.filters)}${w})) / sum ${by(b.groupBy)}(rate(${selector(b.metric + "_count", b.filters)}${w}))`;
   return `${b.agg} ${by(b.groupBy)}(avg_over_time(${selector(b.metric, b.filters)}${w}))`;
@@ -363,11 +365,15 @@ function BuilderForm({ q, metrics, kind, onChange }: { q: Q; metrics: string[]; 
           <div className="grow" style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input className="input mono grow" list="qb-metrics" placeholder="metric name" value={b.metric} onChange={(e) => onChange({ ...b, metric: e.target.value })} />
             <datalist id="qb-metrics">{metrics.map((m) => <option key={m} value={m} />)}</datalist>
-            {kind !== "histogram" && (
-              <select className="select" value={b.agg} onChange={(e) => onChange({ ...b, agg: e.target.value })} aria-label="Aggregate">
+            {kind === "histogram" ? (
+              <select className="select" value={/^p\d+$/.test(b.agg) ? b.agg : "avg"} onChange={(e) => onChange({ ...b, agg: e.target.value })} aria-label="Aggregate">
+                {[["avg", "average"], ["p50", "p50"], ["p90", "p90"], ["p95", "p95"], ["p99", "p99"]].map(([a, l]) => <option key={a} value={a}>{l}</option>)}
+              </select>
+            ) : (
+              <select className="select" value={/^p\d+$/.test(b.agg) ? "sum" : b.agg} onChange={(e) => onChange({ ...b, agg: e.target.value })} aria-label="Aggregate">
                 {["sum", "avg", "min", "max"].map((a) => <option key={a} value={a}>{a}</option>)}
               </select>)}
-            <span className="faint">{kind === "counter" ? "counter: rate per second" : kind === "histogram" ? "histogram: average" : kind ? "gauge: average over each step" : ""}</span>
+            <span className="faint">{kind === "counter" ? "counter: rate per second" : kind === "histogram" ? (/^p\d+$/.test(b.agg) ? "histogram: percentile from its buckets, in its unit" : "histogram: average") : kind ? "gauge: average over each step" : ""}</span>
           </div>
         </div>
       )}

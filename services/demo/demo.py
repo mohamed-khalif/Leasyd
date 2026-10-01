@@ -144,6 +144,9 @@ class Minute:
                 "attributes": _attrs(attrs), "status": {"code": 2, "message": node["error"]} if node["error"] else {}}
         if parent:
             span["parentSpanId"] = parent
+        events = self.events(node, span_id, start, end)
+        if events:
+            span["events"] = events
         self.spans.setdefault((svc, pod), []).append(span)
         if node["kind"] == "server":
             self.requests.setdefault((svc, pod, node["name"]), []).append(dur)
@@ -151,6 +154,27 @@ class Minute:
         if node["error"] and svc == "payment":
             self.declines[pod] = self.declines.get(pod, 0) + 1
         return end
+
+    def events(self, node, span_id, start, end):
+        """Span events, as OpenTelemetry SDKs record them: an "exception" on failed spans, and a few
+        milestones. Own random source (from the span id), so the rest of the minute is unchanged."""
+        r, svc, name, out = random.Random(span_id), node["service"], node["name"], []
+        at = lambda share: str(int(start + (end - start) * share))
+        if node["error"]:
+            kind = {"payment": "PaymentDeclinedError", "shipping": "TimeoutError"}.get(svc, "RuntimeError")
+            frames = {"payment": ["charge.js:88 in chargeCard", "charge.js:41 in Charge", "server.js:112 in handleUnary"],
+                      "shipping": ["quote.go:57 in (*Client).Quote", "quote.go:31 in GetQuote", "server.go:204 in handle"],
+                      "checkout": ["PlaceOrderHandler.cs:73 in PlaceOrder", "OrderService.cs:142 in Handle"]}.get(svc, ["main:1"])
+            out.append({"timeUnixNano": at(0.97), "name": "exception", "attributes": _attrs({
+                "exception.type": kind, "exception.message": node["error"],
+                "exception.stacktrace": f"{kind}: {node['error']}\n" + "\n".join("    at " + f for f in frames)})})
+        elif svc == "product-catalog" and name == "GetProduct" and r.random() < 0.3:
+            out.append({"timeUnixNano": at(0.2), "name": "cache miss", "attributes": _attrs({"cache.key": f"product:{r.choice(PRODUCTS)}"})})
+        if name == "PlaceOrder" and not node["error"]:
+            out += [{"timeUnixNano": at(0.05), "name": "order validated", "attributes": _attrs({"app.order.items": r.randint(1, 4)})},
+                    {"timeUnixNano": at(0.7), "name": "payment authorized"},
+                    {"timeUnixNano": at(0.95), "name": "order confirmed"}]
+        return out
 
     def log(self, svc, pod, trace, span, t, node, dur, ctx):
         r = self.rnd

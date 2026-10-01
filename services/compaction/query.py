@@ -24,6 +24,10 @@ counts as it is; a cumulative point counts its rise since the series' previous
 point (a drop means the counter restarted from zero, so the whole value counts).
 A series is one metric of one service with one set of attributes and resource
 attributes. Divide by the bucket length for a rate per second.
+buckets (metric histograms, the only aggregate of its query): per group, how many
+measurements fell in each of the histogram's buckets over the range, as
+{upper bound: count} ("+Inf" for the last), with cumulative points taken as rises
+like increase. For PromQL's histogram_quantile.
 
 The query is never SQL from the caller: fields are checked against the
 signal's columns and every value is a bound parameter.
@@ -87,7 +91,8 @@ COLUMNS = {
 OPS = {"=": "=", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
 AGGS = {"count", "sum", "min", "max", "avg", "p50", "p90", "p95", "p99", "increase",
         "last",   # the value of the latest point in the group
-        "hist"}   # the percentile histogram itself ({bucket: count}, HIST_BASE buckets), to merge later
+        "hist",   # the percentile histogram itself ({bucket: count}, HIST_BASE buckets), to merge later
+        "buckets"}   # metric histograms: {upper bound "le": count} over the range (rises, as increase)
 _PCT = re.compile(r"p(\d{1,2}(?:\.\d{1,3})?)")   # any percentile: p50, p99.9, ...
 MAX_INTERNAL_ROWS = 50_000   # "max_rows" (set by PromQL, not the API): groups a query may return
 INCREASE_FIELDS = {"value", "count", "sum"}   # metrics columns a counter's rise can be taken of
@@ -258,6 +263,18 @@ def compile_query(q, edges=False):
     group_params, groups = [], []
     for g in q.get("group_by") or []:
         groups.append(_time_bucket(g) or _derived(signal, g) or _field(signal, g, group_params))
+    if any(a.get("fn") == "buckets" for a in aggs):
+        if signal != "metrics" or len(aggs) != 1:
+            raise BadQuery("buckets is for metrics, and the only aggregate of its query")
+        if edges:
+            return (f"SELECT {SERIES} AS s, min(ts) AS first_ts, max(ts) AS last_ts, "
+                    + "".join(f"arg_min({g}, ts) AS g{j}, " for j, g in enumerate(groups))
+                    + "arg_min(bucket_counts, ts) AS f0, arg_max(bucket_counts, ts) AS l0, "
+                      "arg_min(explicit_bounds, ts) AS fb0, arg_max(explicit_bounds, ts) AS lb0, "
+                      "arg_min(count, ts) AS fn0, arg_max(count, ts) AS ln0 "
+                    f"FROM t WHERE {where_sql} AND temporality = {CUMULATIVE} AND bucket_counts IS NOT NULL GROUP BY 1",
+                    group_params + params)
+        return _buckets_sql(groups, where_sql), group_params + params, "aggregate"
     select, agg_params = [f"{g} AS g{i}" for i, g in enumerate(groups)], []
     for i, a in enumerate(aggs):
         fn = a.get("fn")
@@ -308,6 +325,45 @@ def compile_query(q, edges=False):
 
 
 SERIES = "concat_ws('|', service, metric_name, attributes::VARCHAR, resource_attributes::VARCHAR)"
+
+
+def _buckets_sql(groups, where_sql):
+    """Metric histograms -> per group, {le: count} (a MAP) of measurements per bucket. A delta point
+    counts as it is; a cumulative point counts its rise since the series' previous point, per
+    bucket (a smaller total count, or other bounds, means it restarted: the whole point counts)."""
+    g = ", ".join(f"g{i}" for i in range(len(groups)))
+    gsel = "".join(f"{x} AS g{i}, " for i, x in enumerate(groups))
+    return f"""
+        WITH p AS (
+            SELECT {gsel}temporality AS tmp, bucket_counts AS bc, explicit_bounds AS eb, count AS n,
+                   lag(bucket_counts) OVER w AS pbc, lag(explicit_bounds) OVER w AS peb, lag(count) OVER w AS pn
+            FROM t WHERE {where_sql} AND bucket_counts IS NOT NULL
+            WINDOW w AS (PARTITION BY {SERIES} ORDER BY ts)),
+        e AS (SELECT *, unnest(generate_series(1, len(bc))) AS i FROM p),
+        r AS (
+            SELECT {g + ", " if g else ""}
+                   CASE WHEN i <= len(coalesce(eb, [])) THEN eb[i]::VARCHAR ELSE '+Inf' END AS le,
+                   CASE WHEN tmp = {DELTA} THEN bc[i]
+                        WHEN tmp = {CUMULATIVE} THEN CASE WHEN pbc IS NULL THEN NULL
+                             WHEN n >= pn AND eb IS NOT DISTINCT FROM peb AND len(pbc) = len(bc) THEN bc[i] - pbc[i]
+                             ELSE bc[i] END END AS c
+            FROM e),
+        s AS (SELECT {g + ", " if g else ""}le, sum(c) AS c FROM r WHERE c IS NOT NULL GROUP BY ALL)
+        SELECT {g + ", " if g else ""}map(list(le), list(c)) AS a0 FROM s{" GROUP BY " + g if g else ""}"""
+
+
+def _bucket_rise(first, last):
+    """{le: rise} between a cumulative histogram's point `last` (bc, bounds, count) and the next
+    point `first` (as _buckets_sql)."""
+    (fb, fe, fn), (lb, le_, ln) = first, last
+    if fb is None:
+        return {}
+    restarted = lb is None or fn is None or ln is None or fn < ln or fe != le_ or len(fb) != len(lb)
+    out = {}
+    for i, c in enumerate(fb):
+        k = str(float(fe[i])) if fe and i < len(fe) else "+Inf"
+        out[k] = c if restarted else c - lb[i]
+    return out
 
 
 def _row_cap(q):
@@ -778,7 +834,7 @@ def run(q, invoke_worker=None):
     t_lookup = time.perf_counter()
     # A counter's rise is taken between consecutive points, so each worker needs an unbroken
     # stretch of time: otherwise the rise over a stretch another worker holds is counted twice.
-    contiguous = any(a.get("fn") == "increase" for a in q.get("aggs") or [])
+    contiguous = any(a.get("fn") in ("increase", "buckets") for a in q.get("aggs") or [])
     chunks = plan_chunks(found["files"], int(q.get("workers", MAX_WORKERS)), contiguous)
     invoke_worker = invoke_worker or _invoke_worker
     if len(chunks) <= 1:
@@ -878,6 +934,11 @@ def merge(q, partials):
                     v, t = r[idx[f"a{i}"]], r[idx[f"a{i}_ts"]]
                     if t is not None and (acc[i] is None or t > acc[i][1]):
                         acc[i] = (v, t)
+                elif fn == "buckets":
+                    old = acc[i] or {}
+                    for b, c in (r[idx[f"a{i}"]] or {}).items():
+                        old[_le(b)] = old.get(_le(b), 0) + (c or 0)
+                    acc[i] = old
                 elif fn.startswith("p") or fn == "hist":
                     h = r[idx[f"a{i}"]] or {}
                     old = acc[i] or {}
@@ -907,6 +968,8 @@ def merge(q, partials):
                 out.append(v[0] if v else None)
             elif a["fn"] == "hist":
                 out.append({str(b): c for b, c in sorted((v or {}).items())})
+            elif a["fn"] == "buckets":
+                out.append({b: c for b, c in sorted((v or {}).items(), key=lambda x: float(x[0]))})
             elif a["fn"].startswith("p"):
                 out.append(_percentile(v or {}, float(a["fn"][1:]) / 100))
             else:
@@ -946,6 +1009,8 @@ def _sortable(v):
 def _stitch(groups, aggs, partials, merged):
     """Counters: add each series' rise between consecutive workers (partials are in time order,
     see plan_chunks), to the group of the later worker's first point."""
+    if aggs and aggs[0]["fn"] == "buckets":
+        return _stitch_buckets(groups, partials, merged)
     inc = [i for i, a in enumerate(aggs) if a["fn"] == "increase"]
     last = {}   # series -> (ts, {agg index: value}) of its latest point so far
     for p in partials:
@@ -963,6 +1028,32 @@ def _stitch(groups, aggs, partials, merged):
                         acc[i] = (acc[i] or 0) + _rise(x, prev)
             if s not in last or r[idx["last_ts"]] > last[s][0]:
                 last[s] = (r[idx["last_ts"]], {i: r[idx[f"l{i}"]] for i in inc})
+
+
+def _stitch_buckets(groups, partials, merged):
+    """_stitch for a buckets query: each cumulative histogram's rise between consecutive workers."""
+    last = {}   # series -> (ts, (bucket counts, bounds, count)) of its latest point so far
+    for p in partials:
+        e = p.get("edges")
+        if not e:
+            continue
+        idx = {c: i for i, c in enumerate(e["columns"])}
+        for r in e["rows"]:
+            s = r[idx["s"]]
+            if s in last and r[idx["first_ts"]] > last[s][0]:
+                acc = merged.setdefault(tuple(r[idx[f"g{j}"]] for j in range(len(groups))), [None])
+                h = acc[0] or {}
+                for k, c in _bucket_rise((r[idx["f0"]], r[idx["fb0"]], r[idx["fn0"]]), last[s][1]).items():
+                    h[_le(k)] = h.get(_le(k), 0) + c
+                acc[0] = h
+            if s not in last or r[idx["last_ts"]] > last[s][0]:
+                last[s] = (r[idx["last_ts"]], (r[idx["l0"]], r[idx["lb0"]], r[idx["ln0"]]))
+
+
+def _le(b):
+    """A bucket's upper bound as one spelling ("5.0", "+Inf"), whichever way it was written."""
+    f = float(b)
+    return "+Inf" if f == math.inf else str(f)
 
 
 def _percentile(hist, p):

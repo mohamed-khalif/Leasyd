@@ -13,6 +13,7 @@ Metrics), or you write it yourself (PromQL tab).
 | any metric by name | your OpenTelemetry metrics | `sum by (service_name) (rate(http_server_requests_total[5m]))` |
 | `leasyd.spans` | one per span | `sum by (service_name) (rate(leasyd.spans{span_kind="SERVER"}[5m]))` |
 | `leasyd.span.duration` | span durations (seconds) | `histogram_quantile(0.95, sum by (span_name) (rate(leasyd.span.duration[5m])))` |
+| `<histogram>_bucket` | your histogram metrics' buckets | `histogram_quantile(0.95, sum by (le, service_name) (rate({"http.server.request.duration_bucket"}[5m])))` |
 | `leasyd.logs` | one per log record | `sum by (service_name) (rate(leasyd.logs{severity_range="ERROR_FATAL"}[5m]))` |
 
 - Metric names with dots: `{"http.server.requests"}`, or with underscores (`http_server_requests`).
@@ -23,12 +24,13 @@ Metrics), or you write it yourself (PromQL tab).
   Logs: `severity_text`, `severity_number`, `severity_range` (ERROR_FATAL, WARN, INFO, TRACE_DEBUG, UNKNOWN).
 - In the Query Builder `$__interval` is the chart's step.
 - Supported: `=`, `!=`, `=~`, `!~`; ranges and `offset`; `rate`, `increase`, `irate` (same as rate),
-  `avg/min/max/sum/count/last_over_time`, `histogram_quantile` (span durations); `sum`, `avg`, `min`,
+  `avg/min/max/sum/count/last_over_time`, `histogram_quantile` (span durations, and histogram metrics:
+  linear inside the bucket like Prometheus, in the metric's own unit); `sum`, `avg`, `min`,
   `max`, `count`, `group`, `topk`, `bottomk`, `quantile`, `stddev`, `stdvar` with `by`/`without`;
   `+ - * / % ^`, comparisons (with `bool`), `and`, `or`, `unless`, `on()`, `ignoring()`;
   `abs`, `ceil`, `floor`, `round`, `sqrt`, `exp`, `ln`, `log2`, `log10`, `sgn`, `clamp`, `clamp_min`,
   `clamp_max`, `scalar`, `vector`, `time`.
-- Not yet: `histogram_quantile` over metric histogram buckets (`_bucket`), `group_left`/`group_right`,
+- Not yet: exponential histograms in `histogram_quantile`, `group_left`/`group_right`,
   subqueries, `label_replace`/`label_join`, `absent`, `predict_linear`, `deriv`.
 - Logs and spans have no series of their own: they are counted per `service_name` plus the labels
   you group by.

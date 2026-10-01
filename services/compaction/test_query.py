@@ -277,7 +277,7 @@ def metric_points(minute):
         pts.setdefault(("reqs", "/b"), []).append((ts, 2 * i))
         pts.setdefault(("jobs", None), []).append((ts, 4))
         pts.setdefault(("mem", None), []).append((ts, 1000 + i))
-        pts.setdefault(("latency", None), []).append((ts, 10 * i))  # histogram count
+        pts.setdefault(("latency", None), []).append((ts, 10 * i if i < 30 else 10 * (i - 30) + 5))  # histogram count; restarts
     def dp(ts, route=None, **kw):
         return {"timeUnixNano": str(ts), "startTimeUnixNano": str(H10),
                 "attributes": [{"key": "route", "value": {"stringValue": route}}] if route else [], **kw}
@@ -288,11 +288,17 @@ def metric_points(minute):
             [dp(t, asInt=str(v)) for t, v in pts[("jobs", None)]]}},
         {"name": "mem", "gauge": {"dataPoints": [dp(t, asDouble=v) for t, v in pts[("mem", None)]]}},
         {"name": "latency", "histogram": {"aggregationTemporality": 2, "dataPoints":
-            [dp(t, count=str(v), sum=25.0 * v, bucketCounts=[str(v)], explicitBounds=[]) for t, v in pts[("latency", None)]]}},
+            [dp(t, count=str(v), sum=25.0 * v, bucketCounts=[str(c) for c in split(v)], explicitBounds=[10.0, 100.0])
+             for t, v in pts[("latency", None)]]}},
     ]
     doc = {"resourceMetrics": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]},
                                 "scopeMetrics": [{"scope": {"name": "m"}, "metrics": metrics}]}]}
     return pts, doc
+
+
+def split(v):
+    """The "latency" histogram's buckets (<= 10, <= 100, more) for a count of v."""
+    return [v // 2, v // 4, v - v // 2 - v // 4]
 
 
 @pytest.fixture
@@ -556,3 +562,27 @@ def test_a_crashed_worker_is_run_once_more(monkeypatch):
     with pytest.raises(RuntimeError, match="ValueError"):
         query._invoke_worker({})
     assert len(calls) == 1          # a real error in the query is not retried
+
+
+def test_histogram_buckets_per_minute_any_number_of_workers(counters, monkeypatch):
+    """buckets: measurements per histogram bucket, the rise of each cumulative bucket (a restart
+    counts whole), stitched across workers like increase."""
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1)
+    q = dict(signal="metrics", where=[{"field": "metric_name", "op": "=", "value": "latency"}],
+             group_by=["ts:60"], aggs=[{"fn": "buckets"}], limit=10000)
+    one, many = run(workers=1, **q), run(workers=8, **q)
+    assert many["stats"]["workers"] > 1 and sorted(one["rows"]) == sorted(many["rows"])
+    expected, prev = {}, None
+    for ts, v in counters[("latency", None)]:
+        if prev is not None:
+            rise = [c - p for c, p in zip(split(v), split(prev))] if v >= prev else split(v)
+            b = time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime(ts // 10**9 // 60 * 60))
+            acc = expected.setdefault(b, [0, 0, 0])
+            expected[b] = [a + r for a, r in zip(acc, rise)]
+        prev = v
+    got = {r[0]: [r[1]["10.0"], r[1]["100.0"], r[1]["+Inf"]] for r in many["rows"]}
+    assert got == expected and list(many["rows"][0][1]) == ["10.0", "100.0", "+Inf"]   # in bound order
+    total = run(signal="metrics", workers=8, where=q["where"], aggs=[{"fn": "buckets"}])["rows"][0][0]
+    assert sum(total.values()) == sum(sum(v) for v in expected.values())
+    with pytest.raises(query.BadQuery, match="only aggregate"):
+        query.compile_query({**q, "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T01:00:00Z", "aggs": [{"fn": "buckets"}, {"fn": "count"}]})

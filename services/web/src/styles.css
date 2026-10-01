@@ -239,6 +239,15 @@ a:hover { text-decoration: underline; }
 .wf-name { padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wf-track { position: relative; height: 26px; margin-right: 14px; }
 .wf-bar { position: absolute; top: 7px; height: 12px; border-radius: 2px; min-width: 2px; }
+.wf-event { position: absolute; top: 8px; width: 9px; height: 9px; margin-left: -4px; transform: rotate(45deg); background: var(--surface); border: 2px solid var(--text-2); border-radius: 1px; pointer-events: auto; }
+.wf-event.exc { border-color: var(--text); background: var(--sev-error); }
+.span-events { padding: 10px 14px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+.span-sec { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.span-event { border-left: 3px solid var(--text-3); padding: 4px 10px; display: grid; gap: 4px; font-size: 13px; }
+.span-event.exc { border-left-color: var(--sev-error); }
+.span-event-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.span-event.exc b { color: var(--sev-error); }
+.stack { margin: 0; padding: 8px 10px; background: var(--surface-2); border-radius: 4px; font: 12px var(--font-mono); white-space: pre-wrap; color: var(--text-2); }
 .wf-dur { position: absolute; top: 5px; font-size: 11px; color: var(--text-2); white-space: nowrap; }
 
 /* ---------- sign in ---------- */

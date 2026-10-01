@@ -434,6 +434,16 @@ function metrics(q: Q, t0: number, t1: number, svcs: string[]) {
   const rows = [...groups.values()].map(({ key, vals }) => [...key, ...aggs.map((a, i) => {
     const xs = vals.map((v) => v[i]);
     if (a.fn === "count" || a.fn === "increase") return xs.reduce((x, y) => x + y, 0);
+    if (a.fn === "buckets") {   // a log-normal spread around the group's level, as {le: count}
+      const mid = xs.reduce((x, y) => x + y, 0) / xs.length, out: Record<string, number> = {};
+      let prev = 0;
+      for (const le of [5, 10, 25, 50, 100, 250, 500, 1000, Infinity]) {
+        const cdf = isFinite(le) ? 0.5 * (1 + Math.tanh(1.1 * Math.log(le / Math.max(mid, 1e-9)))) : 1;
+        out[isFinite(le) ? le.toFixed(1) : "+Inf"] = Math.round((cdf - prev) * 1000);
+        prev = cdf;
+      }
+      return out;
+    }
     if (a.fn === "max") return Math.max(...xs);
     if (a.fn === "min") return Math.min(...xs);
     return xs.reduce((x, y) => x + y, 0) / xs.length;
@@ -479,8 +489,11 @@ function span(r: () => number, start: number, svc: string, trace: string, id: st
       : svc.startsWith("frontend") ? { "http.request.method": "GET", "http.route": "/api/products" }
       : { "rpc.system": "grpc", "rpc.service": "oteldemo" },
     resource_attributes: { "service.name": svc },
+    events: [] as { ts: string; name: string; attributes: Record<string, string> }[],
   };
 }
+const evAt = (startMs: number, ms: number, name: string, attributes: Record<string, string> = {}) =>
+  ({ ts: new Date(startMs + ms).toISOString().replace("Z", "000Z"), name, attributes });
 
 function traceSpans(trace: string, r: () => number, t: number) {
   const out: ReturnType<typeof span>[] = [];
@@ -489,6 +502,7 @@ function traceSpans(trace: string, r: () => number, t: number) {
   const fe = span(r, t + 1, "frontend", trace, hex(r, 16), root.span_id, 405e6, "POST /api/checkout");
   out.push(fe);
   const co = span(r, t + 4, "checkout", trace, hex(r, 16), fe.span_id, 380e6, "oteldemo.CheckoutService/PlaceOrder");
+  co.events = [evAt(t + 4, 6, "order validated", { "app.order.items": "3" }), evAt(t + 4, 250, "payment authorized"), evAt(t + 4, 360, "order confirmed")];
   out.push(co);
   let at = t + 8;
   for (const [svc, name, d] of [["cart", "oteldemo.CartService/GetCart", 22e6], ["product-catalog", "oteldemo.ProductCatalogService/GetProduct", 9e6],
@@ -497,7 +511,13 @@ function traceSpans(trace: string, r: () => number, t: number) {
     const s = span(r, at, svc, trace, hex(r, 16), co.span_id, d, name);
     out.push(s);
     if (svc === "cart") out.push(span(r, at + 2, "cart", trace, hex(r, 16), s.span_id, 6e6, "HGET"));
-    if (svc === "payment") out.push(span(r, at + 30, "payment", trace, hex(r, 16), s.span_id, 96e6, "charge"));
+    if (svc === "payment") {
+      const ch = span(r, at + 30, "payment", trace, hex(r, 16), s.span_id, 96e6, "charge");
+      ch.status_code = "STATUS_CODE_ERROR";
+      ch.events = [evAt(at + 30, 94, "exception", { "exception.type": "PaymentDeclinedError", "exception.message": "payment declined: card expired",
+        "exception.stacktrace": "PaymentDeclinedError: payment declined: card expired\n    at charge.js:88 in chargeCard\n    at charge.js:41 in Charge\n    at server.js:112 in handleUnary" })];
+      out.push(ch);
+    }
     at += d / 1e6 + 3;
   }
   return out;

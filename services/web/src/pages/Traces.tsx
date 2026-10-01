@@ -208,7 +208,21 @@ function Explorer({ ctx }: { ctx: Ctx }) {
   );
 }
 
-type Span = { span_id: string; parent_span_id?: string; name: string; service: string; start: number; dur: number; status?: string; depth: number; raw: Record<string, unknown> };
+type SpanEvent = { at: number; name: string; attributes: Record<string, string> };   // at: ns since the epoch
+type Span = { span_id: string; parent_span_id?: string; name: string; service: string; start: number; dur: number; status?: string; depth: number;
+              events: SpanEvent[]; raw: Record<string, unknown> };
+
+/** A span's events (OTLP span events: name, time, attributes), oldest first. */
+function spanEvents(r: Record<string, unknown>, start: number): SpanEvent[] {
+  const list = Array.isArray(r.events) ? (r.events as Record<string, unknown>[]) : [];
+  return list.map((e) => {
+    const iso = String(e.ts ?? ""), micros = Number((iso.match(/\.(\d+)Z$/)?.[1] ?? "").padEnd(6, "0").slice(3, 6));
+    const ms = Date.parse(iso);
+    return { at: isFinite(ms) ? ms * 1e6 + (isFinite(micros) ? micros * 1e3 : 0) : start, name: String(e.name ?? ""),
+             attributes: (e.attributes && typeof e.attributes === "object" ? e.attributes : {}) as Record<string, string> };
+  }).sort((a, b) => a.at - b.at);
+}
+const isException = (e: SpanEvent) => e.name === "exception";
 
 function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
   const w = useMemo(() => ({ start: new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString(), end: new Date().toISOString() }), [traceId, ctx.tick]);
@@ -240,6 +254,10 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
                     </div>
                     <div className="wf-track">
                       <div className="wf-bar" style={{ left: `${left}%`, width: `${width}%`, background: isError(s.status) ? "var(--sev-error)" : color(s.service) }} />
+                      {s.events.map((e, j) => (
+                        <span key={j} className={`wf-event${isException(e) ? " exc" : ""}`} title={`${e.name} · +${fmtMs(e.at - s.start)}`}
+                              style={{ left: `${((e.at - t0) / (t1 - t0 || 1)) * 100}%` }} />
+                      ))}
                       <span className="wf-dur" style={left + width > 80 ? { right: `${100 - left + 0.5}%` } : { left: `calc(${left + width}% + 6px)` }}>{fmtMs(s.dur)}</span>
                     </div>
                   </div>
@@ -249,17 +267,7 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
           )}
         </Loads>
       </Panel>
-      {selected && (
-        <Panel title={`Span ${selected.name}`} flush>
-          <div className="logdetail" style={{ background: "transparent" }}>
-            <div className="kv">
-              {Object.entries(flatten(selected.raw)).filter(([, v]) => v != null && v !== "").map(([k, v]) => (
-                <div key={k} style={{ display: "contents" }}><span className="k">{k}</span><span className="v">{String(v)}</span></div>
-              ))}
-            </div>
-          </div>
-        </Panel>
-      )}
+      {selected && <SpanDetail span={selected} />}
       <Panel title="Logs in this trace" flush>
         <Loads q={logs} empty={!(logs.data && logs.data.rows.length)} height={80}>
           {() => (
@@ -278,6 +286,49 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
   );
 }
 
+function SpanDetail({ span }: { span: Span }) {
+  const fields = Object.entries(flatten(span.raw)).filter(([k, v]) => k !== "events" && k !== "links" && v != null && v !== "");
+  const linkList = Array.isArray(span.raw.links) ? (span.raw.links as Record<string, unknown>[]) : [];
+  return (
+    <Panel title={`Span ${span.name}`} flush right={span.events.length > 0 && <span className="faint">{span.events.length} event{span.events.length > 1 ? "s" : ""}</span>}>
+      {span.events.length > 0 && (
+        <div className="span-events">
+          <div className="span-sec">Events</div>
+          {span.events.map((e, i) => {
+            const { "exception.stacktrace": stack, ...attrs } = e.attributes;
+            return (
+              <div key={i} className={`span-event${isException(e) ? " exc" : ""}`}>
+                <div className="span-event-head">
+                  <span className="mono faint">+{fmtMs(e.at - span.start)}</span>
+                  <b>{isException(e) ? `${attrs["exception.type"] ?? "exception"}` : e.name}</b>
+                  {isException(e) && attrs["exception.message"] && <span>{attrs["exception.message"]}</span>}
+                </div>
+                {Object.keys(attrs).length > 0 && (
+                  <div className="kv">
+                    {Object.entries(attrs).map(([k, v]) => <div key={k} style={{ display: "contents" }}><span className="k">{k}</span><span className="v">{String(v)}</span></div>)}
+                  </div>
+                )}
+                {stack && <pre className="stack">{stack}</pre>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {linkList.length > 0 && (
+        <div className="span-events">
+          <div className="span-sec">Links</div>
+          {linkList.map((l, i) => <div key={i} className="mono" style={{ fontSize: 12 }}>trace {String(l.trace_id)} · span {String(l.span_id)}</div>)}
+        </div>
+      )}
+      <div className="logdetail" style={{ background: "transparent" }}>
+        <div className="kv">
+          {fields.map(([k, v]) => <div key={k} style={{ display: "contents" }}><span className="k">{k}</span><span className="v">{String(v)}</span></div>)}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 /** OTLP span status: stored as its number (2 = error); older data may hold the enum name. */
 export const isError = (status?: string) => status === "2" || status === "STATUS_CODE_ERROR";
 
@@ -287,7 +338,7 @@ function layout(rows: Record<string, unknown>[]): Span[] {
     span_id: String(r.span_id), parent_span_id: r.parent_span_id ? String(r.parent_span_id) : undefined,
     name: String(r.name ?? ""), service: String(r.service ?? "unknown"),
     start: Number(r.ts_unix_nano), dur: Number(r.duration_ns ?? 0), status: r.status_code ? String(r.status_code) : undefined,
-    depth: 0, raw: r,
+    depth: 0, events: spanEvents(r, Number(r.ts_unix_nano)), raw: r,
   }));
   const ids = new Set(spans.map((s) => s.span_id));
   const kids = new Map<string, Span[]>();

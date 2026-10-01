@@ -7,6 +7,8 @@ Series:
   leasyd.logs           one per log record: rate() is records per second
   leasyd.spans          one per span: rate() is spans per second
   leasyd.span.duration  span durations in seconds, for histogram_quantile(0.95, rate(...[5m]))
+  <histogram>_bucket    a metric histogram's buckets (also by its plain name), for
+                        histogram_quantile(0.95, sum by (le) (rate(<histogram>_bucket[5m]))), in its unit
 Labels are OpenTelemetry attributes and resource attributes by name ({"http.route"="/cart"},
 by ("k8s.pod.name")); a bare name with underscores also tries dots (http_route). Plus
 service_name / "service.name"; for spans span_name, span_kind (SERVER, CLIENT, ...),
@@ -14,7 +16,7 @@ status_code (UNSET, OK, ERROR); for logs severity_text, severity_number, severit
 (ERROR_FATAL, WARN, INFO, TRACE_DEBUG, UNKNOWN).
 
 Supported: selectors with =, !=, =~, !~; range vectors and offset; rate, increase, irate (as rate),
-avg/min/max/sum/count/last_over_time, histogram_quantile (span durations); sum, avg, min, max,
+avg/min/max/sum/count/last_over_time, histogram_quantile (span durations, metric histograms); sum, avg, min, max,
 count, group, topk, bottomk, quantile, stddev, stdvar with by/without; + - * / % ^, comparisons
 (filtering, or with bool), and, or, unless, with on()/ignoring(); abs, ceil, floor, round, sqrt,
 exp, ln, log2, log10, sgn, clamp, clamp_min, clamp_max, scalar, vector, time.
@@ -320,9 +322,6 @@ def _source(matchers):
     for suffix, k in (("_count", "count_field"), ("_sum", "sum_field"), ("_bucket", "bucket")):
         if name.endswith(suffix):
             name, kind = name[: -len(suffix)], k
-    if kind == "bucket":
-        raise PromQLError("histogram buckets (_bucket) are not supported yet; for span latency use "
-                          "histogram_quantile(0.95, rate(leasyd.span.duration[5m]))")
     candidates = {name, name.replace("_", ".")}
     if name.endswith("_total"):
         base = name[: -len("_total")]
@@ -489,7 +488,9 @@ class Evaluator:
         if kind == "duration" and mode != "hist":
             raise PromQLError("leasyd.span.duration is for histogram_quantile(φ, rate(leasyd.span.duration[5m]))")
         if mode == "hist" and kind != "duration":
-            raise PromQLError("histogram_quantile works on leasyd.span.duration (metric histograms: not yet)")
+            raise PromQLError("histogram_quantile works on leasyd.span.duration and metric histograms")
+        if kind == "bucket" and mode != "buckets":
+            raise PromQLError("histogram buckets are for histogram_quantile(φ, sum by (le) (rate(<name>_bucket[5m])))")
         if signal != "metrics" and mode not in ("counter", "count", "hist"):
             raise PromQLError(f"{'leasyd.logs' if signal == 'logs' else 'leasyd.spans'} counts records: use rate(), "
                               "increase() or count_over_time() with a range, e.g. rate(leasyd.spans[5m])")
@@ -497,6 +498,10 @@ class Evaluator:
             aggs = [{"fn": "count"}] if signal != "metrics" else [{"fn": "increase", "field": field}]
         elif mode == "hist":
             aggs = [{"fn": "hist", "field": "duration_ns"}]
+        elif mode == "buckets":
+            if signal != "metrics":
+                raise PromQLError("histogram_quantile works on leasyd.span.duration and metric histograms")
+            aggs = [{"fn": "buckets"}]
         elif mode == "avg":
             aggs = [{"fn": "sum", "field": field}, {"fn": "count"}]
         elif mode == "count":
@@ -642,7 +647,8 @@ class Evaluator:
             if inner[0] != "call" or inner[1] not in ("rate", "increase") or inner[2][0][0] != "selector" or not inner[2][0][3]:
                 raise PromQLError("histogram_quantile(φ, rate(leasyd.span.duration[5m]))")
             sel = inner[2][0]
-            v = self.fetch(sel, "hist", sel[3], grouping)
+            spans = _source(sel[1])[1] == "duration"
+            v = self.fetch(sel, "hist" if spans else "buckets", sel[3], grouping)
             out = Vector()
             for k, (lab, hists) in v.items():
                 vals = []
@@ -652,9 +658,11 @@ class Evaluator:
                         vals.append(None)
                     elif not 0 <= p <= 1:
                         vals.append(math.inf if p > 1 else -math.inf)
-                    else:
+                    elif spans:
                         q = engine._percentile(h, p)
                         vals.append(None if q is None else q / 1e9)   # ns -> seconds
+                    else:
+                        vals.append(bucket_quantile(p, h))
                 out[k] = (lab, vals)
             return out
         raise PromQLError(f"unknown function {name}()")
@@ -786,7 +794,34 @@ def _combine(mode, ws, window):
             for b, c in (w[0] or {}).items():
                 h[int(b)] = h.get(int(b), 0) + c
         return h or None
+    if mode == "buckets":
+        h = {}
+        for w in ws:
+            for b, c in (w[0] or {}).items():
+                h[b] = h.get(b, 0) + (c or 0)
+        return h or None
     raise PromQLError(f"unknown mode {mode}")
+
+
+def bucket_quantile(q, buckets):
+    """Prometheus' histogram_quantile over one histogram {upper bound "le": count}: find the bucket
+    holding the q-th measurement, interpolate linearly inside it (the first bucket starts at 0; in
+    the +Inf bucket, the highest finite bound)."""
+    bs = sorted((float(le), max(0.0, float(c or 0))) for le, c in buckets.items())
+    total = sum(c for _, c in bs)
+    if not bs or total <= 0:
+        return None
+    rank, seen = q * total, 0.0
+    for i, (hi, c) in enumerate(bs):
+        if seen + c >= rank and c > 0:
+            if hi == math.inf:
+                finite = [le for le, _ in bs if le != math.inf]
+                return finite[-1] if finite else None
+            lo = bs[i - 1][0] if i else (0.0 if hi > 0 else hi)
+            return lo + (hi - lo) * (rank - seen) / c
+        seen += c
+    finite = [le for le, _ in bs if le != math.inf]
+    return finite[-1] if finite else None
 
 
 def _agg(op, xs, p):

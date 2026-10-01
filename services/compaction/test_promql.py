@@ -210,3 +210,36 @@ def test_direct_invocation_for_alerts(counters, monkeypatch):
     out = query.handler({"tenant": "acme", "promql": "sum by (route) (increase(reqs[5m]))", "time": T10 + 300}, None)
     assert out["data"]["resultType"] == "vector" and {r["metric"]["route"] for r in out["data"]["result"]} == {"/a", "/b"}
     assert "error" in query.handler({"tenant": "acme", "promql": "rate(", "time": T10}, None)
+
+
+# ------------------------------------------------------------------ metric histograms
+
+def test_bucket_quantile_interpolates_like_prometheus():
+    b = {"10.0": 50, "100.0": 25, "+Inf": 25}
+    assert promql.bucket_quantile(0.25, b) == pytest.approx(5.0)          # half-way into the first bucket (0-10]
+    assert promql.bucket_quantile(0.5, b) == pytest.approx(10.0)
+    assert promql.bucket_quantile(0.6, b) == pytest.approx(10 + 90 * 10 / 25)
+    assert promql.bucket_quantile(0.99, b) == 100.0                       # in +Inf: the highest finite bound
+    assert promql.bucket_quantile(0.5, {"+Inf": 0}) is None and promql.bucket_quantile(0.5, {}) is None
+
+
+def test_histogram_quantile_over_metric_buckets(counters):
+    """The "latency" histogram: buckets <= 10, <= 100 and more hold count/2, count/4 and the rest of
+    each point's rise. Every spelling gives the same answer as interpolating the buckets by hand."""
+    from test_query import split
+    pts = counters[("latency", None)]
+    rise = [0, 0, 0]
+    for (t, v), (_, prev) in zip(pts[1:], pts):
+        if T10 + 60 < t // 10**9 <= T10 + 120:   # the window (10:01, 10:02]
+            rise = [a + r for a, r in zip(rise, [c - p for c, p in zip(split(v), split(prev))] if v >= prev else split(v))]
+    want = promql.bucket_quantile(0.9, {"10.0": rise[0], "100.0": rise[1], "+Inf": rise[2]})
+    assert want is not None
+    for text in ('histogram_quantile(0.9, sum by (le) (rate(latency_bucket[1m])))',
+                 'histogram_quantile(0.9, rate(latency_bucket[1m]))',
+                 'histogram_quantile(0.9, sum by (le, service_name) (increase(latency[1m])))'):
+        got = prange(text, T10 + 120, T10 + 120)
+        ((labels, series),) = got.items()
+        assert series[T10 + 120] == pytest.approx(want), text
+    assert promql.bucket_quantile(0.5, {"10.0": rise[0], "100.0": rise[1], "+Inf": rise[2]}) <= 10.0
+    with pytest.raises(promql.PromQLError, match="histogram_quantile"):
+        prange('sum by (le) (rate(latency_bucket[1m]))', T10 + 120, T10 + 120)
