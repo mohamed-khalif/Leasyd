@@ -44,8 +44,9 @@ export function Settings({ ctx }: { ctx: Ctx }) {
       <Panel title="Plan" right={<span className="faint">{acc.company} · <span className="mono">{acc.tenant}</span></span>}>
         <div className="plan">
           <div>
-            <div className="plan-name">{acc.plan === "free" ? "Free" : acc.plan === "standard" ? "Standard" : acc.plan}</div>
+            <div className="plan-name">{acc.trial_ends_at ? "Free trial" : acc.plan === "free" ? "Free" : acc.plan === "standard" ? "Pay as you go" : acc.plan}</div>
             <div className="muted">{cap ? `Up to ${fmtUnit(cap, "bytes")} of logs, traces and metrics a day, kept 30 days.` : "No daily limit. Data kept 30 days."}</div>
+            {acc.trial_ends_at && <div className="muted">{Date.parse(acc.trial_ends_at) > Date.now() ? "Ends" : "Ended"} {acc.trial_ends_at.slice(0, 10)}.</div>}
           </div>
           <div className="plan-usage">
             <div className="faint">Today (UTC)</div>

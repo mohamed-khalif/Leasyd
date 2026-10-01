@@ -550,3 +550,16 @@ def test_test_and_run_now_are_limited_per_tenant(aws, monkeypatch):
     assert s == 429 and "at most 2 test runs a minute" in out["error"]
     assert call("acme", "POST", "/v1/app/checks/{id}/run", None, a["id"])[0] == 429
     assert call("globex", "POST", "/v1/app/checks/test", settings())[0] == 200      # each tenant its own
+
+
+def test_tick_skips_tenants_whose_free_trial_ended(aws, monkeypatch):
+    call("acme", "POST", "/v1/app/checks", settings(name="mine", frequency=1))
+    call("globex", "POST", "/v1/app/checks", settings(name="theirs", frequency=1))
+    call("initech", "POST", "/v1/app/checks", settings(name="still trying", frequency=1))
+    synthetics.table().put_item(Item={"pk": "tenant#globex", "tenant": "globex", "trial_ends_at": "2020-01-01T00:00:00Z"})
+    synthetics.table().put_item(Item={"pk": "tenant#initech", "tenant": "initech", "trial_ends_at": "2099-01-01T00:00:00Z"})
+    invoked = []
+    monkeypatch.setattr(synthetics.boto3, "client", lambda name: type("L", (), {
+        "invoke": lambda self, **kw: invoked.append(json.loads(kw["Payload"]))})())
+    assert synthetics.tick({}, None) == {"due": 2}
+    assert sorted(c["tenant"] for p in invoked for c in p["checks"]) == ["acme", "initech"]

@@ -580,3 +580,8 @@ tr:hover .link { text-decoration: underline; }
 .ai-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; margin-right: 6px; animation: aipulse 1.2s ease-in-out infinite; flex: none; }
 @keyframes aipulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 @media (max-width: 900px) { .ai { grid-template-columns: 1fr; } .ai-history { position: static; max-height: none; } .ai-insight-grid { grid-template-columns: 1fr; } }
+
+/* Free trial banner (Shell) */
+.trial-banner { padding: 8px 20px; font-size: 13px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.trial-banner a { color: inherit; text-decoration: underline; }
+.trial-banner.ended { background: color-mix(in srgb, var(--sev-error) 16%, transparent); }

@@ -10,6 +10,9 @@
 #   infra/tenant.sh revoke <tenant> [key-id]              refuse one key, or all of the tenant's keys
 #   infra/tenant.sh delete <tenant>                       refuse all keys, delete streams, purge all data and index
 #   infra/tenant.sh set-cap <tenant> <gb-a-day|0|plan>   the most data a day ingest accepts (0: no cap; plan: the plan's)
+#   infra/tenant.sh set-search <tenant> <units|0|plan>   the daily search allowance (0: no limit; plan: the plan's)
+#   infra/tenant.sh upgrade <tenant>                      free trial -> pay as you go (no trial end, no daily cap)
+#   infra/tenant.sh extend-trial <tenant> <days>          the free trial ends this many days from now
 #   infra/tenant.sh tune <tenant> <buffer-seconds>        Firehose buffer before a file is written (default 30;
 #                                                         shorter for high-volume tenants: fresher, more files)
 #   infra/tenant.sh status <tenant>                       status, plan, keys (ids and states only)
@@ -80,6 +83,16 @@ case "$cmd" in
     v="${3:?GB a day, 0 for no cap, or plan}"; [[ "$v" == plan ]] && v=null
     admin "{\"action\":\"set-cap\",\"tenant\":\"${tenant}\",\"daily_gb\":${v}}"; pretty
     ;;
+  set-search)
+    v="${3:?search units a day, 0 for no limit, or plan}"; [[ "$v" == plan ]] && v=null
+    admin "{\"action\":\"set-search\",\"tenant\":\"${tenant}\",\"units_per_day\":${v}}"; pretty
+    ;;
+  upgrade)
+    admin "{\"action\":\"upgrade\",\"tenant\":\"${tenant}\"}"; pretty
+    ;;
+  extend-trial)
+    admin "{\"action\":\"extend-trial\",\"tenant\":\"${tenant}\",\"days\":${3:?days from now}}"; pretty
+    ;;
   tune)
     admin "{\"action\":\"tune\",\"tenant\":\"${tenant}\",\"buffer_seconds\":${3:?buffer seconds}}"; pretty
     ;;
@@ -103,5 +116,5 @@ for t in json.loads(sys.argv[1])["tenants"]:
     python3 -c 'import json,sys; r=json.loads(sys.argv[1])
 print("restored %d tenants; %d keys put back in their usage plans" % (len(r["tenants"]), len(r["keys_added_to_plans"])))' "$RESULT" >&2
     ;;
-  *) sed -n '2,19p' "$0"; exit 2 ;;
+  *) sed -n '2,22p' "$0"; exit 2 ;;
 esac

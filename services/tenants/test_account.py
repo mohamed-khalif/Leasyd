@@ -56,6 +56,7 @@ def test_signup_to_signed_in_owner(acc, adm, mail):  # noqa: F811
     status, me = app(acc, "ana@acme.com", "acme-inc")
     assert status == 200 and me["company"] == "Acme Inc." and me["plan"] == "free"
     assert me["daily_cap_bytes"] == 10**9 and me["keys"] == [] and me["you"] == {"email": "ana@acme.com", "role": "owner"}
+    assert me["trial_ends_at"] > adm._iso(adm._now() + __import__("datetime").timedelta(days=6, hours=23))   # 7-day trial
     # A key, shown once; then listed without it.
     status, key = app(acc, "ana@acme.com", "acme-inc", "POST", "keys", {"scope": "ingest"})
     assert status == 201 and key["api_key"].startswith("obs_") and key["scope"] == "ingest"
@@ -122,3 +123,22 @@ def test_reserved_and_short_names(acc):
     assert acc._reserve_tenant("Ünïcode & Co!!") == "n-code-co"
     item = boto3.resource("dynamodb").Table("obs-tenants").get_item(Key={"pk": "tenant#n-code-co"})["Item"]
     assert item["status"] == "creating" and item["company"] == "Ünïcode & Co!!"
+
+
+def test_trial_upgrade_and_extension(acc, adm, mail):  # noqa: F811
+    signup(acc, {"email": "ana@acme.com", "company": "Acme"})
+    adm.handler(acc.started[-1], CTX)
+    key = app(acc, "ana@acme.com", "acme", "POST", "keys", {"scope": "ingest"})[1]
+    assert call(adm, "status", tenant="acme")["keys"][0]["plan"] == "free"
+    # Extend: a new end date; then upgrade: standard plan, no trial end or cap, key moved.
+    assert call(adm, "extend-trial", tenant="acme", days=3)["trial_ends_at"] > adm._iso(adm._now())
+    assert "days" in call(adm, "extend-trial", tenant="acme", days=500)["error"]
+    out = call(adm, "upgrade", tenant="acme")
+    assert out == {"tenant": "acme", "plan": "standard", "was": "free", "keys_moved": [key["key_id"]]}
+    st = call(adm, "status", tenant="acme")
+    assert st["plan"] == "standard" and "trial_ends_at" not in st and "daily_cap_bytes" not in st
+    assert st["keys"][0]["plan"] == "standard"
+    plans = {p["name"]: p["id"] for p in boto3.client("apigateway").get_usage_plans()["items"]}
+    in_plan = lambda name: [k["id"] for k in boto3.client("apigateway").get_usage_plan_keys(usagePlanId=plans[name])["items"]]  # noqa: E731
+    assert key["key_id"] in in_plan("obs-standard") and key["key_id"] not in in_plan("obs-free")
+    assert app(acc, "ana@acme.com", "acme")[1]["trial_ends_at"] is None

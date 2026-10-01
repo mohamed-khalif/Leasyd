@@ -38,6 +38,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
 TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "")   # empty: no metering, no caps
 METER_FLUSH_S = 10    # how often a container adds its counts to the day's meter
+CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "mkhalif@leasyd.com")   # where an ended trial is told to write
 CAP_CHECK_S = 30      # how long a container trusts what it read of a tenant's cap and usage
 RECORD_COMPRESSION = os.environ.get("RECORD_COMPRESSION", "none")   # "gzip": compress records before Firehose
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
@@ -77,6 +78,14 @@ def handler(event, context):
         headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
         ctype = (headers.get("content-type") or "application/x-protobuf").split(";")[0].strip().lower()
 
+        ended = meter.trial_ended(tenant)
+        if ended:
+            meter.add(tenant, 0, 0, refused=len(event.get("body") or ""))
+            print(json.dumps({"tenant": tenant, "signal": signal, "refused": "trial ended", "trial_ended_at": ended}))
+            # 403: not retryable, so exporters drop the data instead of retrying it forever.
+            return _response(403, "application/json",
+                             f"this Leasyd free trial ended on {ended[:10]}; data is no longer accepted. "
+                             f"To keep sending, contact {CONTACT_EMAIL}")
         cap = meter.over_cap(tenant)
         if cap:
             meter.add(tenant, 0, 0, refused=len(event.get("body") or ""))
@@ -115,6 +124,13 @@ class Meter:
     def __init__(self):
         self.pending, self.caps, self.flushed_at = {}, {}, time.time()
 
+    def trial_ended(self, tenant):
+        """-> when the tenant's free trial ended (ISO-8601), if it has; else None."""
+        self.over_cap(tenant)   # reads (or reuses) the tenant record
+        c = self.caps.get(tenant)
+        end = c[4] if c else None
+        return end if end and end <= time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) else None
+
     def over_cap(self, tenant):
         """-> the tenant's daily cap in bytes if today's usage has reached it, else None."""
         if not TENANTS_TABLE:
@@ -124,8 +140,9 @@ class Meter:
         if not c or c[1] != day or now - c[0] > CAP_CHECK_S:
             try:
                 rec = ddb.get_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"tenant#{tenant}"}},
-                                   ProjectionExpression="daily_cap_bytes").get("Item") or {}
+                                   ProjectionExpression="daily_cap_bytes, trial_ends_at").get("Item") or {}
                 cap = int(rec["daily_cap_bytes"]["N"]) if "daily_cap_bytes" in rec else None
+                trial_end = rec.get("trial_ends_at", {}).get("S")
                 used = 0
                 if cap:
                     m = ddb.get_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"meter#{tenant}#{day}"}},
@@ -134,8 +151,8 @@ class Meter:
             except Exception as e:   # never fail ingest on metering
                 print(json.dumps({"meter": "cap check failed", "error": str(e)[:200]}))
                 return None
-            c = self.caps[tenant] = (now, day, cap, used)
-        _, _, cap, used = c
+            c = self.caps[tenant] = (now, day, cap, used, trial_end)
+        _, _, cap, used, _ = c
         pending = self.pending.get((tenant, day), (0, 0, 0))[0]
         return cap if cap is not None and used + pending >= cap else None
 
@@ -163,7 +180,7 @@ class Meter:
             del self.pending[(tenant, day)]
             c = self.caps.get(tenant)
             if c and c[1] == day:
-                self.caps[tenant] = (c[0], day, c[2], c[3] + b)
+                self.caps[tenant] = (c[0], day, c[2], c[3] + b, c[4])
 
 
 def _size(n):

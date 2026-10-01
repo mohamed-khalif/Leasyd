@@ -20,6 +20,9 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
   add-key {tenant, scope}        one more key of that scope (ingest or read), others unchanged
   set-cap {tenant, daily_gb}     the most data a day ingest accepts (null: the plan's; 0: no cap)
   set-search {tenant, units_per_day}  the daily search allowance (null: the plan's; 0: no limit)
+  upgrade {tenant}               a trial (free plan) becomes a paying account: standard plan, its
+                                 keys moved to the standard usage plan, no trial end, no daily cap
+  extend-trial {tenant, days}    the trial ends this many days from now (data accepted again)
   remove-user {tenant, email}    sign them out everywhere and delete the login
   users   {tenant}               the tenant's users
   revoke  {tenant, key_id?}      refuse one key, or all of the tenant's keys
@@ -97,6 +100,7 @@ PLAN_DAILY_GB = {"free": 1, "standard": None, "test-tiny": None}   # data a day 
 # Search units a day (one per query worker, ~256 MB read), as obs-query-api enforces them
 # (services/compaction/query.py DAILY_SEARCH_UNITS); a tenant's search_units_per_day overrides.
 PLAN_SEARCH_UNITS = {"free": 2_000, "standard": 20_000}
+TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "7"))   # a self-service sign-up's free trial (no card)
 GB = 10**9
 SELF = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "obs-tenant-admin")
 BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
@@ -226,6 +230,9 @@ def signup(tenant, email, company, context=None):
         raise Refused(f"{tenant} was not reserved for a sign-up")
     if rec["status"] == "creating":
         create(tenant, plan="free", company=company, issue_key=False)
+        # The free trial: ingest refuses data after this (obs-ingest), checks stop (synthetics tick).
+        tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET trial_ends_at = :t",
+                            ExpressionAttributeValues={":t": _iso(_now() + timedelta(days=TRIAL_DAYS))})
     tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET signed_up_by = :e",
                         ExpressionAttributeValues={":e": _email(email)})
     out = invite_user(tenant, email, role="owner", welcome=True)
@@ -256,6 +263,40 @@ def set_cap(tenant, daily_gb=None, context=None):
     else:
         tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="REMOVE daily_cap_bytes")
     return {"tenant": tenant, "daily_cap_bytes": cap or None}
+
+
+def upgrade(tenant, context=None):
+    """Trial -> paying: the standard plan for the tenant and its live keys (each moved to the
+    standard usage plan), no trial end, and no daily data cap."""
+    rec = _active(tenant)
+    moved = []
+    for k in _keys(tenant):
+        if k["status"] in ("active", "expiring") and k.get("plan", "standard") != "standard":
+            apigw.create_usage_plan_key(usagePlanId=PLANS["standard"], keyId=k["api_key_id"], keyType="API_KEY")
+            try:
+                apigw.delete_usage_plan_key(usagePlanId=PLANS[k["plan"]], keyId=k["api_key_id"])
+            except apigw.exceptions.NotFoundException:
+                pass
+            tenants.update_item(Key={"pk": k["pk"]}, UpdateExpression="SET #p = :s",
+                                ExpressionAttributeNames={"#p": "plan"}, ExpressionAttributeValues={":s": "standard"})
+            moved.append(k["api_key_id"])
+    tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET #p = :s, upgraded_at = :n REMOVE trial_ends_at, daily_cap_bytes",
+                        ExpressionAttributeNames={"#p": "plan"}, ExpressionAttributeValues={":s": "standard", ":n": _iso(_now())})
+    return {"tenant": tenant, "plan": "standard", "was": rec.get("plan"), "keys_moved": moved}
+
+
+def extend_trial(tenant, days=7, context=None):
+    _active(tenant)
+    try:
+        days = float(days)
+    except (TypeError, ValueError):
+        raise Refused("days: how many days from now the trial ends")
+    if not 0 < days <= 90:
+        raise Refused("days: how many days from now the trial ends (up to 90)")
+    end = _iso(_now() + timedelta(days=days))
+    tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET trial_ends_at = :t",
+                        ExpressionAttributeValues={":t": end})
+    return {"tenant": tenant, "trial_ends_at": end}
 
 
 def set_search(tenant, units_per_day=None, context=None):
@@ -675,7 +716,7 @@ def purge(tenant, deleted=0, context=None):
 
 
 ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key, "signup": signup, "add-key": add_key,
-           "set-cap": set_cap, "set-search": set_search,
+           "set-cap": set_cap, "set-search": set_search, "upgrade": upgrade, "extend-trial": extend_trial,
            "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
            "usage": usage, "list": list_tenants, "sweep": sweep, "restore": restore, "purge": purge,
            "retention": retention}

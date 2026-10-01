@@ -1,6 +1,29 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
+import { account } from "./api";
+
+export const CONTACT_EMAIL = "mkhalif@leasyd.com";
+
+/** A free trial's days left, or that it ended: shown above every page while the account is a trial. */
+function TrialBanner() {
+  const [ends, setEnds] = useState<string | null>(null);
+  useEffect(() => { account.get().then((a) => setEnds(a.trial_ends_at ?? null), () => undefined); }, []);
+  if (!ends) return null;
+  const left = Date.parse(ends) - Date.now();
+  const days = Math.ceil(left / 86_400_000);
+  return left > 0 ? (
+    <div className="trial-banner" role="status">
+      Free trial: <b>{days} day{days === 1 ? "" : "s"} left</b> (ends {new Date(ends).toLocaleDateString(undefined, { day: "numeric", month: "short" })}).
+      To keep your data flowing after that, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+    </div>
+  ) : (
+    <div className="trial-banner ended" role="alert">
+      Your free trial has ended: new data is no longer accepted and checks have stopped. Your data stays searchable
+      until it ages out. To continue, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+    </div>
+  );
+}
 
 type Props = {
   path: string; crumb: [string, string]; user: { tenant: string; email: string }; range: Range;
@@ -55,6 +78,7 @@ export function Shell(p: Props) {
           <RangePicker range={p.range} onRange={p.onRange} />
           <button className="btn" onClick={p.onRefresh} title="Refresh" aria-label="Refresh"><IconRefresh /></button>
         </header>
+        <TrialBanner />
         <div className="content">{p.children}</div>
       </div>
     </div>

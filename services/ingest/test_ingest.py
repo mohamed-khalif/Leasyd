@@ -341,6 +341,19 @@ def test_bytes_are_metered_and_a_daily_cap_refuses_until_midnight(metered, fh, m
     assert meter_item(ddb, "beta")["records"] == 15
 
 
+def test_an_ended_trial_refuses_data(metered, fh):
+    ddb = metered
+    ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "tenant#acme"}, "trial_ends_at": {"S": "2099-01-01T00:00:00Z"}})
+    ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "tenant#beta"}, "trial_ends_at": {"S": "2020-01-01T00:00:00Z"}})
+    body = logs_pb(n=2).SerializeToString()
+    assert ingest.handler(event(body), None)["statusCode"] == 200                  # trial still running
+    out = ingest.handler(event(body, tenant="beta"), None)
+    assert out["statusCode"] == 403 and "free trial ended on 2020-01-01" in out["body"] and "mkhalif@leasyd.com" in out["body"]
+    assert all(stream.endswith("acme-logs") for stream, _ in fh.puts)            # nothing of beta's was stored
+    ingest.meter.flush()
+    assert meter_item(ddb, "beta")["refused_bytes"] > 0
+
+
 def test_metering_never_fails_a_request(fh, monkeypatch):
     class Broken:
         def get_item(self, **kw): raise RuntimeError("DynamoDB is down")

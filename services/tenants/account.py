@@ -166,7 +166,7 @@ def account(tenant, email, method, parts, body):
                  "created_at": k.get("created_at"), "expires_at": k.get("expires_at")}
                 for k in st["keys"] if k["status"] in ("active", "expiring")]
         return 200, {"tenant": tenant, "company": st.get("company") or tenant, "plan": st.get("plan"),
-                     "daily_cap_bytes": st.get("daily_cap_bytes"), "today": st.get("today"), "searches": st.get("searches"),
+                     "daily_cap_bytes": st.get("daily_cap_bytes"), "today": st.get("today"), "searches": st.get("searches"), "trial_ends_at": st.get("trial_ends_at"),
                      "created_at": st.get("created_at"), "you": {"email": email, "role": role},
                      "users": [u for u in us["users"] if u["status"] == "active"], "keys": keys,
                      "limits": {"keys": MAX_KEYS, "users": MAX_USERS}}

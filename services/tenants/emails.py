@@ -63,7 +63,8 @@ def invitation(to, temp_password, company, invited_by=None):
 
 def welcome(to, temp_password, company):
     send(to, "Your Leasyd account is ready",
-         [f"Welcome to Leasyd! The account for {company} is ready.",
+         [f"Welcome to Leasyd! The account for {company} is ready, with a free 7-day trial: every feature, "
+          "up to 1 GB of data a day, no card needed.",
           "Sign in with this temporary password; you'll choose your own the first time. It works for 7 days.",
           "Then create an API key under Settings and point your OpenTelemetry SDK or Collector at Leasyd: "
           "your logs, traces and metrics show up within a minute."],

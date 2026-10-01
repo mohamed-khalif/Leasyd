@@ -1067,18 +1067,24 @@ def tick(event, context):
     """Scheduled every minute: hand the due checks to the runner in batches."""
     minute = int(time.time() // 60)
     now = datetime.fromtimestamp(minute * 60, timezone.utc)
-    items, open_windows = [], {}
-    kw = dict(FilterExpression=(Attr("pk").begins_with("check#") & Attr("enabled").eq(True)) | Attr("pk").begins_with("window#"))
+    items, open_windows, ended = [], {}, set()
+    kw = dict(FilterExpression=(Attr("pk").begins_with("check#") & Attr("enabled").eq(True)) | Attr("pk").begins_with("window#")
+              | (Attr("pk").begins_with("tenant#") & Attr("trial_ends_at").exists()))
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     while True:
         page = table().scan(**kw)
         for i in page["Items"]:
-            if i["pk"].startswith("window#"):
+            if i["pk"].startswith("tenant#"):
+                if i["trial_ends_at"] <= now_iso:      # an ended free trial: its checks stop
+                    ended.add(i["tenant"])
+            elif i["pk"].startswith("window#"):
                 open_windows.setdefault(i["tenant"], []).append(_plain(i))
             elif due(i["pk"].rsplit("#", 1)[1], i["frequency"], minute):
                 items.append(i)
         if "LastEvaluatedKey" not in page:
             break
         kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    items = [i for i in items if i["tenant"] not in ended]
     for i in items:     # runs in an open maintenance window run, but are recorded as excluded
         window = rel.open_window(open_windows.get(i["tenant"], []), i["pk"].rsplit("#", 1)[1], now)
         if window:
