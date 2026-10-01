@@ -208,7 +208,7 @@ def query_rule(tenant, channel, **kw):
 
 def test_check_rule_validation(aws, monkeypatch):
     prom = FakeProm()
-    monkeypatch.setattr(alerts, "_query", prom)
+    monkeypatch.setattr(alerts, "_invoke", prom)
     ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
     for bad, why in [({"op": "~"}, "op: one of"), ({"critical": "high"}, "critical: a number"), ({"critical": None}, "critical: a number"),
                      ({"degraded": 9}, "degraded must come before critical"), ({"for_minutes": 90}, "for_minutes"),
@@ -231,7 +231,7 @@ def test_check_rule_validation(aws, monkeypatch):
 def test_check_rule_fires_escalates_and_resolves_per_series(aws, monkeypatch):
     from datetime import datetime, timedelta, timezone
     prom, sent = FakeProm(), []
-    monkeypatch.setattr(alerts, "_query", prom)
+    monkeypatch.setattr(alerts, "_invoke", prom)
     monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
     ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
     rule = query_rule("acme", ch)
@@ -264,7 +264,7 @@ def test_check_rule_fires_escalates_and_resolves_per_series(aws, monkeypatch):
 def test_check_rule_waits_for_minutes(aws, monkeypatch):
     from datetime import datetime, timedelta, timezone
     prom, sent = FakeProm(), []
-    monkeypatch.setattr(alerts, "_query", prom)
+    monkeypatch.setattr(alerts, "_invoke", prom)
     monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
     ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
     item = alerts._plain(alerts._get(f"alert#acme#{query_rule('acme', ch, for_minutes=3, degraded=None)['id']}", "acme"))
@@ -285,7 +285,7 @@ def test_check_rule_waits_for_minutes(aws, monkeypatch):
 
 def test_schedule_runs_check_rules_every_minute_and_slos_every_five(aws, monkeypatch):
     prom = FakeProm()
-    monkeypatch.setattr(alerts, "_query", prom)
+    monkeypatch.setattr(alerts, "_invoke", prom)
     ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
     every1, every5 = query_rule("acme", ch)["id"], query_rule("acme", ch, every_minutes=5)["id"]
     s, off = call("acme", "POST", "rules", {"name": "off", "type": "query", "channels": [ch], "promql": "x", "op": ">", "critical": 1, "enabled": False})

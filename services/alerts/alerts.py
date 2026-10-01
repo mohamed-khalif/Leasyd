@@ -424,11 +424,19 @@ def evaluate_numbers(target, good, total, good1h=0, total1h=0):
             "budget_left": budget_left, "burn1h": burn1h}
 
 
-def _query(q):
+def _invoke(q):
+    """The query engine's raw answer (a bad query comes back as {"error": ...})."""
     r = client("lambda").invoke(FunctionName=QUERY_FUNCTION, Payload=json.dumps(q).encode())
     out = json.loads(r["Payload"].read() or b"{}")
-    if r.get("FunctionError") or "error" in out and "rows" not in out:
-        raise RuntimeError(f"query failed: {out.get('errorMessage') or out.get('error')}")
+    if r.get("FunctionError"):
+        raise RuntimeError(f"query failed: {out.get('errorMessage') or out}")
+    return out
+
+
+def _query(q):
+    out = _invoke(q)
+    if "error" in out and "rows" not in out:
+        raise RuntimeError(f"query failed: {out.get('error')}")
     return out
 
 
@@ -494,9 +502,9 @@ LEVELS = {"ok": 0, "degraded": 1, "critical": 2}
 
 def run_promql(tenant, text, at):
     """One instant PromQL evaluation in the query engine -> [(labels, value)]."""
-    out = _query({"tenant": tenant, "promql": text, "time": int(at)})
+    out = _invoke({"tenant": tenant, "promql": text, "time": int(at)})
     if out.get("error") and "data" not in out:
-        raise Refused(out["error"])
+        raise Refused(f"the query: {out['error']}")
     data = out.get("data") or {}
     if data.get("resultType") == "scalar":
         return [({}, float(data["result"][1]))]
