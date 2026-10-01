@@ -330,7 +330,7 @@ def test_bytes_are_metered_and_a_daily_cap_refuses_until_midnight(metered, fh, m
     statuses = [ingest.handler(event(body), None)["statusCode"] for _ in range(5)]
     assert statuses[0] == 200 and statuses[-1] == 429
     out = ingest.handler(event(body), None)
-    assert out["statusCode"] == 429 and "daily data limit reached (2e-06 GB" in out["body"]
+    assert out["statusCode"] == 429 and "daily data limit reached (2 KB a day" in out["body"]
     assert 0 < int(out["headers"]["Retry-After"]) <= 86400
     ingest.meter.flush()
     assert meter_item(ddb, "acme")["refused_bytes"] > 0
@@ -351,6 +351,10 @@ def test_metering_never_fails_a_request(fh, monkeypatch):
     monkeypatch.setattr(ingest, "METER_FLUSH_S", 0)
     assert ingest.handler(event(logs_pb().SerializeToString()), None)["statusCode"] == 200
     assert ingest.meter.pending                               # kept for the next flush
+
+
+def test_sizes_read_naturally():
+    assert [ingest._size(n) for n in (10**9, 200_000, 2_500_000, 512)] == ["1 GB", "200 KB", "2.5 MB", "512 bytes"]
 
 
 def test_counts_metric_points():

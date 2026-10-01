@@ -83,7 +83,7 @@ def handler(event, context):
             wait = 86400 - int(time.time()) % 86400
             print(json.dumps({"tenant": tenant, "signal": signal, "refused": "daily cap", "cap_bytes": cap}))
             out = _response(429, "application/json",
-                            f"daily data limit reached ({cap / 1e9:g} GB a day for this account); data is "
+                            f"daily data limit reached ({_size(cap)} a day for this account); data is "
                             "accepted again from 00:00 UTC, or raise the limit in Leasyd")
             out["headers"]["Retry-After"] = str(wait)
             return out
@@ -164,6 +164,13 @@ class Meter:
             c = self.caps.get(tenant)
             if c and c[1] == day:
                 self.caps[tenant] = (c[0], day, c[2], c[3] + b)
+
+
+def _size(n):
+    for unit, size in (("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if n >= size:
+            return f"{n / size:g} {unit}"
+    return f"{n} bytes"
 
 
 def _day():
