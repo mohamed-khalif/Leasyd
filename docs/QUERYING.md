@@ -22,7 +22,11 @@ Metrics), or you write it yourself (PromQL tab).
   underscores also match dots (`http_route`). Always there: `service_name`. Spans: `span_name`,
   `span_kind` (SERVER, CLIENT, INTERNAL, PRODUCER, CONSUMER), `status_code` (UNSET, OK, ERROR).
   Logs: `severity_text`, `severity_number`, `severity_range` (ERROR_FATAL, WARN, INFO, TRACE_DEBUG, UNKNOWN).
-- In the Query Builder `$__interval` is the chart's step.
+- In the Query Builder `$__interval` is the chart's step; on dashboards `$__range` is the page's time range
+  (number panels show one value over it).
+- Synthetic checks: `check_excluded=""` keeps the runs that count, leaving out runs in maintenance
+  windows and runs excluded by hand on a check's page (as the check pages and SLOs count them).
+  Group by `check_id` to follow a check through renames; dashboards show its current name.
 - Supported: `=`, `!=`, `=~`, `!~`; ranges and `offset`; `rate`, `increase`, `irate` (same as rate),
   `avg/min/max/sum/count/last_over_time`, `histogram_quantile` (span durations, and histogram metrics:
   linear inside the bucket like Prometheus, in the metric's own unit); `sum`, `avg`, `min`,

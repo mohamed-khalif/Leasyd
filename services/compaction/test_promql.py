@@ -243,3 +243,43 @@ def test_histogram_quantile_over_metric_buckets(counters):
     assert promql.bucket_quantile(0.5, {"10.0": rise[0], "100.0": rise[1], "+Inf": rise[2]}) <= 10.0
     with pytest.raises(promql.PromQLError, match="histogram_quantile"):
         prange('sum by (le) (rate(latency_bucket[1m]))', T10 + 120, T10 + 120)
+
+
+# ------------------------------------------------------------------ synthetic runs excluded by hand
+
+def test_runs_excluded_by_hand_never_count(aws, monkeypatch):  # noqa: F811
+    """check_excluded="" leaves out runs in maintenance windows (labelled in the data) and runs
+    excluded by hand afterwards (kept apart, read per query): as the check pages count them."""
+    handler, lookup = aws
+    runs = [("r1", 1, None), ("r2", 0, None), ("r3", 0, "maintenance window: deploy"), ("r4", 1, None),
+            ("r5", 0, None), ("r6", 1, None)]
+    def point(i, run, ok, excluded):
+        attrs = {"check.id": "c1", "check.name": "Login", "check.run_id": run, **({"check.excluded": excluded} if excluded else {})}
+        return {"timeUnixNano": str(H10 + i * 60 * 10**9), "asDouble": ok,
+                "attributes": [{"key": k, "value": {"stringValue": v}} for k, v in attrs.items()]}
+    doc = {"resourceMetrics": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "synthetics"}}]},
+                                "scopeMetrics": [{"metrics": [{"name": "synthetics.check.success", "gauge": {
+                                    "dataPoints": [point(i, *r) for i, r in enumerate(runs)]}}]}]}]}
+    key = f"_incoming/tenant=acme/metrics/dt={DAY}/hour=10/syn.json.gz"
+    boto3.client("s3").put_object(Bucket="obs-data-test", Key=key, Body=gzip.compress(json.dumps(doc).encode()))
+    handler.recent_indexer({"detail": {"object": {"key": key}}}, None)
+    monkeypatch.setattr(query, "lookup", lookup)
+    loads = []
+    monkeypatch.setattr(promql, "load_exclusions", lambda tenant: loads.append(tenant) or ["r5"])   # r5: a false alarm
+    S = '{"synthetics.check.success", "check.excluded"=""}'
+    q = f'100 * sum by (check_id) (sum_over_time({S}[10m])) / sum by (check_id) (count_over_time({S}[10m]))'
+    out = promql.query_instant("acme", q, T10 + 600, run_query=run_query)
+    assert [float(x["value"][1]) for x in out["data"]["result"]] == [pytest.approx(300 / 4)]   # r1 r2 r4 r6
+    assert loads == ["acme"]                                   # read once for the query, for its tenant
+    # Without the matcher every run counts, and nothing is read.
+    out = promql.query_instant("acme", 'sum(count_over_time({"synthetics.check.success"}[10m]))', T10 + 600, run_query=run_query)
+    assert float(out["data"]["result"][0]["value"][1]) == 6 and loads == ["acme"]
+
+
+def test_many_exclusions_are_split_into_engine_limits():
+    seen = []
+    ev = promql.Evaluator("acme", T10, T10, 60, run_query=lambda q: seen.append(q) or {"rows": [], "columns": []},
+                          exclusions=[f"r{i}" for i in range(4500)])
+    ev.eval(promql.parse('count_over_time({"synthetics.check.success", check_excluded=""}[1m])'))
+    nots = [w for w in seen[0]["where"] if w.get("field") == "attributes.check.run_id"]
+    assert [len(w["value"]) for w in nots] == [2000, 2000, 500]

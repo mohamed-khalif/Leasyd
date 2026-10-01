@@ -374,6 +374,12 @@ Resources:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-cache"
+              # Synthetic runs excluded by hand (exclude#<tenant>#...), so PromQL's check_excluded=""
+              # leaves them out as the check pages do. Only this index, only queries.
+              - Sid: ExcludedRuns
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }

@@ -29,8 +29,10 @@ the labels an enclosing `by` names. Counter increases are exact (resets handled,
 windows start and end on bucket edges.
 """
 import json
+import os
 import math
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -441,8 +443,30 @@ def _drop_name(labels):
 
 # ------------------------------------------------------------------ evaluation
 
+def _is_not_excluded(matchers):
+    """check_excluded="" (or "check.excluded"=""): runs that count, as the check pages count them."""
+    return any(l.replace("_", ".") == "check.excluded" and op == "=" and v == "" for l, op, v in matchers)
+
+
+def load_exclusions(tenant):
+    """Run ids of the tenant's synthetic runs excluded by hand (false alarms), still in force.
+    Runs in maintenance windows carry check.excluded themselves."""
+    import boto3
+    from boto3.dynamodb.conditions import Key
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    table = boto3.resource("dynamodb").Table(os.environ.get("TENANTS_TABLE", "obs-tenants"))
+    ids, kw = [], dict(IndexName="by-tenant", ProjectionExpression="run_id, expires_at",
+                       KeyConditionExpression=Key("tenant").eq(tenant) & Key("pk").begins_with(f"exclude#{tenant}#"))
+    while True:
+        page = table.query(**kw)
+        ids += [it["run_id"] for it in page["Items"] if it.get("run_id") and it.get("expires_at", "") > now]
+        if "LastEvaluatedKey" not in page:
+            return sorted(set(ids))
+        kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
 class Evaluator:
-    def __init__(self, tenant, start, end, step, run_query=None, workers=None):
+    def __init__(self, tenant, start, end, step, run_query=None, workers=None, exclusions=None):
         if step <= 0:
             raise PromQLError("step must be positive")
         if (end - start) / step + 1 > MAX_POINTS:
@@ -452,6 +476,12 @@ class Evaluator:
         self.run_query = run_query or (lambda q: engine.run(q))
         self.stats = {"engine_queries": 0, "bytes": 0}
         self.workers = workers
+        self._exclusions = exclusions        # None: loaded when a query first needs them
+
+    def excluded_runs(self):
+        if self._exclusions is None:
+            self._exclusions = load_exclusions(self.tenant)
+        return self._exclusions
 
     # --------------------------------------------------------- engine access
 
@@ -480,6 +510,10 @@ class Evaluator:
         signal, kind, name_where = _source(matchers)
         where, services = _conditions(signal, matchers)
         where = name_where + where
+        if _is_not_excluded(matchers):   # also the runs excluded by hand (stored apart from the data)
+            ids = self.excluded_runs()
+            where += [{"field": "attributes.check.run_id", "op": "not_in", "value": ids[i:i + engine.MAX_IN_VALUES]}
+                      for i in range(0, len(ids), engine.MAX_IN_VALUES)]
         if mode == "instant":
             window = LOOKBACK_S
         b = self._bucket(window, offset)
