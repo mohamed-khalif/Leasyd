@@ -38,6 +38,7 @@ def test_handler_publishes_missing_and_send_failures(monkeypatch):
     monkeypatch.setattr(canary.boto3, "client", lambda name: {"lambda": Lam(), "cloudwatch": CW()}[name])
     monkeypatch.setattr(canary, "_send", lambda signal, body: sent.append(signal) or (200 if signal != "traces" else 403))
     monkeypatch.setattr(canary, "app_checks", lambda: {"web": 0, "api": 1})
+    monkeypatch.setattr(canary.time, "time", lambda: 15 * 60 * 1_950_000 + 5.0)   # a minute divisible by 15
     out = canary.handler({}, None)
     assert sent == ["logs", "traces", "metrics"]
     assert out == {"logs": {"sent": 200, "missing": 0}, "traces": {"sent": 403, "missing": 1}, "metrics": {"sent": 200},
@@ -46,6 +47,11 @@ def test_handler_publishes_missing_and_send_failures(monkeypatch):
     assert got == {("CanaryMissing", "logs"): 0, ("CanarySendFailed", "logs"): 0,
                    ("CanaryMissing", "traces"): 1, ("CanarySendFailed", "traces"): 1, ("CanarySendFailed", "metrics"): 0,
                    ("AppDown", "web"): 0, ("AppDown", "api"): 1}
+    # Other minutes: data checks only, no app checks.
+    metrics.clear()
+    monkeypatch.setattr(canary.time, "time", lambda: 15 * 60 * 1_950_000 + 65.0)
+    assert "app_down" not in canary.handler({}, None)
+    assert not any(m["MetricName"] == "AppDown" for m in metrics)
 
 
 def test_app_checks(monkeypatch):

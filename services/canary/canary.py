@@ -15,7 +15,7 @@ and the canary tenant's metrics explorer shows real data): canary.runs (a
 cumulative counter), canary.ingest.duration (a gauge: how long each send
 took, per signal) and canary.ingest.latency (a delta histogram of the same).
 
-It also checks what people sign in to: the web app (WEB_URL answers 200 with the app's page) and
+Every APP_CHECK_EVERY_MIN minutes (15) it also checks what people sign in to: the web app (WEB_URL answers 200 with the app's page) and
 the app API (a request without a token is refused with 401/403, so API Gateway and the sign-in
 check are up), publishing obs/AppDown{part=web|api} = 1 when not.
 """
@@ -35,6 +35,7 @@ TENANT = os.environ.get("CANARY_TENANT", "canary")
 LOOKUP = os.environ.get("LOOKUP_FUNCTION", "obs-index-lookup")
 CHECK_AFTER_MIN = int(os.environ.get("CHECK_AFTER_MIN", "2"))
 WEB_URL = os.environ.get("WEB_URL", "")
+APP_CHECK_EVERY_MIN = int(os.environ.get("APP_CHECK_EVERY_MIN", "15"))
 SERVICE = "canary"
 
 _key = None
@@ -153,9 +154,10 @@ def handler(event, context):
     result["metrics"] = {"sent": status}
     data.append({"MetricName": "CanarySendFailed", "Dimensions": [{"Name": "signal", "Value": "metrics"}],
                  "Value": 0 if status == 200 else 1})
-    result["app_down"] = app_checks()
+    if minute % APP_CHECK_EVERY_MIN == 0:
+        result["app_down"] = app_checks()
     data += [{"MetricName": "AppDown", "Dimensions": [{"Name": "part", "Value": part}], "Value": v}
-             for part, v in result["app_down"].items()]
+             for part, v in result.get("app_down", {}).items()]
     cw.put_metric_data(Namespace="obs", MetricData=data)
     print(json.dumps({"minute": minute, **result}))
     return result

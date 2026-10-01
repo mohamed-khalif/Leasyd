@@ -264,19 +264,19 @@ Resources:
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
       OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
 
-  # ---- What people sign in to: the canary checks the web app and the app API every minute.
+  # ---- What people sign in to: the canary checks the web app and the app API every 15 minutes.
 
   WebDownAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: obs-web-down
-      AlarmDescription: "The web app (WebUrl) did not load 3 minutes in a row: customers can't open Leasyd."
+      AlarmDescription: "The web app (WebUrl) did not load in 2 checks in a row (checked every 15 minutes): customers can't open Leasyd."
       Namespace: obs
       MetricName: AppDown
       Dimensions: [{ Name: part, Value: web }]
       Statistic: Maximum
-      Period: 60
-      EvaluationPeriods: 3
+      Period: 900
+      EvaluationPeriods: 2
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: breaching
@@ -287,13 +287,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: obs-app-api-down
-      AlarmDescription: "The app API (/v1/app/*) did not answer as expected 3 minutes in a row: the web app can't show data or sign people in."
+      AlarmDescription: "The app API (/v1/app/*) did not answer as expected in 2 checks in a row (checked every 15 minutes): the web app can't show data or sign people in."
       Namespace: obs
       MetricName: AppDown
       Dimensions: [{ Name: part, Value: api }]
       Statistic: Maximum
-      Period: 60
-      EvaluationPeriods: 3
+      Period: 900
+      EvaluationPeriods: 2
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: breaching
