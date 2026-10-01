@@ -30,12 +30,12 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: Settings      # its own items; reads the checks, SLOs and excluded runs they refer to
+              - Sid: Settings      # its own items (alerts, dashboards); reads the checks, SLOs and excluded runs they refer to
                 Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
                 Condition:
-                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["channel#*", "alert#*", "astate#*", "slo#*"] }
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["channel#*", "alert#*", "astate#*", "slo#*", "dash#*"] }
               - Sid: ListPerTenant
                 Effect: Allow
                 Action: dynamodb:Query

@@ -15,6 +15,7 @@ import { Slos } from "./pages/Slos";
 import { Alerts } from "./pages/Alerts";
 import { QueryBuilder } from "./pages/QueryBuilder";
 import { Sql } from "./pages/Sql";
+import { Dashboards } from "./pages/Dashboards";
 import { RANGES, Range, rangeFromKey } from "./time";
 
 export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
@@ -65,6 +66,9 @@ export function App() {
     page = <Alerts ctx={ctx} path={path} params={params} />;
     const [, , tab, sub] = path.split("/");
     crumb = ["Alerts", tab === "rules" && sub ? (sub === "new" ? "New rule" : "Rule") : tab === "channels" ? "Channels" : tab === "history" ? "History" : "Rules"];
+  } else if (path.startsWith("/dashboards")) {
+    page = <Dashboards ctx={ctx} path={path} />;
+    crumb = ["Dashboards", path.endsWith("/edit") ? "Edit dashboard" : "All dashboards"];
   } else if (path.startsWith("/query")) {
     page = <QueryBuilder ctx={ctx} params={params} />;
     crumb = ["Query data", "Query Builder"];

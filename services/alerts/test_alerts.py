@@ -295,3 +295,52 @@ def test_schedule_runs_check_rules_every_minute_and_slos_every_five(aws, monkeyp
     assert out["check_rules"] == [every1] and out["evaluated"] == []           # minute 1: 1-minute rules only
     out = alerts.evaluate({"time": "2026-10-01T12:05:00Z"})
     assert sorted(out["check_rules"]) == sorted([every1, every5])             # minute 5: both, and SLO rules too
+
+
+# ------------------------------------------------------------------ dashboards
+
+def dash_call(tenant, method, dash_id=None, body=None):
+    ev = {"httpMethod": method, "resource": "/v1/app/dashboards" + ("/{proxy+}" if dash_id else ""),
+          "pathParameters": {"proxy": dash_id} if dash_id else None, "isBase64Encoded": body is not None,
+          "body": base64.b64encode(json.dumps(body).encode()).decode() if body is not None else None,
+          "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant, "email": f"ana@{tenant}.io"}}}}
+    r = alerts.api(ev)
+    return r["statusCode"], json.loads(r["body"])
+
+
+DASH = {"name": "Checkout service", "description": "RED for checkout", "variables": [{"name": "service_name", "label": "Service"}],
+        "panels": [{"type": "text", "title": "About", "text": "Requests, errors, duration.", "w": 3, "h": 2},
+                   {"type": "timeseries", "title": "Requests/s", "w": 9, "h": 2, "unit": "/s",
+                    "queries": [{"promql": 'sum by (service_name) (rate(leasyd.spans{service_name=~"$service_name"}[5m]))', "legend": "{{service_name}}"}]}]}
+
+
+def test_dashboards_crud_versions_and_isolation(aws):
+    s, d = dash_call("acme", "POST", body=DASH)
+    assert s == 201 and d["version"] == 1 and len(d["panels"]) == 2 and d["panels"][1]["id"]
+    s, listing = dash_call("acme", "GET")
+    assert s == 200 and [(x["name"], x["panels"]) for x in listing["items"]] == [("Checkout service", 2)]
+    assert dash_call("globex", "GET")[1]["items"] == [] and dash_call("globex", "GET", d["id"])[0] == 404   # per tenant
+    assert dash_call("globex", "PUT", d["id"], {**DASH, "version": 1})[0] == 404
+    assert dash_call("globex", "DELETE", d["id"])[0] == 404
+    # Two people edit version 1: the first save wins, the second is told instead of overwriting.
+    s, d2 = dash_call("acme", "PUT", d["id"], {"name": "Checkout (v2)", "version": 1})
+    assert s == 200 and d2["version"] == 2 and d2["name"] == "Checkout (v2)" and len(d2["panels"]) == 2
+    s, e = dash_call("acme", "PUT", d["id"], {"name": "Someone else's edit", "version": 1})
+    assert s == 409 and "ana@acme.io saved this dashboard" in e["error"] and e["version"] == 2
+    assert dash_call("acme", "GET", d["id"])[1]["name"] == "Checkout (v2)"
+    assert dash_call("acme", "DELETE", d["id"])[0] == 200 and dash_call("acme", "GET", d["id"])[0] == 404
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"name": ""}, "name"), ({"panels": [{"type": "pie", "title": "x"}]}, "type is one of"),
+    ({"panels": [{"type": "timeseries", "title": "x", "queries": []}]}, "1-5 queries"),
+    ({"panels": [{"type": "timeseries", "title": "x", "queries": [{"promql": ""}]}]}, "query 1"),
+    ({"panels": [{"type": "stat", "title": "x", "w": 13, "queries": [{"promql": "up"}]}]}, "width"),
+    ({"panels": [{"type": "stat", "title": "x", "unit": "parsecs", "queries": [{"promql": "up"}]}]}, "unit"),
+    ({"panels": [{"id": "a", "type": "text", "title": "x"}, {"id": "a", "type": "text", "title": "y"}]}, "repeated id"),
+    ({"panels": [{"type": "text", "title": "x"}] * 61}, "at most 60"),
+    ({"variables": [{"name": "bad label!"}]}, "label name"),
+])
+def test_dashboard_validation(aws, change, why):
+    s, e = dash_call("acme", "POST", body={**DASH, **change})
+    assert s == 400 and why in e["error"], (change, e)

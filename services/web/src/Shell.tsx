@@ -24,6 +24,7 @@ export function Shell(p: Props) {
         <div className="brand"><IconLogo />Leasyd</div>
         <div className="nav-section">Dashboards</div>
         {link("/", "Home", <IconDash />, p.path === "/" || p.path === "")}
+        {link("/dashboards", "Dashboards", <IconDash />, p.path.startsWith("/dashboards"))}
         {link("/usage", "Usage & Cost", <IconCost />, p.path.startsWith("/usage"))}
         <div className="nav-section">Explore</div>
         {link("/logs", "Logs", <IconLogs />, p.path.startsWith("/logs"))}

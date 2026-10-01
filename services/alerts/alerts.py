@@ -27,7 +27,8 @@ written as the tenant's own log (service "alerts"), so the portal shows the hist
 with the rest of the data.
 
 Handlers (one Lambda, obs-alerts):
-  api        /v1/app/alerts/{proxy+}: rules, channels, channels/{id}/test (Cognito; the tenant is the user's)
+  api        /v1/app/alerts/{proxy+}: rules, channels, channels/{id}/test (Cognito; the tenant is the user's);
+             /v1/app/dashboards[/{id}]: the tenant's dashboards (dashboards.py)
   on_result  invoked (async) by the synthetic runner after each recorded run
   evaluate   every minute: check rules (PromQL), and every 5 minutes SLO rules, through the query
              engine (obs-query) as the portal does
@@ -624,6 +625,19 @@ def api(event, context=None):
         return _http(401, {"error": "no tenant for this user"})
     method = event.get("httpMethod")
     parts = [p for p in ((event.get("pathParameters") or {}).get("proxy") or "").split("/") if p]
+    if (event.get("resource") or "").startswith("/v1/app/dashboards"):
+        import dashboards
+        try:
+            raw = event.get("body") or "{}"
+            if event.get("isBase64Encoded"):
+                raw = base64.b64decode(raw)
+            body = json.loads(raw) if method in ("POST", "PUT") else {}
+        except ValueError:
+            return _http(400, {"error": "body must be JSON"})
+        if len(parts) > 1:
+            return _http(404, {"error": "unknown route"})
+        return dashboards.api(client("table"), _items, tenant, user, method, parts[0] if parts else None, body,
+                              _plain, _dynamo, _http)
     try:
         raw = event.get("body") or "{}"
         if event.get("isBase64Encoded"):

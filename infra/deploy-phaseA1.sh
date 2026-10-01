@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Alerts (A1): builds the bundle (alerts + the address checks + ingest's OTLP-to-Firehose code) and
 # deploys obs-phaseA1. Needs obs-phase0 (its boundary allows the customer email topics), obs-phase4
-# and obs-phaseS1. Deploy it before obs-phaseT2, whose /v1/app/alerts routes invoke obs-alerts.
+# and obs-phaseS1. Deploy it before obs-phaseT2, whose /v1/app/alerts and /v1/app/dashboards routes invoke obs-alerts.
 # Extra arguments go to `cloudformation deploy`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,7 +15,7 @@ APP_ARGS=()
 rm -rf services/alerts/build && mkdir -p services/alerts/build
 pip install -q --target services/alerts/build --only-binary=:all: --implementation cp --python-version 3.12 \
   --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 -r services/ingest/requirements.txt
-cp services/alerts/alerts.py services/synthetics/safety.py services/ingest/ingest.py services/alerts/build/
+cp services/alerts/alerts.py services/alerts/dashboards.py services/synthetics/safety.py services/ingest/ingest.py services/alerts/build/
 aws cloudformation package \
   --template-file infra/phaseA1-alerts.yaml \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phaseA1 \

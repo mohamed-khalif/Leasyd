@@ -1,9 +1,9 @@
 // Query Builder: one chart from one or more queries. Each query is built on Tracing, Logging or
 // Metrics (which write PromQL for you) or written as PromQL, and runs over all signals.
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { promql, PromSeries, records } from "../api";
+import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
-import { StackedBars } from "../components/Charts";
+import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtNum, rangeWindow } from "../time";
 import { useQuery } from "../useQuery";
@@ -92,6 +92,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
   const [settings, setSettings] = useState<Settings>(init.settings);
   const [nonce, setNonce] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [adding, setAdding] = useState(false);
   const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick, nonce]);   // eslint-disable-line react-hooks/exhaustive-deps
   const step = bucketSeconds(ctx.range);
   const metricList = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "metric_type", "is_monotonic"], aggs: [{ fn: "count" }], limit: 2000 },
@@ -146,7 +147,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
         <button className="btn" disabled={!texts[idx]?.trim()} title="Alert when this query crosses a threshold"
                 onClick={() => ctx.go(`/alerts/rules/new?name=${encodeURIComponent(cur.name.replace(/\{\{[^}]*\}\}/g, "").trim() || "")}`
                   + `&promql=${encodeURIComponent(texts[idx].replace(/\$__rate_interval|\$__interval/g, "5m"))}`)}>Create check rule</button>
-        <button className="btn" disabled title="Coming next: dashboards">Add to dashboard</button>
+        <button className="btn" disabled={!texts.some((t, i) => t.trim() && !queries[i].hidden)} onClick={() => setAdding(true)}>Add to dashboard</button>
       </div>
       <div className="qb">
         <div className="qb-main">
@@ -282,7 +283,54 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
           </SideSection>
         </aside>
       </div>
+      {adding && <AddToDashboard ctx={ctx} onClose={() => setAdding(false)}
+                                 panel={{ type: settings.chart === "bars" ? "bars" : "timeseries", unit: unit.trim(),
+                                          queries: queries.map((q, i) => ({ promql: texts[i], legend: q.name })).filter((q, i) => q.promql.trim() && !queries[i].hidden),
+                                          title: queries.find((q) => !q.hidden && q.name)?.name.replace(/\{\{[^}]*\}\}/g, "").trim() || "" }} />}
     </>
+  );
+}
+
+/** Puts the chart on a dashboard (an existing one, or a new one) as a panel. */
+function AddToDashboard({ ctx, panel, onClose }: { ctx: Ctx; panel: Partial<Panel>; onClose: () => void }) {
+  const [list, setList] = useState<DashboardSummary[] | null>(null);
+  const [target, setTarget] = useState("new");
+  const [name, setName] = useState("My dashboard");
+  const [title, setTitle] = useState(panel.title || "New panel");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { dashboards.list().then((r) => { setList(r.items); if (r.items.length) setTarget(r.items[0].id); }, (e: Error) => setError(e.message)); }, []);
+  const units: Record<string, string> = { "ms": "ms", "s": "s", "%": "%", "/s": "/s", "B": "bytes" };
+  const add = async () => {
+    setBusy(true); setError(null);
+    const p: Panel = { id: Math.random().toString(16).slice(2, 10), type: panel.type ?? "timeseries", title: title.trim(), description: "",
+                       w: 6, h: 2, unit: units[(panel.unit ?? "").trim()] ?? "", queries: panel.queries };
+    try {
+      let id = target;
+      if (target === "new") {
+        id = (await dashboards.create({ name: name.trim(), description: "", variables: [{ name: "service_name", label: "Service Name" }], panels: [p] })).id;
+      } else {
+        const d = await dashboards.get(target);
+        await dashboards.update(target, { panels: [...d.panels, p], version: d.version });
+      }
+      ctx.go(`/dashboards/${id}`);
+    } catch (e) { setError((e as Error).message); setBusy(false); }
+  };
+  return (
+    <Drawer title="Add to dashboard" onClose={onClose}
+            right={<button className="btn primary" disabled={busy || !title.trim() || (target === "new" && !name.trim())} onClick={add}>{busy ? "Adding…" : "Add"}</button>}>
+      <div className="drawer-section form-grid" style={{ gridTemplateColumns: "1fr" }}>
+        <label>Dashboard
+          <select className="select" value={target} onChange={(e) => setTarget(e.target.value)}>
+            {(list ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            <option value="new">New dashboard…</option>
+          </select></label>
+        {target === "new" && <label>New dashboard's name<input className="input" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></label>}
+        <label>Panel title<input className="input" maxLength={120} value={title} onChange={(e) => setTitle(e.target.value)} /></label>
+        <div className="faint">The panel keeps this chart's {panel.queries?.length ?? 0} quer{panel.queries?.length === 1 ? "y" : "ies"}; <code>$__interval</code> follows the dashboard's time range. Add <code>{'service_name=~"$service_name"'}</code> to a selector to make it follow the dashboard's service filter.</div>
+        {error && <div className="form-error">{error}</div>}
+      </div>
+    </Drawer>
   );
 }
 

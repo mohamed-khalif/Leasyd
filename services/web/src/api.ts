@@ -148,3 +148,18 @@ export function notExcluded(runIds: string[] = []): Where[] {
 export function records(r: Result): Record<string, unknown>[] {
   return r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]])));
 }
+
+// Dashboards (/v1/app/dashboards): panels of PromQL queries; the same for everyone in the tenant.
+export type PanelType = "timeseries" | "bars" | "stat" | "text";
+export type Panel = { id: string; type: PanelType; title: string; description?: string; w: number; h: number;
+                      queries?: { promql: string; legend?: string }[]; unit?: string; decimals?: number; text?: string };
+export type Dashboard = { id: string; name: string; description: string; variables: { name: string; label: string }[]; panels: Panel[];
+                          version: number; updated_at?: string; updated_by?: string; created_by?: string; builtin?: boolean };
+export type DashboardSummary = { id: string; name: string; description: string; panels: number; version: number; updated_at?: string; updated_by?: string };
+export const dashboards = {
+  list: () => call<{ items: DashboardSummary[]; limit: number }>("/v1/app/dashboards"),
+  get: (id: string) => call<Dashboard>(`/v1/app/dashboards/${id}`),
+  create: (d: Omit<Dashboard, "id" | "version">) => call<Dashboard>("/v1/app/dashboards", json("POST", d)),
+  update: (id: string, d: Partial<Dashboard> & { version: number }) => call<Dashboard>(`/v1/app/dashboards/${id}`, json("PUT", d)),
+  remove: (id: string) => call<{ deleted: string }>(`/v1/app/dashboards/${id}`, json("DELETE")),
+};

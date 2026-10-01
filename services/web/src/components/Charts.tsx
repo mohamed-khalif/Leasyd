@@ -37,13 +37,14 @@ export type Bar = { t: number; values: number[] };    // t: bucket start (epoch 
 
 /** Bars over time, each split into coloured parts (e.g. log records by severity). */
 export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bucketMs: number; height?: number; unit?: string;
-                                 legend?: boolean; onBar?: (t: number) => void }) {
+                                 legend?: boolean; onBar?: (t: number) => void; format?: (v: number) => string }) {
+  const fmt = p.format ?? ((v: number) => `${fmtNum(v)}${p.unit ?? ""}`);
   const [ref, w] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
   const h = p.height ?? 150, padR = 6, padT = 6, padB = 20;
   const x1 = p.range.to ?? Date.now(), x0 = p.range.from ?? x1 - p.range.minutes * 60_000;
   const ymax = niceMax(Math.max(1, ...p.bars.map((b) => b.values.reduce((a, v) => a + v, 0))));
-  const padL = Math.max(36, 10 + 6.2 * `${fmtNum(ymax)}${p.unit ?? ""}`.length);
+  const padL = Math.max(36, 10 + 6.2 * fmt(ymax).length);
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const Y = (v: number) => padT + (1 - v / ymax) * (h - padT - padB);
   const bw = Math.max(1, X(x0 + p.bucketMs) - X(x0) - 1);
@@ -58,7 +59,7 @@ export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bu
           {[0, ymax / 2, ymax].map((v) => (
             <g key={v}>
               <line x1={padL} x2={w - padR} y1={Y(v)} y2={Y(v)} stroke="var(--border)" strokeDasharray={v ? "2 3" : undefined} />
-              <text x={padL - 6} y={Y(v) + 3} textAnchor="end" fill="var(--text-3)" style={axis}>{fmtNum(v)}{p.unit ?? ""}</text>
+              <text x={padL - 6} y={Y(v) + 3} textAnchor="end" fill="var(--text-3)" style={axis}>{fmt(v)}</text>
             </g>
           ))}
           {Array.from({ length: 5 }, (_, i) => x0 + ((x1 - x0) * (i + 0.5)) / 5).map((t) => (
@@ -83,7 +84,7 @@ export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bu
           <Tip x={hover!} w={w}>
             <div className="faint">{new Date(hb.t).toLocaleString()}</div>
             {p.keys.map((k, i) => hb.values[i] ? (
-              <div key={k.label} className="tip-row"><i style={{ background: k.color }} />{k.label}<b>{fmtNum(hb.values[i])}{p.unit ?? ""}</b></div>
+              <div key={k.label} className="tip-row"><i style={{ background: k.color }} />{k.label}<b>{fmt(hb.values[i])}</b></div>
             ) : null)}
           </Tip>
         )}

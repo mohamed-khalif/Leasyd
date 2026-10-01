@@ -96,6 +96,17 @@ const CHANNELS: Record<string, unknown>[] = [
   { id: "c1a2b3c4d5e6", name: "On-call", type: "email", email: "oncall@acme.io", status: "confirmed" },
   { id: "c2b3c4d5e6f1", name: "#ops-alerts", type: "slack", url_hint: "https://hooks.slack.com/…x9Qz" },
 ];
+const DASHBOARDS: (Record<string, unknown> & { id: string; version: number })[] = [
+  { id: "d1a2b3c4d5e6", name: "Checkout team", description: "What the checkout team watches", version: 3, updated_by: "ana@acme.io",
+    variables: [{ name: "service_name", label: "Service Name" }],
+    panels: [
+      { id: "t1", type: "text", title: "Checkout", text: "Requests and errors of **checkout**, **payment** and **cart**.\n\nOn call: #checkout-oncall", w: 3, h: 2 },
+      { id: "p1", type: "timeseries", title: "Requests", description: "Server spans per second", w: 5, h: 2, unit: "/s",
+        queries: [{ promql: 'sum by (service_name) (rate(leasyd.spans{service_name=~"$service_name"}[$__interval]))', legend: "{{service_name}}" }] },
+      { id: "p2", type: "stat", title: "Orders placed", description: "Last hour", w: 4, h: 2, queries: [{ promql: "sum(increase(app_orders_placed_total[1h]))" }] },
+      { id: "p3", type: "bars", title: "Logs by severity", w: 12, h: 2, queries: [{ promql: "sum by (severity_text) (increase(leasyd.logs[$__interval]))", legend: "{{severity_text}}" }] },
+    ] },
+];
 const RULES: Record<string, unknown>[] = [
   { id: "r1a2b3c4d5e6", name: "Checkout is down", type: "check_failing", checks: ["e5f6a1b2c3d4", "b2c3d4e5f6a1"], failures: 2,
     channels: ["c1a2b3c4d5e6", "c2b3c4d5e6f1"], enabled: true, firing: ["e5f6a1b2c3d4"] },
@@ -517,6 +528,25 @@ export function mockApi(): Plugin {
           req.on("data", (c: Buffer) => (raw += c));
           req.on("end", () => {
             const [status, out] = settingsRoute(settings[1], settings[2], req.method ?? "GET", raw ? JSON.parse(raw) : {});
+            res.statusCode = status;
+            setTimeout(() => res.end(JSON.stringify(out)), 150);
+          });
+          return;
+        }
+        if (req.url.startsWith("/v1/app/dashboards")) {
+          let raw = "";
+          req.on("data", (c: Buffer) => (raw += c));
+          req.on("end", () => {
+            const id = req.url!.split("?")[0].split("/")[4];
+            const body = raw ? JSON.parse(raw) : {};
+            const d = DASHBOARDS.find((x) => x.id === id);
+            let status = 200, out: unknown;
+            if (!id && req.method === "GET") out = { items: DASHBOARDS.map((x) => ({ id: x.id, name: x.name, description: x.description, panels: (x.panels as unknown[]).length, version: x.version })), limit: 100 };
+            else if (!id) { const n = { ...body, id: hex(Math.random, 12), version: 1, updated_by: "ana@acme.io" }; DASHBOARDS.push(n); out = n; status = 201; }
+            else if (!d) { status = 404; out = { error: "no such dashboard" }; }
+            else if (req.method === "PUT") { if (body.version !== d.version) { status = 409; out = { error: "someone saved this dashboard since you opened it" }; } else { Object.assign(d, body, { version: Number(d.version) + 1 }); out = d; } }
+            else if (req.method === "DELETE") { DASHBOARDS.splice(DASHBOARDS.indexOf(d), 1); out = { deleted: id }; }
+            else out = d;
             res.statusCode = status;
             setTimeout(() => res.end(JSON.stringify(out)), 150);
           });

@@ -68,3 +68,25 @@ export function keptFrom(now = Date.now()): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 export const fmtDay = (t: number) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
+/** A value in a unit, as people read it: 1.2 s, 3 min, 2 days, 4 years; 300 MB; 99.5%. */
+export function fmtUnit(v: number, unit = "", decimals?: number): string {
+  const n = (x: number) => (decimals != null ? x.toFixed(decimals) : fmtNum(x));
+  const scaled = (x: number, steps: [number, string][]) => {
+    const [div, name] = steps.find(([d]) => Math.abs(x) >= d) ?? steps[steps.length - 1];
+    return `${n(x / div)} ${name}`;
+  };
+  if (!isFinite(v)) return String(v);
+  if (unit === "ms" || unit === "s" || unit === "ns") {
+    const ms = unit === "s" ? v * 1000 : unit === "ns" ? v / 1e6 : v;
+    if (ms === 0) return "0";
+    if (Math.abs(ms) < 0.001) return `${n(ms * 1e6)} ns`;
+    if (Math.abs(ms) < 1) return `${n(ms * 1000)} µs`;
+    return scaled(ms, [[31_536_000_000, "years"], [2_592_000_000, "months"], [86_400_000, "days"], [3_600_000, "h"], [60_000, "min"], [1000, "s"], [1, "ms"]]);
+  }
+  if (unit === "bytes") return v === 0 ? "0" : scaled(v, [[1e12, "TB"], [1e9, "GB"], [1e6, "MB"], [1e3, "KB"], [1, "bytes"]]);
+  if (unit === "%") return `${n(v)}%`;
+  if (unit === "percentunit") return `${n(v * 100)}%`;
+  if (unit === "/s") return `${n(v)}/s`;
+  return n(v);
+}

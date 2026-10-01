@@ -5,7 +5,9 @@ export type Series = { label: string; color: string; points: [number, number][] 
 
 /** Line/area chart over time: y ticks, x time labels, legend, hover readout. */
 export function TimeSeries(props: { series: Series[]; range: Range; height?: number; unit?: string; area?: boolean;
-                                   threshold?: number | null; thresholds?: { value: number; color: string }[]; legend?: boolean }) {
+                                   threshold?: number | null; thresholds?: { value: number; color: string }[]; legend?: boolean;
+                                   format?: (v: number) => string; dots?: boolean }) {
+  const fmt = props.format ?? ((v: number) => `${fmtNum(v)}${props.unit ?? ""}`);
   const box = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(600);
   const [hover, setHover] = useState<number | null>(null);
@@ -27,7 +29,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
   const top = Math.max(0, ...lines.map((l) => l.value), ...props.series.flatMap((s) => s.points.map((p) => p[1])));
   const ymax = niceMax(top > 0 ? top : 1);   // small values (ratios, rates) get their own scale
   // Room for the longest axis label ("6,000 ms"): about 6 px per character of the 10 px mono font.
-  const padL = Math.max(44, 10 + 6.2 * Math.max(...[0, ymax / 2, ymax].map((v) => `${fmtNum(v)}${props.unit ?? ""}`.length)));
+  const padL = Math.max(44, 10 + 6.2 * Math.max(...[0, ymax / 2, ymax].map((v) => fmt(v).length)));
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const Y = (v: number) => padT + (1 - v / ymax) * (h - padT - padB);
   const ticksY = [0, ymax / 2, ymax];
@@ -49,7 +51,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
             <g key={v}>
               <line x1={padL} x2={w - padR} y1={Y(v)} y2={Y(v)} stroke="var(--border)" strokeDasharray={v ? "2 3" : undefined} />
               <text x={padL - 6} y={Y(v) + 3} textAnchor="end" fill="var(--text-3)" style={{ font: "10px var(--font-mono)" }}>
-                {fmtNum(v)}{props.unit ?? ""}
+                {fmt(v)}
               </text>
             </g>
           ))}
@@ -69,6 +71,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
                         fill={s.color} opacity={0.14} />
                 )}
                 <path d={line} fill="none" stroke={s.color} strokeWidth={1.4} />
+                {props.dots && pts.length <= 120 && pts.map((p) => <circle key={p[0]} cx={X(p[0])} cy={Y(p[1])} r={1.6} fill={s.color} />)}
               </g>
             );
           })}
@@ -89,7 +92,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
             {props.series.slice(0, 8).map((s) => {
               const p = nearest(s);
               return p && <div key={s.label}><i style={{ display: "inline-block", width: 8, height: 8, background: s.color, marginRight: 6, borderRadius: 2 }} />
-                {s.label} <b style={{ float: "right", marginLeft: 12 }}>{fmtNum(p[1])}{props.unit ?? ""}</b></div>;
+                {s.label} <b style={{ float: "right", marginLeft: 12 }}>{fmt(p[1])}</b></div>;
             })}
           </div>
         )}
