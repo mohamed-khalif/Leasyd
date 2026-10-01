@@ -14,6 +14,10 @@ Each run also sends metrics about itself (so the metrics path is exercised,
 and the canary tenant's metrics explorer shows real data): canary.runs (a
 cumulative counter), canary.ingest.duration (a gauge: how long each send
 took, per signal) and canary.ingest.latency (a delta histogram of the same).
+
+It also checks what people sign in to: the web app (WEB_URL answers 200 with the app's page) and
+the app API (a request without a token is refused with 401/403, so API Gateway and the sign-in
+check are up), publishing obs/AppDown{part=web|api} = 1 when not.
 """
 
 import hashlib
@@ -30,6 +34,7 @@ KEY_PARAM = os.environ.get("KEY_PARAM", "/obs/canary/api-key")
 TENANT = os.environ.get("CANARY_TENANT", "canary")
 LOOKUP = os.environ.get("LOOKUP_FUNCTION", "obs-index-lookup")
 CHECK_AFTER_MIN = int(os.environ.get("CHECK_AFTER_MIN", "2"))
+WEB_URL = os.environ.get("WEB_URL", "")
 SERVICE = "canary"
 
 _key = None
@@ -98,6 +103,29 @@ def _send(signal, body):
         return 0
 
 
+def _get(url):
+    """(status, first 64 KB of the body) of a GET; status 0 when unreachable."""
+    req = urllib.request.Request(url, headers={"User-Agent": "leasyd-canary"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read(65536).decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except OSError:
+        return 0, ""
+
+
+def app_checks():
+    """{part: 1 if down else 0} for the web app and the app API."""
+    out = {}
+    if WEB_URL:
+        status, body = _get(WEB_URL)
+        out["web"] = 0 if status == 200 and 'id="root"' in body else 1
+    if ENDPOINT:
+        out["api"] = 0 if _get(f"{ENDPOINT}/v1/app/account")[0] in (401, 403) else 1
+    return out
+
+
 def _found(lam, signal, minute):
     t = minute * 60
     q = {"tenant": TENANT, "signal": signal, "services": [SERVICE], "match": {"trace_id": trace_id(signal, minute)},
@@ -125,6 +153,9 @@ def handler(event, context):
     result["metrics"] = {"sent": status}
     data.append({"MetricName": "CanarySendFailed", "Dimensions": [{"Name": "signal", "Value": "metrics"}],
                  "Value": 0 if status == 200 else 1})
+    result["app_down"] = app_checks()
+    data += [{"MetricName": "AppDown", "Dimensions": [{"Name": "part", "Value": part}], "Value": v}
+             for part, v in result["app_down"].items()]
     cw.put_metric_data(Namespace="obs", MetricData=data)
     print(json.dumps({"minute": minute, **result}))
     return result

@@ -37,12 +37,28 @@ def test_handler_publishes_missing_and_send_failures(monkeypatch):
 
     monkeypatch.setattr(canary.boto3, "client", lambda name: {"lambda": Lam(), "cloudwatch": CW()}[name])
     monkeypatch.setattr(canary, "_send", lambda signal, body: sent.append(signal) or (200 if signal != "traces" else 403))
+    monkeypatch.setattr(canary, "app_checks", lambda: {"web": 0, "api": 1})
     out = canary.handler({}, None)
     assert sent == ["logs", "traces", "metrics"]
-    assert out == {"logs": {"sent": 200, "missing": 0}, "traces": {"sent": 403, "missing": 1}, "metrics": {"sent": 200}}
+    assert out == {"logs": {"sent": 200, "missing": 0}, "traces": {"sent": 403, "missing": 1}, "metrics": {"sent": 200},
+                   "app_down": {"web": 0, "api": 1}}
     got = {(m["MetricName"], m["Dimensions"][0]["Value"]): m["Value"] for m in metrics}
     assert got == {("CanaryMissing", "logs"): 0, ("CanarySendFailed", "logs"): 0,
-                   ("CanaryMissing", "traces"): 1, ("CanarySendFailed", "traces"): 1, ("CanarySendFailed", "metrics"): 0}
+                   ("CanaryMissing", "traces"): 1, ("CanarySendFailed", "traces"): 1, ("CanarySendFailed", "metrics"): 0,
+                   ("AppDown", "web"): 0, ("AppDown", "api"): 1}
+
+
+def test_app_checks(monkeypatch):
+    monkeypatch.setattr(canary, "WEB_URL", "https://app.example")
+    monkeypatch.setattr(canary, "ENDPOINT", "https://api.example")
+    pages = {"https://app.example": (200, '<div id="root"></div>'), "https://api.example/v1/app/account": (401, "")}
+    monkeypatch.setattr(canary, "_get", lambda url: pages[url])
+    assert canary.app_checks() == {"web": 0, "api": 0}
+    pages["https://app.example"] = (200, "<html>Access denied</html>")       # a page, but not the app
+    pages["https://api.example/v1/app/account"] = (502, "")
+    assert canary.app_checks() == {"web": 1, "api": 1}
+    pages["https://api.example/v1/app/account"] = (200, "{}")               # open without sign-in: also wrong
+    assert canary.app_checks()["api"] == 1
 
 
 def test_metrics_are_accepted_by_ingest_and_compact_to_every_kind(tmp_path):

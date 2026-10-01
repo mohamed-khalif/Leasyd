@@ -23,6 +23,7 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 | Firehose cost cut (compress before Firehose) | T6 | live, tested: $0.143 -> $0.077/GB at 10 GB/h |
 | Fast lane writes Parquet; per-tenant Firehose buffer (`tune`) | T6 | live, tested at 50 GB/h: freshness p99 38 s, queries pass |
 | Failure visibility: fast-lane dead-letter queue + redrive, compaction/ingest/query alarms, freshness canary | T7 | live, each alarm proven by an injected failure |
+| Watching Leasyd itself (more of it): the canary also loads the web app and checks the app API every minute; error alarms on every function (adds recent indexer, tenant admin, account API, synthetics API, demo, AI); "stopped running" alarms on the synthetics scheduler, alert evaluator, demo and tenant sweep; Lambda throttling, obs-tenants throttling, SES bounce/complaint rates; a monthly AWS cost budget emailed at 80% actual / 100% forecast; CloudWatch dashboard Leasyd-health. All alarms email the obs-alerts subscriber | T7 | built (canary tests, cfn-lint); to deploy (`infra/deploy-phaseT7.sh` after W1; MONTHLY_BUDGET_USD optional) and check each new alarm on AWS |
 | Customer query API: `POST /v1/query` with read-scoped keys (`infra/tenant.sh read-key`) | Q1 | live, tested on AWS (`infra/query-api-test.py`) |
 | Customer logins: Cognito users per tenant (invite/remove), `/v1/app/me`, `/v1/app/query` | U1 | live, tested on AWS (`infra/login-test.py`) |
 | Faults, soak | T6 | crash safety covered by tests and a real stuck-chunk recovery; soak not run |

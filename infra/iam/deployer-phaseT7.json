@@ -1,17 +1,69 @@
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Sid": "FailedEventQueues", "Effect": "Allow",
-      "Action": ["sqs:CreateQueue", "sqs:DeleteQueue", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes",
-                 "sqs:GetQueueUrl", "sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags",
-                 "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility"],
-      "Resource": "arn:aws:sqs:*:*:obs-*" },
-    { "Sid": "CanaryKey", "Effect": "Allow",
-      "Action": ["ssm:PutParameter", "ssm:GetParameter", "ssm:DeleteParameter", "ssm:AddTagsToResource",
-                 "ssm:ListTagsForResource"],
-      "Resource": "arn:aws:ssm:*:*:parameter/obs/*" },
-    { "Sid": "InvokeConfigs", "Effect": "Allow",
-      "Action": ["lambda:GetFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig"],
-      "Resource": "arn:aws:lambda:*:*:function:obs-*" }
+    {
+      "Sid": "FailedEventQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:TagQueue",
+        "sqs:UntagQueue",
+        "sqs:ListQueueTags",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility"
+      ],
+      "Resource": "arn:aws:sqs:*:*:obs-*"
+    },
+    {
+      "Sid": "CanaryKey",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:GetParameter",
+        "ssm:DeleteParameter",
+        "ssm:AddTagsToResource",
+        "ssm:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:ssm:*:*:parameter/obs/*"
+    },
+    {
+      "Sid": "InvokeConfigs",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:GetFunctionEventInvokeConfig",
+        "lambda:DeleteFunctionEventInvokeConfig"
+      ],
+      "Resource": "arn:aws:lambda:*:*:function:obs-*"
+    },
+    {
+      "Sid": "HealthDashboard",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutDashboard",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:DeleteDashboards"
+      ],
+      "Resource": "arn:aws:cloudwatch::*:dashboard/Leasyd-*"
+    },
+    {
+      "Sid": "CostBudget",
+      "Effect": "Allow",
+      "Action": [
+        "budgets:ViewBudget",
+        "budgets:ModifyBudget"
+      ],
+      "Resource": "arn:aws:budgets::*:budget/obs-*"
+    },
+    {
+      "Sid": "AlertEmail",
+      "Effect": "Allow",
+      "Action": "sns:ListSubscriptionsByTopic",
+      "Resource": "arn:aws:sns:*:*:obs-alerts"
+    }
   ]
 }

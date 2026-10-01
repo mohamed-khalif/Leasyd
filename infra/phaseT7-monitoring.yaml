@@ -1,8 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Failure visibility (T7): a freshness canary that sends a log and a span every minute through
-  the real endpoint and checks the one sent 2 minutes earlier is findable, and error alarms on
-  ingest and query. Alarms go to the obs-alerts topic (Phase 2). Compaction and fast-lane alarms
+  the real endpoint and checks the one sent 2 minutes earlier is findable, and that the web app
+  and app API answer; error alarms on ingest, query and the other functions; alarms when a
+  scheduled job stops running, on Lambda throttling and on email reputation; a monthly cost
+  budget; and the Leasyd-health dashboard. Alarms go to the obs-alerts topic (Phase 2). Compaction and fast-lane alarms
   live in Phase 2 next to what they watch.
 
 Parameters:
@@ -12,10 +14,24 @@ Parameters:
   CanaryKeyParameter:
     Type: String
     Default: /obs/canary/api-key
+  WebUrl:
+    Type: String
+    Default: ""
+    Description: The web app's address (obs-phaseW1 output WebUrl); empty = not checked.
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Who gets the monthly cost budget emails (alarms go to the obs-alerts topic). Empty = no budget.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 100
   CanaryRate:
     Type: String
     Default: rate(1 minute)
     AllowedValues: [rate(1 minute), rate(5 minutes)]
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref AlertEmail, ""]]
 
 Resources:
   CanaryRole:
@@ -72,6 +88,7 @@ Resources:
         Variables:
           INGEST_ENDPOINT: !Ref IngestEndpoint
           KEY_PARAM: !Ref CanaryKeyParameter
+          WEB_URL: !Ref WebUrl
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T7" }
@@ -246,3 +263,304 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
       OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  # ---- What people sign in to: the canary checks the web app and the app API every minute.
+
+  WebDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-web-down
+      AlarmDescription: "The web app (WebUrl) did not load 3 minutes in a row: customers can't open Leasyd."
+      Namespace: obs
+      MetricName: AppDown
+      Dimensions: [{ Name: part, Value: web }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  AppApiDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-app-api-down
+      AlarmDescription: "The app API (/v1/app/*) did not answer as expected 3 minutes in a row: the web app can't show data or sign people in."
+      Namespace: obs
+      MetricName: AppDown
+      Dimensions: [{ Name: part, Value: api }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  # ---- Errors in functions the other stacks don't alarm on.
+
+  RecentIndexerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-recent-indexer-errors
+      AlarmDescription: "Recent-data indexer (new data may not be searchable quickly): 3 or more errors in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-recent-indexer }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  TenantAdminErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-tenant-admin-errors
+      AlarmDescription: "Tenant admin (sign-ups, invitations, key expiry, retention): 3 or more errors in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-tenant-admin }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  AccountApiErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-account-api-errors
+      AlarmDescription: "Account API (sign-up form, Settings page): 3 or more errors in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-account-api }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  SyntheticsApiErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-synthetics-api-errors
+      AlarmDescription: "Synthetic checks API (Checks pages): 3 or more errors in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-synthetics-api }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  DemoErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-demo-errors
+      AlarmDescription: "Demo data generator (the demo tenant goes stale): 3 or more errors in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-demo }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  AiErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-ai-errors
+      AlarmDescription: "AI SRE: 3 or more errors in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: obs-ai }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  # ---- Scheduled jobs that stopped running (no invocations at all).
+
+  SyntheticsTickStoppedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-synthetics-tick-stopped
+      AlarmDescription: "Synthetic checks scheduler: no checks are running (no runs in 15 minutes)."
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions: [{ Name: FunctionName, Value: obs-synthetics-tick }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  AlertsEvalStoppedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-alerts-stopped
+      AlarmDescription: "Alert and SLO evaluator: customers' alerts are not being checked (no runs in 15 minutes)."
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions: [{ Name: FunctionName, Value: obs-alerts }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  DemoRunStoppedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-demo-stopped
+      AlarmDescription: "Demo data generator: the demo tenant is going stale (no runs in 15 minutes)."
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions: [{ Name: FunctionName, Value: obs-demo }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  TenantSweepStoppedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-tenant-admin-stopped
+      AlarmDescription: "Tenant sweep: expired keys and deletions are not being processed (no runs in 60 minutes)."
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions: [{ Name: FunctionName, Value: obs-tenant-admin }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  # ---- Capacity and email reputation.
+
+  ThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-lambda-throttles
+      AlarmDescription: "Lambda throttled 10 or more calls in 5 minutes (the account's concurrency limit is reached: ingest or queries may be refused)."
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  TenantsTableThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-tenants-table-throttles
+      AlarmDescription: "The obs-tenants table throttled reads (API keys, accounts, settings): 5 or more in 5 minutes."
+      Namespace: AWS/DynamoDB
+      MetricName: ReadThrottleEvents
+      Dimensions: [{ Name: TableName, Value: obs-tenants }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  EmailBouncesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-email-bounce-rate
+      AlarmDescription: "Email bounce rate over 4% (SES reviews accounts at 5% and may pause sending: sign-up and invitation emails stop)."
+      Namespace: AWS/SES
+      MetricName: Reputation.BounceRate
+      Statistic: Maximum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0.04
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  EmailComplaintsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-email-complaint-rate
+      AlarmDescription: "Email complaint rate over 0.08% (SES reviews accounts at 0.1% and may pause sending)."
+      Namespace: AWS/SES
+      MetricName: Reputation.ComplaintRate
+      Statistic: Maximum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0.0008
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  # ---- The AWS bill: an email at 80% of the monthly budget (actual) and at 100% (forecast).
+  Budget:
+    Type: AWS::Budgets::Budget
+    Condition: HasEmail
+    Properties:
+      Budget:
+        BudgetName: obs-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: !Ref MonthlyBudgetUsd, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+        - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+
+  # ---- One page with the platform's health (CloudWatch > Dashboards > Leasyd-health).
+  HealthDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: Leasyd-health
+      DashboardBody: !Sub |
+        {"widgets": [{"type": "alarm", "x": 0, "y": 0, "width": 24, "height": 4, "properties": {"title": "Key alarms", "alarms": ["arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-canary-logs", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-canary-traces", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-web-down", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-app-api-down", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-ingest-5xx", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-ingest-errors", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-query-errors", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-compaction-stuck", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-fastlane-failed", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-synthetics-tick-stopped", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-alerts-stopped", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-lambda-throttles"]}}, {"type": "metric", "x": 0, "y": 4, "width": 8, "height": 6, "properties": {"title": "Customers can use it (1 = down)", "region": "${AWS::Region}", "metrics": [["obs", "CanaryMissing", "signal", "logs"], ["...", "traces"], ["obs", "AppDown", "part", "web"], ["...", "api"]], "stat": "Maximum", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 8, "y": 4, "width": 8, "height": 6, "properties": {"title": "API requests and errors", "region": "${AWS::Region}", "metrics": [["AWS/ApiGateway", "Count", "ApiName", "obs-ingest"], [".", "4XXError", ".", "."], [".", "5XXError", ".", "."]], "stat": "Sum", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 16, "y": 4, "width": 8, "height": 6, "properties": {"title": "API latency p95 (ms)", "region": "${AWS::Region}", "metrics": [["AWS/ApiGateway", "Latency", "ApiName", "obs-ingest"]], "stat": "p95", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 0, "y": 10, "width": 12, "height": 7, "properties": {"title": "Function errors", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Errors", "FunctionName", "obs-ingest"], ["AWS/Lambda", "Errors", "FunctionName", "obs-ingest-authorizer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query-worker"], ["AWS/Lambda", "Errors", "FunctionName", "obs-index-lookup"], ["AWS/Lambda", "Errors", "FunctionName", "obs-compaction-worker"], ["AWS/Lambda", "Errors", "FunctionName", "obs-compaction-dispatcher"], ["AWS/Lambda", "Errors", "FunctionName", "obs-recent-indexer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-day-sealer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-alerts"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-tick"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-run"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-browser"], ["AWS/Lambda", "Errors", "FunctionName", "obs-tenant-admin"], ["AWS/Lambda", "Errors", "FunctionName", "obs-account-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-demo"], ["AWS/Lambda", "Errors", "FunctionName", "obs-ai"], ["AWS/Lambda", "Errors", "FunctionName", "obs-canary"]], "stat": "Sum", "period": 300, "view": "timeSeries", "stacked": true}}, {"type": "metric", "x": 12, "y": 10, "width": 12, "height": 7, "properties": {"title": "Function duration p95 (ms)", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Duration", "FunctionName", "obs-ingest"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query-api"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query-worker"], ["AWS/Lambda", "Duration", "FunctionName", "obs-compaction-worker"]], "stat": "p95", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 0, "y": 17, "width": 8, "height": 6, "properties": {"title": "Concurrency and throttles", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "ConcurrentExecutions"], [".", "Throttles"]], "stat": "Maximum", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 8, "y": 17, "width": 8, "height": 6, "properties": {"title": "Canary send time (ms)", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Duration", "FunctionName", "obs-canary"]], "stat": "Average", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 16, "y": 17, "width": 8, "height": 6, "properties": {"title": "Email reputation", "region": "${AWS::Region}", "metrics": [["AWS/SES", "Reputation.BounceRate"], [".", "Reputation.ComplaintRate"]], "stat": "Maximum", "period": 3600, "view": "timeSeries", "stacked": false}}]}
