@@ -1,3 +1,22 @@
+# Pick up here (paused 2026-10-01, evening)
+
+Everything is committed and pushed on `claude/code-identification-1dxuoa`; nothing is running locally.
+Deployed and verified on AWS today: search limits (300/min, 10 background, 20,000 units/day),
+security fixes, self-monitoring, the day-sealer permission fix, and the 7-day no-card free trial
+(sign-up -> refused after the end -> `infra/tenant.sh upgrade` -> accepted again).
+
+Next, in order:
+1. **Website live** (user): `infra/deploy-site.sh leasyd.com` in CloudShell; at GoDaddy delete the
+   `www` CNAME, add the 4 printed NS records for `www`, forward `leasyd.com` -> https://www.leasyd.com
+   (301); then run `infra/deploy-site.sh` again for the certificate. Then check both pages live.
+2. **AI SRE** (paused): Bedrock model access for Anthropic models via a first playground call and
+   the use-case form (text drafted in the conversation); then deploy phaseAI and test on demo data.
+3. Open items: Stripe billing (upgrade is manual today); check runs not yet metered for billing;
+   SES production access; the full `infra/down.sh` / `up.sh` test; optional: faster dashboards
+   (pre-computed summaries, cached finished hours), reserved Lambda concurrency for ingest.
+
+---
+
 # Prompt for the next session: fast-lane freshness at 50 GB/h
 
 **Status: implemented in the original session (fast parse in the fast lane, stage timing,
