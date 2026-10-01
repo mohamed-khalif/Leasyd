@@ -117,12 +117,14 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
   const up24 = useQuery({ ...base, ...since(24), where: mine(SUCCESS), aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "u24" + p.rkey);
   const up7 = useQuery({ ...base, ...since(24 * 7), where: mine(SUCCESS), aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "u7" + p.rkey);
   const speed = useQuery({ ...base, ...p.w, where: mine(DURATION), aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }] }, "s" + p.rkey);
+  // Every run in the range (the run list stops at the latest RUNS)
+  const tally = useQuery({ ...base, ...p.w, where: mine(SUCCESS), aggs: [{ fn: "count" }, { fn: "sum", field: "value" }] }, "f" + p.rkey);
   const tls = useQuery({ ...base, ...p.w, where: mine(TLS), aggs: [{ fn: "min", field: "value" }] }, "c" + p.rkey);
   const series = useQuery({ ...base, ...p.w, where: mine(DURATION), group_by: [`ts:${b}`], aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }], limit: 10000 }, "d" + p.rkey);
   const perStep = useQuery({ ...base, ...p.w, where: mine(STEP_DURATION), group_by: ["attributes.step.index"], aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }], limit: 20 }, "q" + p.rkey);
 
   const counted = p.runList.filter((r) => !r.excluded && !p.exRuns.includes(r.id));
-  const fails = counted.filter((r) => !r.ok).length;
+  const t = tally.data?.rows[0], total = t ? Number(t[0]) : 0, fails = t ? Math.round(total - Number(t[1] ?? 0)) : 0;
   const lastFail = counted.find((r) => !r.ok), last = p.runList[0];
   const upFor = !last ? "—" : !last.ok ? "down" : lastFail ? span(Date.now() - Date.parse(lastFail.ts)) : `> ${span(Date.now() - Date.parse(p.w.start))}`;
   const u = (q: typeof up24) => { const r = q.data?.rows[0]; return r && Number(r[1]) ? pct(Number(r[0])) : "—"; };
@@ -154,7 +156,7 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
             <Card label="Uptime (24 hours)" value={u(up24)} tone={tone(up24)} />
             <Card label="Uptime (7 days)" value={u(up7)} tone={tone(up7)} />
             <Card label="Average duration" value={s && s[0] != null ? `${fmtNum(Number(s[0]))} ms` : "—"} sub={s && s[1] != null ? `p95 ${fmtNum(Number(s[1]))} ms` : undefined} />
-            <Card label="Failed runs" value={p.runs.data ? fmtNum(fails) : "…"} tone={fails ? "bad" : undefined} sub={`of ${counted.length} in ${ctx.range.label.toLowerCase()}`} />
+            <Card label="Failed runs" value={t ? fmtNum(fails) : "…"} tone={fails ? "bad" : undefined} sub={`of ${fmtNum(total)} in ${ctx.range.label.toLowerCase()}`} />
             <Card label="Last check" value={last ? ago(last.ts) : "—"} tone={last ? (last.ok ? "ok" : "bad") : undefined} sub={last ? (last.ok ? "passed" : "failed") : undefined}
                   onClick={last ? () => p.onRun(last) : undefined} />
             {isBrowser(check) || tls.data?.rows[0]?.[0] == null

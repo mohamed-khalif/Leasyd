@@ -737,11 +737,11 @@ def _promql_api(tenant, q):
 def _sql_api(tenant, q):
     """{"sql": "SELECT ...", "start", "end"} -> {"columns", "rows", "truncated", "stats"}."""
     if not q.get("start") or not q.get("end"):
-        return _http(400, {"error": "start and end are required (ISO-8601)"})
+        return _http(400, {"error": "start and end are required (ISO-8601 or epoch seconds)"})
     try:
         kept = kept_from()
-        start = max(lookup._parse(q["start"]), kept).strftime("%Y-%m-%dT%H:%M:%SZ")
-        end = max(lookup._parse(q["end"]), kept).strftime("%Y-%m-%dT%H:%M:%SZ")
+        start, end = (max(datetime.fromtimestamp(_epoch_of(q[k], k), timezone.utc), kept).strftime("%Y-%m-%dT%H:%M:%SZ")
+                      for k in ("start", "end"))
         out = run_sql(tenant, q["sql"], start, end)
     except BadQuery as e:
         return _http(400, {"error": str(e)})

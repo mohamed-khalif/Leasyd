@@ -119,7 +119,8 @@ function Dot({ ok, title }: { ok: boolean | null; title: string }) {
   const color = ok == null ? "var(--text-3)" : ok ? OK : "var(--sev-error)";
   return <span title={title} aria-label={title} style={{ display: "inline-block", width: 9, height: 9, borderRadius: 9, background: color }} />;
 }
-export const pct = (v: number) => `${(v * 100).toFixed(v >= 0.9995 ? 0 : v >= 0.99 ? 2 : 1)}%`;
+// Two decimals from 90% up, so 98.96% never shows as "99.0%" (and red, below a 99% target).
+export const pct = (v: number) => `${(v * 100).toFixed(v >= 0.9995 ? 0 : v >= 0.9 ? 2 : 1)}%`;
 
 const OPS: Record<string, string> = { equals: "=", not_equals: "≠", contains: "contains", lt: "<", gt: ">", exists: "exists" };
 export function describeConstraint(c: Constraint): string {

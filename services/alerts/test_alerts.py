@@ -344,3 +344,15 @@ def test_dashboards_crud_versions_and_isolation(aws):
 def test_dashboard_validation(aws, change, why):
     s, e = dash_call("acme", "POST", body={**DASH, **change})
     assert s == 400 and why in e["error"], (change, e)
+
+
+def test_builtin_dashboards_can_be_cloned():
+    """The web app's built-in dashboards are cloned by POSTing them: their panels must pass validation."""
+    import re
+    import dashboards
+    src = open(os.path.join(os.path.dirname(__file__), "..", "web", "src", "builtinDashboards.ts")).read()
+    ids = re.findall(r'(?:\bid: |text\()"([^"]+)"', src)
+    panel_ids = [i for i in ids if not i.startswith("builtin-")]
+    assert len(panel_ids) > 20 and all(dashboards._PANEL_ID.match(i) for i in panel_ids), panel_ids
+    assert set(re.findall(r'type: "(\w+)"', src)) <= dashboards.PANEL_TYPES
+    assert set(re.findall(r'unit: "([^"]*)"', src)) <= dashboards.UNITS

@@ -225,7 +225,7 @@ class Parser:
                 return self.call()
             self.i += 1
             return self.selector(name)
-        raise PromQLError(f"unexpected {'the end' if t[0] == 'eof' else repr(t[1])} at position {t[2] + 1}")
+        raise PromQLError("it ends too early (a bracket or argument is missing)" if t[0] == "eof" else f"unexpected {t[1]!r} at position {t[2] + 1}")
 
     def aggregation(self):
         op = self.take()[1]

@@ -62,3 +62,13 @@ def test_locked_down_even_past_the_checker(data, monkeypatch):
         out = query.run_sql("acme", text, S, E, invoke_worker=query.run_sql_worker)
         assert out.get("error") and ("Permission" in out["error"] or "lock" in out["error"] or "disabled" in out["error"]), (text, out)
     assert query.run_sql("acme", "SELECT count(*) FROM logs", S, E, invoke_worker=query.run_sql_worker)["rows"] == [[len(data)]]
+
+
+def test_api_takes_iso_or_epoch_times(monkeypatch):
+    seen = []
+    monkeypatch.setattr(query, "kept_from", lambda: query.datetime(2000, 1, 1, tzinfo=query.timezone.utc))
+    monkeypatch.setattr(query, "run_sql", lambda tenant, text, start, end: seen.append((start, end)) or {"columns": [], "rows": []})
+    for start, end in ((f"{DAY}T10:00:00Z", f"{DAY}T11:00:00Z"), (1767261600, "1767265200")):
+        assert query._sql_api("acme", {"sql": "SELECT 1", "start": start, "end": end})["statusCode"] == 200
+    assert seen[0] == (f"{DAY}T10:00:00Z", f"{DAY}T11:00:00Z") and seen[1] == ("2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z")
+    assert query._sql_api("acme", {"sql": "SELECT 1", "start": "yesterday", "end": E})["statusCode"] == 400
