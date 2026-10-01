@@ -3,7 +3,7 @@
 
 import gzip
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import math
 import os
 import random
@@ -586,3 +586,52 @@ def test_histogram_buckets_per_minute_any_number_of_workers(counters, monkeypatc
     assert sum(total.values()) == sum(sum(v) for v in expected.values())
     with pytest.raises(query.BadQuery, match="only aggregate"):
         query.compile_query({**q, "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T01:00:00Z", "aggs": [{"fn": "buckets"}, {"fn": "count"}]})
+
+
+# ------------------------------------------------------------------ long queries (jobs)
+
+def get_job(tenant, job):
+    out = query.api({"httpMethod": "GET", "resource": "/v1/app/query/{job}", "pathParameters": {"job": job},
+                     "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant}}}}, None)
+    return out["statusCode"], json.loads(out["body"])
+
+
+def test_long_queries_run_on_as_jobs(data, monkeypatch):
+    """async: true, or a query past the deadline -> 202 and a job; GET answers 202 while it runs,
+    then the query's own answer, to its tenant only."""
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
+    started = []
+    monkeypatch.setattr(query, "_run_in_background", started.append)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    ana = {"custom:tenant": "acme"}
+    status, out = http_user(ana, {**q, "async": True})
+    assert status == 202 and out["status"] == "running" and started[-1]["job"]["query"] == q
+    job = out["job"]
+    assert get_job("acme", job)[0] == 202
+    assert get_job("globex", job)[0] == 404 and get_job("acme", "../x")[0] == 404 and get_job("acme", "0" * 32)[0] == 404
+    query.worker(started[-1], None)                       # the background run (obs-query-worker)
+    assert get_job("acme", job) == (200, {**get_job("acme", job)[1], "rows": [[len(data)]]})
+    assert get_job("globex", job)[0] == 404
+    # Past the deadline: the same query continues as a job, SQL and PromQL alike.
+    real = query.answer
+    monkeypatch.setattr(query, "SYNC_DEADLINE_S", 0.05)
+    monkeypatch.setattr(query, "answer", lambda t, q: (time.sleep(0.5), real(t, q))[1])
+    sql = {"sql": "SELECT count(*) FROM logs", "start": q["start"], "end": q["end"]}
+    status, out = http_user(ana, sql)
+    assert status == 202 and started[-1]["job"]["query"] == sql
+    query.worker(started[-1], None)
+    assert get_job("acme", out["job"])[1]["rows"] == [[len(data)]]
+    # A job that never finished (the worker died) is reported, not left "running" forever.
+    status, out = http_user(ana, {**q, "async": True})
+    monkeypatch.setattr(query, "_now", lambda: datetime.now(timezone.utc) + timedelta(minutes=10))
+    assert get_job("acme", out["job"])[0] == 504
+
+
+def test_failed_jobs_say_so(data, monkeypatch):
+    started = []
+    monkeypatch.setattr(query, "_run_in_background", started.append)
+    monkeypatch.setattr(query, "answer", lambda t, q: 1 / 0)
+    status, out = http_user({"custom:tenant": "acme"}, {"signal": "logs", "async": True})
+    with pytest.raises(ZeroDivisionError):
+        query.worker(started[-1], None)                   # still a Lambda error (alarmed)
+    assert get_job("acme", out["job"]) == (500, {"error": "the query failed; try a shorter time range"})

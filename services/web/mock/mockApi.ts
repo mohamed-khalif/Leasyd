@@ -286,6 +286,8 @@ function promqlMock(q: Q & { promql: string; step: number }) {
   return [200, { status: "success", data: { resultType: "matrix", result }, stats: { engine_queries: /\/ sum/.test(text) ? 2 : 1, bytes: 48_000_000 } }];
 }
 
+const JOBS = new Map<string, { ready: number; status: number; out: unknown }>();
+
 function sqlMock(q: { sql: string }) {
   if (!/^\s*(select|with)\b/i.test(q.sql)) return [400, { error: "only one SELECT query is allowed" }];
   if (/time_bucket/i.test(q.sql)) {
@@ -602,10 +604,25 @@ export function mockApi(): Plugin {
           });
           return;
         }
+        const jobPath = (req.url ?? "").match(/\/v1\/app\/query\/([0-9a-f]+)/);
+        if (jobPath && req.method === "GET") {   // a long query's answer: ready 5 s after it started
+          const j = JOBS.get(jobPath[1]);
+          if (!j) { res.statusCode = 404; return res.end(JSON.stringify({ error: "no such query job" })); }
+          if (Date.now() < j.ready) { res.statusCode = 202; return res.end(JSON.stringify({ job: jobPath[1], status: "running" })); }
+          res.statusCode = j.status;
+          return res.end(JSON.stringify(j.out));
+        }
         let body = "";
         req.on("data", (c: Buffer) => (body += c));
         req.on("end", () => {
           const parsed = JSON.parse(body || "{}");
+          if (parsed.async) {
+            const id = Math.random().toString(16).slice(2).padEnd(32, "0").slice(0, 32);
+            const [status, out] = parsed.promql ? promqlMock(parsed) : parsed.sql ? sqlMock(parsed) : [200, answer(parsed)];
+            JOBS.set(id, { ready: Date.now() + 5000, status: status as number, out });
+            res.statusCode = 202;
+            return res.end(JSON.stringify({ job: id, status: "running" }));
+          }
           if (parsed.promql || parsed.sql) {
             const [status, out] = parsed.promql ? promqlMock(parsed) : sqlMock(parsed);
             res.statusCode = status as number;

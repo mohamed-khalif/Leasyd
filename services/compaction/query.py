@@ -45,17 +45,20 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
 from decimal import Decimal
 
 import boto3
 import botocore.config
+from botocore.exceptions import ClientError
 from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
 
 import compact
@@ -393,6 +396,8 @@ def _naive(ts):
 # -------------------------------------------------------------- worker
 
 def worker(event, context):
+    if "job" in event:
+        return run_job(event)
     if "sql" in event:
         return run_sql_worker(event)
     return run_worker(event)
@@ -702,11 +707,21 @@ API_FIELDS = {"signal", "start", "end", "services", "where", "match", "group_by"
 MAX_RESPONSE_BYTES = 5_500_000   # Lambda's response limit is 6 MB
 
 
+SYNC_DEADLINE_S = 20    # a query still running then continues as a job (API Gateway gives up at 29 s)
+JOB_TIMEOUT_S = 330     # a job not done by then has failed (the worker function's timeout is 300 s)
+_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
 def api(event, context):
     """Queries through API Gateway:
-      POST /v1/query      read key (API key authorizer)
-      POST /v1/app/query  signed-in user (Cognito authorizer, ID token)
-      GET  /v1/app/me     who the signed-in user is
+      POST /v1/query            read key (API key authorizer)
+      POST /v1/app/query        signed-in user (Cognito authorizer, ID token)
+      GET  /v1/query/{job}, /v1/app/query/{job}   a long query's answer (see below)
+      GET  /v1/app/me           who the signed-in user is
+    A query that takes longer than SYNC_DEADLINE_S, or asks for it ("async": true), runs on as a
+    job: the answer is 202 {"job", "status": "running"}, and GET .../query/{job} answers 202
+    while it runs, then the query's own answer (kept a day). Jobs run in obs-query-worker
+    (up to 5 minutes) and their answers are stored under _results/jobs/<tenant>/.
     The tenant comes only from the authorizer: the key's tenant, or the
     user's custom:tenant claim (set by the tenant admin, not changeable by
     the user). A tenant or any other field in the body outside API_FIELDS is
@@ -719,6 +734,8 @@ def api(event, context):
         return _http(401, {"error": "no tenant for this key or user"})
     if event.get("resource") == "/v1/app/me":
         return _http(200, {"tenant": tenant, "email": claims.get("email")})
+    if event.get("httpMethod") == "GET":
+        return job_status(tenant, ((event.get("pathParameters") or {}).get("job") or ""))
     body = event.get("body") or ""
     if event.get("isBase64Encoded"):
         body = base64.b64decode(body)
@@ -728,6 +745,20 @@ def api(event, context):
         return _http(400, {"error": "body must be a JSON query"})
     if not isinstance(q, dict):
         return _http(400, {"error": "body must be a JSON object"})
+    if q.get("async"):
+        return start_job(tenant, q)
+    # Run here; past the deadline, hand the query to a job (it starts again there) and say so.
+    pool = ThreadPoolExecutor(1)
+    running = pool.submit(answer, tenant, q)
+    pool.shutdown(wait=False)
+    try:
+        return running.result(timeout=SYNC_DEADLINE_S)
+    except FutureTimeout:
+        return start_job(tenant, q)
+
+
+def answer(tenant, q):
+    """A query (JSON, PromQL or SQL) for one tenant -> the HTTP answer."""
     if "promql" in q:
         return _promql_api(tenant, q)
     if "sql" in q:
@@ -751,6 +782,64 @@ def api(event, context):
     if len(text) > MAX_RESPONSE_BYTES:
         return _http(413, {"error": "result too large; ask for fewer rows (search.limit / limit)"})
     return _http(200, text)
+
+
+def _job_key(tenant, job):
+    return f"_results/jobs/{tenant}/{job}.json"
+
+
+def start_job(tenant, q):
+    """Run the query in the background (obs-query-worker, async) -> 202 with the job's id."""
+    job = secrets.token_hex(16)
+    _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job), ContentType="application/json",
+                     Body=json.dumps({"status": "running", "started": _now().strftime("%Y-%m-%dT%H:%M:%SZ")}))
+    _run_in_background({"job": {"id": job, "tenant": tenant, "query": {k: v for k, v in q.items() if k != "async"}}})
+    return _http(202, {"job": job, "status": "running",
+                       "message": "the query runs in the background; GET /v1/app/query/{job} (or /v1/query/{job}) for its answer"})
+
+
+def _run_in_background(payload):
+    boto3.client("lambda").invoke(FunctionName=WORKER_FUNCTION, InvocationType="Event", Payload=json.dumps(payload))
+
+
+def run_job(event):
+    """In obs-query-worker: run a job's query and store its answer for job_status."""
+    job = event["job"]
+    tenant = layout.check_tenant(job["tenant"])
+    if not _JOB_ID.match(job["id"]):
+        raise ValueError("bad job id")
+    try:
+        out = answer(tenant, job["query"])
+    except Exception:
+        out = _http(500, {"error": "the query failed; try a shorter time range"})
+        _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job["id"]), ContentType="application/json",
+                         Body=json.dumps({"status": "done", "answer": out}))
+        raise
+    _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job["id"]), ContentType="application/json",
+                     Body=json.dumps({"status": "done", "answer": out}))
+    return {"job": job["id"], "statusCode": out["statusCode"]}
+
+
+def job_status(tenant, job):
+    """GET .../query/{job} -> 202 while it runs, then the query's own answer."""
+    if not _JOB_ID.match(job):
+        return _http(404, {"error": "no such query job"})
+    try:
+        state = json.loads(_s3().get_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job))["Body"].read())
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404", "AccessDenied"):
+            return _http(404, {"error": "no such query job (answers are kept a day)"})
+        raise
+    if state["status"] == "done":
+        return state["answer"]
+    started = lookup._parse(state["started"])
+    if (_now() - started).total_seconds() > JOB_TIMEOUT_S:
+        return _http(504, {"error": "the query took longer than 5 minutes; try a shorter time range or aggregate more"})
+    return _http(202, {"job": job, "status": "running", "started": state["started"]})
+
+
+def _s3():
+    return boto3.client("s3")
 
 
 def _epoch_of(v, name):

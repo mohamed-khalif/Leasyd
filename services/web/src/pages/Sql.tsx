@@ -58,16 +58,19 @@ export function Sql({ ctx }: { ctx: Ctx }) {
   const [result, setResult] = useState<SqlResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [waited, setWaited] = useState(0);   // seconds, once the query runs on in the background
   const [view, setView] = useState<"table" | "chart">("table");
   const [ms, setMs] = useState(0);
 
   const run = async () => {
-    setRunning(true); setError(null);
+    setRunning(true); setError(null); setWaited(0);
     try { localStorage.setItem("leasyd.sql", text); } catch { /* ignore */ }
     const t0 = performance.now();
     try {
       const w = rangeWindow(ctx.range);
-      const r = await runSql({ sql: text, start: w.start, end: w.end });
+      // A day or more of data: run in the background from the start (it may take longer than 20 s).
+      const long = Date.parse(w.end) - Date.parse(w.start) >= 86_400_000;
+      const r = await runSql({ sql: text, start: w.start, end: w.end }, { background: long, onWait: setWaited });
       setResult(r); setMs(performance.now() - t0);
     } catch (e) { setError((e as Error).message); setResult(null); }
     finally { setRunning(false); }
@@ -107,7 +110,7 @@ export function Sql({ ctx }: { ctx: Ctx }) {
                   {EXAMPLES.map(([l, x]) => <option key={l} value={x}>{l}</option>)}
                 </select>
                 <span className="spacer" style={{ flex: 1 }} />
-                <button className="btn primary" disabled={running || !text.trim()} onClick={run}>{running ? "Running…" : <>Run <span className="kbd">Ctrl ↵</span></>}</button>
+                <button className="btn primary" disabled={running || !text.trim()} onClick={run}>{running ? (waited >= 4 ? `Running… ${waited} s` : "Running…") : <>Run <span className="kbd">Ctrl ↵</span></>}</button>
               </div>
             </div>
           </section>

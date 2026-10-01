@@ -25,24 +25,52 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     ...init, headers: { ...(init?.headers || {}), Authorization: token, "Content-Type": "application/json" },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = (body as { error?: string; message?: string }).error || (body as { message?: string }).message;
-    throw new ApiError(res.status, msg || (res.status === 504 ? "The query took too long. Try a shorter time range." : `Request failed (${res.status}).`));
-  }
+  if (!res.ok) throw apiError(res.status, body);
   return body as T;
+}
+
+/** POST /v1/app/query. A query still running after ~20 s carries on in the background (202 and a
+ *  job id): poll its answer every 2 s, up to 6 minutes. `background` asks for that from the start
+ *  (long SQL ranges); onWait hears the seconds waited so far. */
+async function runQuery<T>(q: object, opts: { background?: boolean; onWait?: (seconds: number) => void } = {}): Promise<T> {
+  const t0 = Date.now();
+  let res = await raw("/v1/app/query", { method: "POST", body: JSON.stringify(opts.background ? { ...q, async: true } : q) });
+  while (res.status === 202) {
+    const job = (res.body as { job?: string }).job;
+    if (!job || Date.now() - t0 > 6 * 60_000) throw new ApiError(504, "The query took too long. Try a shorter time range.");
+    opts.onWait?.(Math.round((Date.now() - t0) / 1000));
+    await new Promise((r) => setTimeout(r, 2000));
+    res = await raw(`/v1/app/query/${job}`);
+  }
+  if (res.status >= 400) throw apiError(res.status, res.body);
+  return res.body as T;
+}
+
+async function raw(path: string, init?: RequestInit): Promise<{ status: number; body: unknown }> {
+  const token = await idToken();
+  if (!token) throw new ApiError(401, "Your session has ended. Please sign in again.");
+  const res = await fetch(getConfig().apiBase + path, {
+    ...init, headers: { ...(init?.headers || {}), Authorization: token, "Content-Type": "application/json" },
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+function apiError(status: number, body: unknown) {
+  const msg = (body as { error?: string; message?: string }).error || (body as { message?: string }).message;
+  return new ApiError(status, msg || (status === 504 ? "The query took too long. Try a shorter time range." : `Request failed (${status}).`));
 }
 
 // PromQL over all signals, and read-only SQL, through the same route.
 export type PromSeries = { metric: Record<string, string>; values: [number, string][] };
 export type PromResult = { status: string; data: { resultType: string; result: PromSeries[] }; stats?: Record<string, number> };
-export const promql = (q: { promql: string; start: string; end: string; step: number }) =>
-  call<PromResult>("/v1/app/query", { method: "POST", body: JSON.stringify(q) });
+export const promql = (q: { promql: string; start: string; end: string; step: number }, opts?: Parameters<typeof runQuery>[1]) =>
+  runQuery<PromResult>(q, opts);
 export type SqlResult = { columns: string[]; rows: unknown[][]; truncated?: boolean; stats?: Record<string, number> };
-export const sql = (q: { sql: string; start: string; end: string }) =>
-  call<SqlResult>("/v1/app/query", { method: "POST", body: JSON.stringify(q) });
+export const sql = (q: { sql: string; start: string; end: string }, opts?: Parameters<typeof runQuery>[1]) =>
+  runQuery<SqlResult>(q, opts);
 
 export const me = () => call<{ tenant: string; email: string }>("/v1/app/me");
-export const query = (q: Query) => call<Result>("/v1/app/query", { method: "POST", body: JSON.stringify(q) });
+export const query = (q: Query, opts?: Parameters<typeof runQuery>[1]) => runQuery<Result>(q, opts);
 
 // Synthetic checks (/v1/app/checks): the signed-in user's tenant's own checks.
 export type Constraint = { type: string; expr?: string; value?: string | number; name?: string; path?: string; op?: string };

@@ -89,9 +89,23 @@ Resources:
           INDEX_TABLE: obs-index
           TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
           QUERY_READ_MODE: !Ref ReadMode
+          # Long queries run here as jobs (obs-query-api hands them over), fanning out like obs-query.
+          QUERY_WORKER_FUNCTION: obs-query-worker
+          QUERY_MAX_WORKERS: !Ref MaxWorkers
+          QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker
+          RETENTION_DAYS: !Ref RetentionDays
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "4" }
+
+  # Jobs (long queries) are started asynchronously: a failed one is reported, never retried.
+  WorkerAsyncConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref WorkerFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+      MaximumEventAgeInSeconds: 300
 
   # ---------- Customer query API (POST /v1/query, routed by obs-phaseT2) ----------
 

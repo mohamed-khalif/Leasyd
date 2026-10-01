@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 
 infra/build-compaction.sh
+infra/data-bucket-rules.sh      # incl. the 1-day expiry of long queries' answers (_results/)
 aws cloudformation package \
   --template-file infra/phase4-query.yaml \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phase4 \

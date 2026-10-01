@@ -74,3 +74,13 @@ Attributes: `attributes['http.route']`. Times are UTC. Joins, CTEs and window fu
 no other tables, table functions (`read_csv`, ...), files, network or settings.
 
 API: `{"sql": "SELECT ...", "start": "...", "end": "..."}` -> `{"columns", "rows", "truncated", "stats"}`.
+
+## Long queries
+
+Every query (JSON, PromQL or SQL) that is still running after about 20 seconds carries on in the
+background, for up to 5 minutes. The answer is then `202 {"job": "<id>", "status": "running"}`;
+`GET /v1/app/query/<id>` (or `GET /v1/query/<id>` with a read key) answers `202` while it runs,
+then exactly what the query would have answered (`200` with the result, or its error). Add
+`"async": true` to a query to get a job straight away. Answers are kept for a day, and only the
+tenant that asked can read them. The portal waits for them on its own; the SQL page runs ranges of
+a day or more in the background from the start.

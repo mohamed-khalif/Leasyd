@@ -66,6 +66,11 @@ Resources:
             Status: Enabled
             Prefix: synthetics/
             ExpirationInDays: 30
+          # Long queries' answers (_results/jobs/<tenant>/<job>.json): kept a day.
+          - Id: query-results
+            Status: Enabled
+            Prefix: _results/
+            ExpirationInDays: 1
           - Id: abort-incomplete-uploads
             Status: Enabled
             AbortIncompleteMultipartUpload:
