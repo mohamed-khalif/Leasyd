@@ -66,6 +66,11 @@ Resources:
             Status: Enabled
             Prefix: synthetics/
             ExpirationInDays: 30
+          # AI SRE conversations (_ai/tenant=<T>/<id>.json): kept as long as the data they discuss.
+          - Id: ai-conversations
+            Status: Enabled
+            Prefix: _ai/
+            ExpirationInDays: 30
           # Long queries' answers (_results/jobs/<tenant>/<job>.json): kept a day.
           - Id: query-results
             Status: Enabled

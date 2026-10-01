@@ -309,7 +309,7 @@ def delete(tenant, context=None):
             _remove_login(u)
     # Synthetic checks (S1): stop running them; and their excluded runs, maintenance windows, SLOs,
     # alert rules and channels (A1; an email channel's SNS topic too).
-    for prefix in ("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#", "dash#", "meter#"):
+    for prefix in ("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#", "dash#", "meter#", "ai#"):
         for c in _items(tenant, prefix):
             if c.get("topic_arn"):
                 try:
@@ -624,7 +624,8 @@ def purge(tenant, deleted=0, context=None):
     deadline = time.time() + (context.get_remaining_time_in_millis() / 1000 - 60 if context else 600)
     done = True
     for prefix in (f"_incoming/tenant={tenant}/", f"_incoming/_errors/tenant={tenant}/", f"data/tenant={tenant}/",
-                   f"synthetics/tenant={tenant}/"):    # browser checks' screenshots
+                   f"synthetics/tenant={tenant}/",     # browser checks' screenshots
+                   f"_ai/tenant={tenant}/"):           # AI SRE conversations
         n, finished = _purge_prefix(prefix, deadline)
         deleted += n
         done = done and finished

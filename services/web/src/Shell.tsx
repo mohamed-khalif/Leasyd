@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear } from "./icons";
+import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 
 type Props = {
@@ -22,6 +22,7 @@ export function Shell(p: Props) {
     <div className="shell">
       <nav className="nav" aria-label="Main">
         <div className="brand"><IconLogo />Leasyd</div>
+        <a href="#/ai" className={`ask-ai${p.path.startsWith("/ai") ? " active" : ""}`}><IconSpark />Ask Leasyd AI</a>
         <div className="nav-section">Dashboards</div>
         {link("/", "Home", <IconDash />, p.path === "/" || p.path === "")}
         {link("/dashboards", "Dashboards", <IconDash />, p.path.startsWith("/dashboards"))}

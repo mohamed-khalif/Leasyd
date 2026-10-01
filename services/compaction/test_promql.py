@@ -210,6 +210,13 @@ def test_direct_invocation_for_alerts(counters, monkeypatch):
     out = query.handler({"tenant": "acme", "promql": "sum by (route) (increase(reqs[5m]))", "time": T10 + 300}, None)
     assert out["data"]["resultType"] == "vector" and {r["metric"]["route"] for r in out["data"]["result"]} == {"/a", "/b"}
     assert "error" in query.handler({"tenant": "acme", "promql": "rate(", "time": T10}, None)
+    # A range (the AI SRE charts and compares), and SQL, for the event's tenant.
+    out = query.handler({"tenant": "acme", "promql": 'sum(rate(reqs{route="/b"}[1m]))', "start": T10 + 120, "end": T10 + 300, "step": 60}, None)
+    assert out["data"]["resultType"] == "matrix" and len(out["data"]["result"][0]["values"]) == 4
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
+    out = query.handler({"tenant": "acme", "sql": "SELECT count(*) FROM metrics WHERE metric_name = 'reqs'", "start": T10, "end": T10 + 600}, None)
+    assert out["rows"][0][0] == 120
+    assert "error" in query.handler({"tenant": "acme", "sql": "DROP TABLE logs", "start": T10, "end": T10 + 60}, None)
 
 
 # ------------------------------------------------------------------ metric histograms

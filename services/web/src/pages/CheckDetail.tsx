@@ -306,7 +306,9 @@ function RunPanel(p: { ctx: Ctx; check: Check; run: Run; excludedBy?: { reason: 
 
   return (
     <Drawer onClose={p.onClose} title={<><span className={`pill ${p.run.ok ? "ok" : "bad"}`} style={{ marginRight: 8 }}>{p.run.ok ? "passed" : "failed"}</span>{p.check.name} · {fmtTs(p.run.ts).slice(0, 19)}</>}
-            right={<button type="button" className="btn" onClick={() => p.ctx.go(`/traces/${p.run.id}`)}>Open trace</button>}>
+            right={<>
+              {!p.run.ok && <button type="button" className="btn ask-btn" onClick={() => p.ctx.go(`/ai?ask=${encodeURIComponent(`Why did the "${p.check.name}" check fail at ${p.run.ts}? Its run is trace \`${p.run.id}\`. Is the problem on our side?`)}&page=${encodeURIComponent(JSON.stringify({ check: p.check.id, run: p.run.id }))}`)}>Why did it fail?</button>}
+              <button type="button" className="btn" onClick={() => p.ctx.go(`/traces/${p.run.id}`)}>Open trace</button></>}>
       <Tabs tabs={tabs} active={tab} onPick={setTab} />
       {tab === "overview" && (
         <>

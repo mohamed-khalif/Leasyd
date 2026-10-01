@@ -220,3 +220,19 @@ export const dashboards = {
   update: (id: string, d: Partial<Dashboard> & { version: number }) => call<Dashboard>(`/v1/app/dashboards/${id}`, json("PUT", d)),
   remove: (id: string) => call<{ deleted: string }>(`/v1/app/dashboards/${id}`, json("DELETE")),
 };
+
+// The AI SRE: ask a question; it investigates in the background (poll the conversation while "running").
+export type AiStep =
+  | { type: "question"; text: string; by?: string; at?: string }
+  | { type: "progress" | "note" | "answer" | "error"; text: string }
+  | { type: "tool"; name: string; input: Record<string, unknown>; summary?: string; error?: string };
+export type AiConversation = { id: string; title: string; status: "running" | "done" | "failed"; created_by: string; created_at: string;
+                               updated_at: string; view: AiStep[]; range?: [string, string] };
+export const ai = {
+  list: () => call<{ conversations: { id: string; title: string; status: string; updated_at: string }[]; enabled: boolean }>("/v1/app/ai/conversations"),
+  get: (id: string) => call<AiConversation>(`/v1/app/ai/conversations/${encodeURIComponent(id)}`),
+  ask: (message: string, opts: { conversation_id?: string; start?: string; end?: string; page?: unknown } = {}) =>
+    call<AiConversation>("/v1/app/ai/conversations", { method: "POST", body: JSON.stringify({
+      message, ...(opts.conversation_id ? { conversation_id: opts.conversation_id } : {}),
+      context: { start: opts.start, end: opts.end, ...(opts.page ? { page: opts.page } : {}) } }) }),
+};

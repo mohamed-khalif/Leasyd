@@ -1,3 +1,4 @@
+import { Ai } from "./pages/Ai";
 import { Settings } from "./pages/Settings";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -82,6 +83,9 @@ export function App() {
   } else if (path.startsWith("/logs")) {
     page = <Logs ctx={ctx} params={params} />;
     crumb = ["Logs", "Explorer"];
+  } else if (path.startsWith("/ai")) {
+    page = <Ai ctx={ctx} path={path} params={params} />;
+    crumb = ["Leasyd AI", path.split("/")[2] ? "Investigation" : "Ask"];
   } else if (path.startsWith("/settings")) {
     page = <Settings ctx={ctx} />;
     crumb = ["Settings", "Account"];

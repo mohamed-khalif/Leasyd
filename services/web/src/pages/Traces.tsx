@@ -239,7 +239,8 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
   return (
     <>
       <Panel title={`Trace ${traceId}`} flush
-             right={tree.length > 0 && <span className="faint mono">{tree.length} spans · {services.length} services · {fmtMs(t1 - t0)}</span>}>
+             right={tree.length > 0 && <span className="faint mono">{tree.length} spans · {services.length} services · {fmtMs(t1 - t0)}
+               <button type="button" className="btn ask-btn" onClick={() => ctx.go(`/ai?ask=${encodeURIComponent(`Explain trace \`${traceId}\`: what happened, what was slow or failed, and why?`)}&page=${encodeURIComponent(JSON.stringify({ trace_id: traceId }))}`)}>Ask Leasyd AI</button></span>}>
         <Loads q={spans} empty={!tree.length} height={200}>
           {() => (
             <div>

@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase AI: Leasyd's AI SRE (obs-ai). Answers questions about a tenant's logs, traces, metrics,
+  synthetic checks and alerts by investigating them with read-only tools (through obs-query, for the
+  signed-in user's tenant only) and Claude on Claude Platform on AWS (SigV4, this role). Routes
+  /v1/app/ai/conversations[/{id}] are in obs-phaseT2; the permission for them to invoke this function
+  is here. Requires obs-phase0 (its boundary allows aws-external-anthropic:CreateInference),
+  obs-phase4 and obs-phaseT2. Deploy with infra/deploy-phaseAI.sh.
+
+Parameters:
+  ClaudeWorkspaceId:
+    Type: String
+    Default: ""
+    Description: The Claude Platform on AWS workspace (wrkspc_...). Empty = the AI SRE says it isn't set up.
+  ClaudeRegion:
+    Type: String
+    Default: us-east-1
+    Description: The region the workspace is bound to.
+  ClaudeModel:
+    Type: String
+    Default: claude-opus-5-5
+  ApiId:
+    Type: String
+    Description: obs-phaseT2 output ApiId.
+
+Conditions:
+  HasWorkspace: !Not [!Equals [!Ref ClaudeWorkspaceId, ""]]
+
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-ai
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ai-sre
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Conversations
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_ai/*"
+              - Sid: Settings        # conversation index, turn limits, the tenant's plan, checks and alert rules (read)
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
+              - Sid: QueryAndContinue  # the tenant's data only through obs-query; itself, to run a turn in the background
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-ai"
+              - !If
+                - HasWorkspace
+                - Sid: Claude
+                  Effect: Allow
+                  Action: [aws-external-anthropic:CreateInference, aws-external-anthropic:CountTokens]
+                  Resource: !Sub "arn:aws:aws-external-anthropic:${ClaudeRegion}:${AWS::AccountId}:workspace/${ClaudeWorkspaceId}"
+                - !Ref AWS::NoValue
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: AI }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-ai
+      RetentionInDays: 30
+
+  Function:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Properties:
+      FunctionName: obs-ai
+      Description: AI SRE - investigates a tenant's telemetry with Claude and read-only tools
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: sre.handler
+      Code: ../services/ai/build
+      Role: !GetAtt Role.Arn
+      MemorySize: 1024
+      Timeout: 900
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          TENANTS_TABLE: obs-tenants
+          QUERY_FUNCTION: obs-query
+          CLAUDE_WORKSPACE_ID: !Ref ClaudeWorkspaceId
+          CLAUDE_REGION: !Ref ClaudeRegion
+          CLAUDE_MODEL: !Ref ClaudeModel
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: AI }
+
+  # A turn runs once: a failed one is shown as failed, never re-run (it would re-bill the model).
+  AsyncConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref Function
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+  ApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/v1/app/ai/*"
+
+Outputs:
+  Function:
+    Value: !Ref Function

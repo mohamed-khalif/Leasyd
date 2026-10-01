@@ -458,6 +458,49 @@ Resources:
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
         TimeoutInMillis: 29000
 
+  # The AI SRE (obs-ai, obs-phaseAI; its permission to be invoked is in that stack):
+  # /v1/app/ai/conversations and /v1/app/ai/conversations/{id}.
+  AiResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AppResource, PathPart: ai }
+  AiConversationsResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AiResource, PathPart: conversations }
+  AiConversationResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AiConversationsResource, PathPart: "{proxy+}" }
+  AiConversationsMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref AiConversationsResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-ai/invocations"
+        TimeoutInMillis: 29000
+  AiConversationMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref AiConversationResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-ai/invocations"
+        TimeoutInMillis: 29000
+
   # A long query's answer for signed-in users: GET /v1/app/query/{job}.
   AppQueryJobResource:
     Type: AWS::ApiGateway::Resource
@@ -813,20 +856,20 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV11:
+  DeploymentV12:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, QueryMethod, QueryJobMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${AccountMethod}, ${AccountProxyMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV11
+      DeploymentId: !Ref DeploymentV12
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

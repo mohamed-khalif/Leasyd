@@ -266,8 +266,21 @@ function runSpans(trace: string) {
 }
 
 /** PromQL: a few plausible series, split by the first "by (...)" label. */
-function promqlMock(q: Q & { promql: string; step: number }) {
+function promqlMock(q: Q & { promql: string; step: number; time?: number }) {
   const text = q.promql;
+  if (q.time != null && !q.start) {   // an instant query: one value per series ("offset" = the period before)
+    const before = /offset/.test(text);
+    const m = text.match(/by \(([^)]*)\)/), label = m ? m[1].split(",").map((x) => x.trim()).filter((x) => x !== "le")[0] : null;
+    const keys = label === "check_id" ? CHECKS.map((c) => c.id as string) : label ? SERVICES.slice(0, 8) : [null];
+    const v = (k: string | null, i: number) => {
+      if (label === "check_id") return i === 1 ? 92.5 : 100;
+      if (/histogram_quantile/.test(text)) return (k === "checkout" && !before ? 410 : 120) + i * 7;
+      if (/status_code="ERROR"/.test(text)) return k === "payment" && !before ? 6.2 : k === "checkout" && !before ? 1.8 : 0.4;
+      if (/rate\(/.test(text)) return k === "email" && !before ? 0.02 : 2 + i;
+      return 10 + i;
+    };
+    return [200, { status: "success", data: { resultType: "vector", result: keys.map((k, i) => ({ metric: k == null ? {} : { [label!]: k }, value: [q.time, String(v(k, i))] })) } }];
+  }
   if (/\(\s*$|rate\([^)]*$/.test(text) || (text.match(/\(/g) ?? []).length !== (text.match(/\)/g) ?? []).length)
     return [400, { status: "error", errorType: "bad_data", error: "expected , or ) but found the end at position " + text.length }];
   const t0 = Math.floor(Date.parse(q.start) / 1000 / q.step) * q.step, t1 = Math.floor(Date.parse(q.end) / 1000 / q.step) * q.step;
@@ -296,6 +309,29 @@ const ACCOUNT = {
          { key_id: "r8mn2p4q1z", scope: "read", status: "active", created_at: "2026-09-24T15:40:00Z" }],
   limits: { keys: 20, users: 50 },
 };
+
+const AI = new Map<string, { id: string; title: string; created_by: string; created_at: string; turns: { q: string; at: number }[] }>();
+const AI_SCRIPT: Record<string, unknown>[] = [
+  { type: "progress", text: "Starting with an overview of every service's traffic, errors and latency." },
+  { type: "tool", name: "list_services", input: {}, summary: "12 services" },
+  { type: "progress", text: "payment's error rate is 6.2%, up from 0.4%; looking at its failing spans." },
+  { type: "tool", name: "search_spans", input: { service: "payment", errors_only: true, limit: 20 }, summary: "20 spans" },
+  { type: "tool", name: "top_values", input: { signal: "traces", group_by: ["status_message"], where: [{ field: "service", op: "=", value: "payment" }] }, summary: "4 rows" },
+  { type: "progress", text: "Most failures share one message; opening a trace to see where it starts." },
+  { type: "tool", name: "get_trace", input: { trace_id: "4bf92f3577b34da6a3ce929d0e0e4736" }, summary: "12 spans in the trace" },
+  { type: "answer", text: "**`payment` is failing 6.2% of charges because the card processor rejects expired cards, and checkout retries them.** It started at 08:12 UTC.\n\n- `payment` error rate: **6.2%** now, 0.4% in the hour before; every failure is in `Charge`.\n- 83% of the errors say `payment declined: card expired` (`PaymentDeclinedError` at `charge.js:88`).\n- Each decline makes `checkout` retry twice, which is why checkout's p95 rose to 410 ms.\n- Example: trace `4bf92f3577b34da6a3ce929d0e0e4736`.\n\n**Next step:** treat `card expired` as a final answer in checkout (no retry), and add a check rule on `payment`'s error rate above 2%." },
+];
+function aiView(c: { id: string; title: string; created_by: string; created_at: string; turns: { q: string; at: number }[] }) {
+  const view: unknown[] = [];
+  let running = false;
+  for (const t of c.turns) {
+    view.push({ type: "question", text: t.q, by: "ana@acme.io" });
+    const n = Math.min(AI_SCRIPT.length, Math.floor((Date.now() - t.at) / 800));
+    view.push(...AI_SCRIPT.slice(0, n));
+    running = n < AI_SCRIPT.length;
+  }
+  return { id: c.id, title: c.title, created_by: c.created_by, created_at: c.created_at, updated_at: c.created_at, status: running ? "running" : "done", view };
+}
 
 const JOBS = new Map<string, { ready: number; status: number; out: unknown }>();
 
@@ -566,6 +602,25 @@ export function mockApi(): Plugin {
           req.on("data", (c: Buffer) => (raw += c));
           req.on("end", () => {
             const [status, out] = settingsRoute(settings[1], settings[2], req.method ?? "GET", raw ? JSON.parse(raw) : {});
+            res.statusCode = status;
+            setTimeout(() => res.end(JSON.stringify(out)), 150);
+          });
+          return;
+        }
+        if (req.url.startsWith("/v1/app/ai/conversations")) {   // the AI SRE: a scripted investigation that unfolds over ~6 s
+          let raw = "";
+          req.on("data", (c: Buffer) => (raw += c));
+          req.on("end", () => {
+            const id = req.url!.split("?")[0].split("/")[5];
+            let status = 200, out: unknown;
+            if (req.method === "POST") {
+              const body = JSON.parse(raw || "{}");
+              const c = AI.get(body.conversation_id) ?? { id: hex(Math.random, 16), title: String(body.message).slice(0, 80), created_by: "ana@acme.io",
+                created_at: new Date().toISOString(), turns: [] as { q: string; at: number }[] };
+              c.turns.push({ q: body.message, at: Date.now() });
+              AI.set(c.id, c); status = 202; out = aiView(c);
+            } else if (id) { const c = AI.get(id); if (c) out = aiView(c); else { status = 404; out = { error: "no such conversation" }; } }
+            else out = { enabled: true, conversations: [...AI.values()].reverse().map((c) => ({ id: c.id, title: c.title, status: aiView(c).status, updated_at: c.created_at })) };
             res.statusCode = status;
             setTimeout(() => res.end(JSON.stringify(out)), 150);
           });

@@ -689,16 +689,30 @@ def _jsonable(v):
 # --------------------------------------------------------- coordinator
 
 def handler(event, context):
-    """Direct invocations (other Leasyd functions, e.g. alerts): a JSON query, or
-    {"tenant", "promql", "time"} for one PromQL evaluation (the Prometheus API's vector result)."""
+    """Direct invocations (other Leasyd functions: alerts, the AI SRE), for the event's tenant:
+      a JSON query;
+      {"tenant", "promql", "time"}: one PromQL evaluation (the Prometheus API's vector result);
+      {"tenant", "promql", "start", "end", "step"}: a PromQL range (matrix);
+      {"tenant", "sql", "start", "end"}: read-only SQL."""
     try:
         if "promql" in event:
             import promql
             tenant = layout.check_tenant(event["tenant"])
+            kept = int(kept_from().timestamp())
+            if event.get("start") is not None:
+                return promql.query_range(tenant, event["promql"], max(_epoch_of(event["start"], "start"), kept),
+                                          max(_epoch_of(event["end"], "end"), kept), int(float(event.get("step") or 60)))
             return promql.query_instant(tenant, event["promql"], _epoch_of(event.get("time") or time.time(), "time"))
+        if "sql" in event:
+            tenant = layout.check_tenant(event["tenant"])
+            start, end = (max(datetime.fromtimestamp(_epoch_of(event[k], k), timezone.utc), kept_from()).strftime("%Y-%m-%dT%H:%M:%SZ")
+                          for k in ("start", "end"))
+            return run_sql(tenant, event["sql"], start, end)
         return run(event)
     except BadQuery as e:
         return {"error": str(e)}
+    except ValueError as e:
+        return {"error": f"bad query: {e}"}
 
 
 # ------------------------------------------------------------ HTTP API
