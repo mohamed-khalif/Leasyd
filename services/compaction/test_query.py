@@ -646,6 +646,7 @@ def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     boto3.resource("dynamodb").Table("obs-tenants").put_item(Item={"pk": "tenant#acme", "plan": "free"})
     query._plans.clear()
     monkeypatch.setitem(query.RATE_LIMITS, "query", {"free": 3, "standard": 5})
+    monkeypatch.setitem(query.DAILY_SEARCH_UNITS, "free", 0)
     monkeypatch.setitem(query.RATE_LIMITS, "job", {"free": 1, "standard": 2})
     monkeypatch.setattr(query, "_run_in_background", lambda p: None)
     q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
@@ -661,3 +662,28 @@ def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     query._plans.clear()
     boto3.client("dynamodb").delete_table(TableName="obs-tenants")
     assert http_user({"custom:tenant": "initech"}, q)[0] == 200
+
+
+def test_daily_search_allowance(data, monkeypatch):
+    """Each query uses search units (one per worker); past today's allowance: 429 until midnight."""
+    boto3.client("dynamodb").create_table(
+        TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
+        AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+        KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
+    t = boto3.resource("dynamodb").Table("obs-tenants")
+    t.put_item(Item={"pk": "tenant#acme", "plan": "standard", "search_units_per_day": 3})
+    t.put_item(Item={"pk": "tenant#globex", "plan": "standard", "search_units_per_day": 0})   # no daily limit
+    query._plans.clear()
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    ana = {"custom:tenant": "acme"}
+    assert [http_user(ana, q)[0] for _ in range(3)] == [200, 200, 200]
+    used = t.get_item(Key={"pk": f"usage#search#acme#{query._day()}"})["Item"]
+    assert used["n"] == 3 and used["expires"] > time.time()
+    status, out = http_user(ana, q)
+    assert status == 429 and "allowance is used up (3 search units)" in out["error"]
+    assert [http_user({"custom:tenant": "globex"}, q)[0] for _ in range(5)] == [200] * 5
+    # SQL uses units by the data it reads (at least 1).
+    t.put_item(Item={"pk": "tenant#initech", "plan": "standard"})
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
+    status, out = http_user({"custom:tenant": "initech"}, {"sql": "SELECT count(*) FROM logs", "start": q["start"], "end": q["end"]})
+    assert status == 200 and t.get_item(Key={"pk": f"usage#search#initech#{query._day()}"})["Item"]["n"] == 1

@@ -474,6 +474,7 @@ def run_sql(tenant, sql, start, end, invoke_worker=None):
         raise BadQuery(f"this time range has {count:,} files to read (at most {SQL_MAX_FILES:,}); choose a shorter time range")
     if size > SQL_MAX_BYTES:
         raise BadQuery(f"this would read {size / 2**30:.1f} GB (at most {SQL_MAX_BYTES / 2**30:.0f} GB); choose a shorter time range")
+    used_units(tenant, math.ceil(size / TARGET_BYTES_PER_WORKER))
     event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files}
     out = (invoke_worker or _invoke_worker)(event)
     out["stats"] = {**out.get("stats", {}), "files": sum(len(v) for v in files.values()), "total_ms": round((time.perf_counter() - t0) * 1000)}
@@ -771,6 +772,8 @@ def api(event, context):
         return running.result(timeout=SYNC_DEADLINE_S)
     except FutureTimeout:
         return start_job(tenant, q)
+    finally:
+        charge_units(tenant)
 
 
 def answer(tenant, q):
@@ -816,28 +819,69 @@ def start_job(tenant, q):
                        "message": "the query runs in the background; GET /v1/app/query/{job} (or /v1/query/{job}) for its answer"})
 
 
-# Per tenant and minute, by plan: queries, and background jobs (each up to 5 minutes of a worker).
-# One customer can't use up the account's Lambda capacity (shared with everyone's ingest) or run
-# up the bill. Counted in obs-tenants (rate#query#<tenant>#<minute>, expiring with its TTL).
-RATE_LIMITS = {"query": {"free": 120, "standard": 600}, "job": {"free": 4, "standard": 20}}
-_plans = {}   # tenant -> (plan, read at)
+# Limits per tenant, by plan, so one customer can't use up the account's Lambda capacity (shared
+# with everyone's ingest) or run up the bill:
+#  - per minute: queries, and background jobs (each up to 5 minutes of a worker);
+#    counted in obs-tenants rate#<kind>#<tenant>#<minute>, expiring with its TTL;
+#  - per day (UTC): search units, one per worker a query used (a worker reads ~256 MB), so a
+#    30-day search costs more of the allowance than a 1-hour one. Counted in
+#    usage#search#<tenant>#<day>; a tenant's own search_units_per_day overrides the plan's
+#    (0: no daily limit). Charged after the query, so the last one of the day may go over.
+RATE_LIMITS = {"query": {"free": 30, "standard": 300}, "job": {"free": 2, "standard": 10}}
+DAILY_SEARCH_UNITS = {"free": 2_000, "standard": 20_000}
+_plans = {}   # tenant -> ((plan, daily units), read at)
+_units = {}   # tenant -> search units used by queries not yet charged
 
 
 def _plan(table, tenant):
-    plan, at = _plans.get(tenant, (None, 0))
+    """(plan, daily search units; 0 = no daily limit) of the tenant, re-read every 5 minutes."""
+    got, at = _plans.get(tenant, (None, 0))
     if time.time() - at > 300:
         item = table.get_item(Key={"pk": f"tenant#{tenant}"}).get("Item") or {}
         plan = item.get("plan") or "standard"
-        _plans[tenant] = (plan, time.time())
-    return plan
+        units = item.get("search_units_per_day")
+        got = (plan, int(units) if units is not None else DAILY_SEARCH_UNITS.get(plan, DAILY_SEARCH_UNITS["standard"]))
+        _plans[tenant] = (got, time.time())
+    return got
+
+
+def _tenants_table():
+    return boto3.resource("dynamodb").Table(os.environ.get("TENANTS_TABLE", "obs-tenants"))
+
+
+def _day():
+    return _now().strftime("%Y-%m-%d")
+
+
+def used_units(tenant, n):
+    """Note n search units used by a query of the tenant (charged by charge_units)."""
+    _units[tenant] = _units.get(tenant, 0) + max(1, int(n))
+
+
+def charge_units(tenant):
+    """Add the tenant's uncharged search units to today's count. Never raises (logged)."""
+    n = _units.pop(tenant, 0)
+    if not n:
+        return
+    try:
+        _tenants_table().update_item(Key={"pk": f"usage#search#{tenant}#{_day()}"}, UpdateExpression="ADD n :n SET expires = :exp",
+                                     ExpressionAttributeValues={":n": n, ":exp": int(time.time()) + 3 * 86400})
+    except ClientError as e:
+        print(json.dumps({"search_units_not_counted": n, "tenant": tenant, "error": str(e)[:300]}))
 
 
 def over_limit(tenant, kind):
-    """None, or the 429 answer when the tenant is over this minute's limit. Fails open (logged):
-    a counting problem must not stop customers' queries."""
+    """None, or the 429 answer when the tenant is over this minute's limit or (queries) today's
+    search allowance. Fails open (logged): a counting problem must not stop customers' queries."""
     try:
-        table = boto3.resource("dynamodb").Table(os.environ.get("TENANTS_TABLE", "obs-tenants"))
-        limit = RATE_LIMITS[kind].get(_plan(table, tenant), RATE_LIMITS[kind]["standard"])
+        table = _tenants_table()
+        plan, daily = _plan(table, tenant)
+        if kind == "query" and daily:
+            used = (table.get_item(Key={"pk": f"usage#search#{tenant}#{_day()}"}).get("Item") or {}).get("n", 0)
+            if used >= daily:
+                return _http(429, {"error": f"today's search allowance is used up ({daily:,} search units); "
+                                            "it resets at 00:00 UTC. Shorter time ranges use less of it."})
+        limit = RATE_LIMITS[kind].get(plan, RATE_LIMITS[kind]["standard"])
         minute = int(time.time() // 60)
         table.update_item(Key={"pk": f"rate#{kind}#{tenant}#{minute}"}, UpdateExpression="ADD n :one SET expires = :exp",
                           ConditionExpression="attribute_not_exists(n) OR n < :max",
@@ -868,6 +912,8 @@ def run_job(event):
         _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job["id"]), ContentType="application/json",
                          Body=json.dumps({"status": "done", "answer": out}))
         raise
+    finally:
+        charge_units(tenant)
     _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job["id"]), ContentType="application/json",
                      Body=json.dumps({"status": "done", "answer": out}))
     return {"job": job["id"], "statusCode": out["statusCode"]}
@@ -978,6 +1024,7 @@ def run(q, invoke_worker=None):
     # stretch of time: otherwise the rise over a stretch another worker holds is counted twice.
     contiguous = any(a.get("fn") in ("increase", "buckets") for a in q.get("aggs") or [])
     chunks = plan_chunks(found["files"], int(q.get("workers", MAX_WORKERS)), contiguous)
+    used_units(q["tenant"], len(chunks))
     invoke_worker = invoke_worker or _invoke_worker
     if len(chunks) <= 1:
         partials = [run_worker({"query": q, "files": chunks[0] if chunks else []})]

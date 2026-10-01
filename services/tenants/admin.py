@@ -19,6 +19,7 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
                                  by email
   add-key {tenant, scope}        one more key of that scope (ingest or read), others unchanged
   set-cap {tenant, daily_gb}     the most data a day ingest accepts (null: the plan's; 0: no cap)
+  set-search {tenant, units_per_day}  the daily search allowance (null: the plan's; 0: no limit)
   remove-user {tenant, email}    sign them out everywhere and delete the login
   users   {tenant}               the tenant's users
   revoke  {tenant, key_id?}      refuse one key, or all of the tenant's keys
@@ -93,6 +94,9 @@ BUCKET = os.environ["BUCKET"]
 FIREHOSE_ROLE = os.environ["FIREHOSE_ROLE_ARN"]
 PLANS = json.loads(os.environ.get("USAGE_PLANS", "{}"))  # plan name -> API Gateway usage plan id
 PLAN_DAILY_GB = {"free": 1, "standard": None, "test-tiny": None}   # data a day ingest accepts (None: no cap)
+# Search units a day (one per query worker, ~256 MB read), as obs-query-api enforces them
+# (services/compaction/query.py DAILY_SEARCH_UNITS); a tenant's search_units_per_day overrides.
+PLAN_SEARCH_UNITS = {"free": 2_000, "standard": 20_000}
 GB = 10**9
 SELF = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "obs-tenant-admin")
 BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
@@ -252,6 +256,31 @@ def set_cap(tenant, daily_gb=None, context=None):
     else:
         tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="REMOVE daily_cap_bytes")
     return {"tenant": tenant, "daily_cap_bytes": cap or None}
+
+
+def set_search(tenant, units_per_day=None, context=None):
+    _active(tenant)
+    if units_per_day is None:
+        tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="REMOVE search_units_per_day")
+    else:
+        try:
+            units = int(units_per_day)
+        except (TypeError, ValueError):
+            raise Refused("units_per_day: a whole number of search units a day (0: no limit)")
+        if units < 0:
+            raise Refused("units_per_day: a whole number of search units a day (0: no limit)")
+        tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET search_units_per_day = :u",
+                            ExpressionAttributeValues={":u": units})
+    return {"tenant": tenant, "searches": _searches(_record(tenant), tenant)}
+
+
+def _searches(rec, tenant):
+    """Today's search units used, and the allowance (None: no limit). Takes effect in obs-query-api
+    within 5 minutes."""
+    allowance = rec.get("search_units_per_day")
+    allowance = int(allowance) if allowance is not None else PLAN_SEARCH_UNITS.get(rec.get("plan", "standard"), PLAN_SEARCH_UNITS["standard"])
+    used = tenants.get_item(Key={"pk": f"usage#search#{tenant}#{_now():%Y-%m-%d}"}).get("Item") or {}
+    return {"units_today": int(used.get("n", 0)), "units_per_day": allowance or None}
 
 
 def rotate(tenant, grace_hours=24, scope="ingest", context=None):
@@ -437,6 +466,7 @@ def status(tenant, context=None):
     return {"tenant": tenant, **{k: v for k, v in rec.items() if k not in ("pk", "tenant")},
             "today": {"bytes": int(meter.get("bytes", 0)), "records": int(meter.get("records", 0)),
                       "refused_bytes": int(meter.get("refused_bytes", 0))},
+            "searches": _searches(rec, tenant),
             "keys": sorted(keys, key=lambda k: k.get("created_at", ""))}
 
 
@@ -645,7 +675,7 @@ def purge(tenant, deleted=0, context=None):
 
 
 ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key, "signup": signup, "add-key": add_key,
-           "set-cap": set_cap,
+           "set-cap": set_cap, "set-search": set_search,
            "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
            "usage": usage, "list": list_tenants, "sweep": sweep, "restore": restore, "purge": purge,
            "retention": retention}

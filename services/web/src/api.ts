@@ -87,6 +87,7 @@ export type AccountKey = { key_id: string; scope: "ingest" | "read"; status: str
 export type Account = {
   tenant: string; company: string; plan: string; daily_cap_bytes?: number | null; created_at?: string;
   today: { bytes: number; records: number; refused_bytes: number };
+  searches?: { units_today: number; units_per_day: number | null };
   you: { email: string; role: "owner" | "member" }; users: AccountUser[]; keys: AccountKey[];
   limits: { keys: number; users: number };
 };

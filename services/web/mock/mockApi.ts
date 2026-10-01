@@ -301,6 +301,7 @@ function promqlMock(q: Q & { promql: string; step: number; time?: number }) {
 
 const ACCOUNT = {
   tenant: "acme", company: "Acme Inc.", plan: "free", daily_cap_bytes: 1e9, created_at: "2026-09-20T10:00:00Z",
+  searches: { units_today: 640, units_per_day: 2000 },
   today: { bytes: 642_000_000, records: 1_284_211, refused_bytes: 0 },
   you: { email: "ana@acme.io", role: "owner" },
   users: [{ email: "ana@acme.io", role: "owner", created_at: "2026-09-20T10:00:00Z" },

@@ -463,3 +463,10 @@ def test_more_keys_and_daily_caps(adm):
     boto3.resource("dynamodb").Table("obs-tenants").put_item(
         Item={"pk": f"meter#acme#{adm._now():%Y-%m-%d}", "tenant": "acme", "bytes": 1234, "records": 5})
     assert call(adm, "status", tenant="acme")["today"] == {"bytes": 1234, "records": 5, "refused_bytes": 0}
+    # The daily search allowance: the plan's, a tenant's own, or none.
+    assert call(adm, "status", tenant="acme")["searches"] == {"units_today": 0, "units_per_day": 20_000}
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(Item={"pk": f"usage#search#acme#{adm._now():%Y-%m-%d}", "n": 42})
+    assert call(adm, "set-search", tenant="acme", units_per_day=50_000)["searches"] == {"units_today": 42, "units_per_day": 50_000}
+    assert call(adm, "set-search", tenant="acme", units_per_day=0)["searches"]["units_per_day"] is None
+    assert call(adm, "set-search", tenant="acme")["searches"]["units_per_day"] == 20_000
+    assert "whole number" in call(adm, "set-search", tenant="acme", units_per_day=-1)["error"]
