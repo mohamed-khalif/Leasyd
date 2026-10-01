@@ -112,10 +112,13 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
   const b = bucketSeconds(ctx.range);
   const mine = (metric: string) => [{ field: "metric_name", op: "=", value: metric }, { field: "attributes.check.id", op: "=", value: id }, ...notExcluded(p.exRuns)];
   const base = { signal: "metrics" as const, services: ["synthetics"] };
-  const now = useMemo(() => Date.now(), [p.rkey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const since = (h: number) => ({ start: new Date(now - h * 3600_000).toISOString(), end: new Date(now).toISOString() });
-  const up24 = useQuery({ ...base, ...since(24), where: mine(SUCCESS), aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "u24" + p.rkey);
-  const up7 = useQuery({ ...base, ...since(24 * 7), where: mine(SUCCESS), aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "u7" + p.rkey);
+  // Everything follows the page's time range; uptime is also compared with the period just before it.
+  const prevW = useMemo(() => {
+    const a = Date.parse(p.w.start), z = Date.parse(p.w.end);
+    return { start: new Date(a - (z - a)).toISOString(), end: new Date(a).toISOString() };
+  }, [p.w.start, p.w.end]);
+  const prev = useQuery({ ...base, ...prevW, where: mine(SUCCESS), aggs: [{ fn: "count" }, { fn: "sum", field: "value" }] }, "p" + p.rkey);
+  const everyRun = useQuery({ ...base, ...p.w, where: mine(SUCCESS).slice(0, 2), aggs: [{ fn: "count" }] }, "a" + p.rkey);
   const speed = useQuery({ ...base, ...p.w, where: mine(DURATION), aggs: [{ fn: "avg", field: "value" }, { fn: "p95", field: "value" }] }, "s" + p.rkey);
   // Every run in the range (the run list stops at the latest RUNS)
   const tally = useQuery({ ...base, ...p.w, where: mine(SUCCESS), aggs: [{ fn: "count" }, { fn: "sum", field: "value" }] }, "f" + p.rkey);
@@ -127,8 +130,10 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
   const t = tally.data?.rows[0], total = t ? Number(t[0]) : 0, fails = t ? Math.round(total - Number(t[1] ?? 0)) : 0;
   const lastFail = counted.find((r) => !r.ok), last = p.runList[0];
   const upFor = !last ? "—" : !last.ok ? "down" : lastFail ? span(Date.now() - Date.parse(lastFail.ts)) : `> ${span(Date.now() - Date.parse(p.w.start))}`;
-  const u = (q: typeof up24) => { const r = q.data?.rows[0]; return r && Number(r[1]) ? pct(Number(r[0])) : "—"; };
-  const tone = (q: typeof up24) => { const r = q.data?.rows[0]; return r && Number(r[1]) ? (Number(r[0]) >= 0.99 ? "ok" : "bad") : undefined; };
+  const share = (q: typeof tally) => { const r = q.data?.rows[0]; return r && Number(r[0]) ? Number(r[1] ?? 0) / Number(r[0]) : null; };
+  const uptime = share(tally), before = share(prev);
+  const excludedRuns = everyRun.data && t ? Math.max(0, Number(everyRun.data.rows[0]?.[0] ?? 0) - total) : null;
+  const period = ctx.range.label.toLowerCase();
   const s = speed.data?.rows[0];
   const stepTimes = new Map((perStep.data ? records(perStep.data) : []).map((r) => [Number(r["attributes.step.index"]), r]));
   const first = check.steps[0] as Step | BrowserStep | undefined;
@@ -153,8 +158,10 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
         </Panel>
         <div className="span-7">
           <div className="cards" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-            <Card label="Uptime (24 hours)" value={u(up24)} tone={tone(up24)} />
-            <Card label="Uptime (7 days)" value={u(up7)} tone={tone(up7)} />
+            <Card label="Uptime" value={uptime == null ? (t ? "—" : "…") : pct(uptime)} tone={uptime == null ? undefined : uptime >= 0.99 ? "ok" : "bad"}
+                  sub={`${period}${before != null ? ` · ${pct(before)} the ${period.replace(/^last /, "")} before` : ""}`} />
+            <Card label="Excluded runs" value={excludedRuns == null ? "…" : fmtNum(excludedRuns)}
+                  sub="false alarms and maintenance windows; not counted" />
             <Card label="Average duration" value={s && s[0] != null ? `${fmtNum(Number(s[0]))} ms` : "—"} sub={s && s[1] != null ? `p95 ${fmtNum(Number(s[1]))} ms` : undefined} />
             <Card label="Failed runs" value={t ? fmtNum(fails) : "…"} tone={fails ? "bad" : undefined} sub={`of ${fmtNum(total)} in ${ctx.range.label.toLowerCase()}`} />
             <Card label="Last check" value={last ? ago(last.ts) : "—"} tone={last ? (last.ok ? "ok" : "bad") : undefined} sub={last ? (last.ok ? "passed" : "failed") : undefined}

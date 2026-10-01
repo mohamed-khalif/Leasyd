@@ -1,7 +1,7 @@
 // Dashboards: a list on the left (search, favorites, create), the chosen dashboard on the right:
 // its filters (e.g. Service Name), and a grid of panels, each one or more PromQL queries.
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Dashboard, dashboards, DashboardSummary, Panel, PanelType, promql, PromSeries, records } from "../api";
+import { checks, Dashboard, dashboards, DashboardSummary, Panel, PanelType, promql, promqlAt, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
 import { BUILTIN } from "../builtinDashboards";
 import { Drawer, StackedBars } from "../components/Charts";
@@ -244,8 +244,9 @@ function VariablePicker({ label, options, selected, onChange }: { label: string;
 
 const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** A panel query with the dashboard's filters and the step filled in. */
-export function fillQuery(text: string, vars: Record<string, string[]>, step: number): string {
-  let out = text.replace(/\$__rate_interval|\$__interval/g, `${step}s`);
+/** $__interval: the chart's step; $__range: the whole time range (number panels evaluate once, at its end). */
+export function fillQuery(text: string, vars: Record<string, string[]>, step: number, rangeS = step): string {
+  let out = text.replace(/\$__rate_interval|\$__interval/g, `${step}s`).replace(/\$__range/g, `${rangeS}s`);
   for (const [name, vals] of Object.entries(vars)) {
     const re = vals.length ? vals.map(reEscape).join("|") : ".*";
     out = out.replace(new RegExp(`\\$\\{?${name}\\}?`, "g"), re.replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
@@ -276,12 +277,20 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
     let live = true;
     setState(null);
     const w = rangeWindow(range);
-    Promise.all(panel.queries.map((q) => limited(() => promql({ promql: fillQuery(q.promql, vars, step), start: w.start, end: w.end, step })
-      .then((r) => ({ q, result: r.data.result })))))
-      .then((all) => {
+    // Number panels: one value over the page's whole range, at its end (minute-aligned).
+    const at = Math.floor(Date.parse(w.end) / 60_000) * 60, rangeS = Math.max(60, Math.round((Date.parse(w.end) - Date.parse(w.start)) / 60_000) * 60);
+    const run = (q: { promql: string }) => panel.type === "stat"
+      ? promqlAt({ promql: fillQuery(q.promql, vars, step, rangeS), time: at })
+          .then((r) => r.data.result.map((x) => ({ metric: x.metric, values: [x.value] as [number, string][] })))
+      : promql({ promql: fillQuery(q.promql, vars, step, rangeS), start: w.start, end: w.end, step }).then((r) => r.data.result);
+    const names = panel.queries.some((q) => q.promql.includes("check_id")) ? checkNames() : Promise.resolve(null);
+    Promise.all([names, ...panel.queries.map((q) => limited(() => run(q).then((result) => ({ q, result }))))])
+      .then(([nm, ...all]) => {
+        const nameMap = nm as Map<string, string> | null;
         if (!live) return;
         const series: (Series & { last: number })[] = [];
-        all.forEach(({ q, result }, qi) => result.forEach((s: PromSeries) => {
+        (all as { q: { promql: string; legend?: string }; result: PromSeries[] }[]).forEach(({ q, result }, qi) => result.forEach((s0: PromSeries) => {
+          const s = { ...s0, metric: withCheckName(s0.metric, nameMap) };
           const pts = s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1]));
           if (!pts.length) return;
           series.push({ label: legend(q.legend, s.metric, qi, panel.queries!.length), color: PALETTE[series.length % PALETTE.length], points: pts, last: pts[pts.length - 1][1] });
@@ -291,6 +300,18 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
     return () => { live = false; };
   }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
   return state;
+}
+
+/** Synthetic checks' current names by id: series grouped by check_id show the name a check has now
+ *  (a renamed check stays one series); a deleted check says so. Loaded once per page load. */
+let checkNamesP: Promise<Map<string, string>> | null = null;
+function checkNames(): Promise<Map<string, string>> {
+  if (!checkNamesP) checkNamesP = checks.list().then((r) => new Map(r.checks.map((c) => [c.id, c.name] as [string, string])), () => new Map<string, string>());
+  return checkNamesP;
+}
+function withCheckName(metric: Record<string, string>, names: Map<string, string> | null): Record<string, string> {
+  if (!names || !metric.check_id || metric.check_name) return metric;
+  return { ...metric, check_name: names.get(metric.check_id) ?? `deleted check (${metric.check_id})` };
 }
 
 function legend(template: string | undefined, metric: Record<string, string>, qi: number, nq: number): string {
@@ -405,7 +426,7 @@ function PanelEditor({ ctx, panel, vars, onCancel, onSave }: { ctx: Ctx; panel: 
           ))}
           <div className="qb-editor-bar">
             {queries.length < 5 && <button className="linkbtn" onClick={() => set({ queries: [...queries, { promql: "", legend: "" }] })}>+ Add query</button>}
-            <span className="faint"><code>$service_name</code> is the dashboard's service filter; <code>$__interval</code> the chart's step.</span>
+            <span className="faint"><code>$service_name</code> is the dashboard's service filter; <code>$__interval</code> the chart's step; <code>$__range</code> the page's time range (number panels show one value over it).</span>
             <span className="spacer" style={{ flex: 1 }} />
             <button className="btn" onClick={() => setPreview({ ...p, queries: queries.filter((q) => q.promql.trim()) })}>Preview</button>
           </div>

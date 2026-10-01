@@ -65,6 +65,9 @@ export type PromSeries = { metric: Record<string, string>; values: [number, stri
 export type PromResult = { status: string; data: { resultType: string; result: PromSeries[] }; stats?: Record<string, number> };
 export const promql = (q: { promql: string; start: string; end: string; step: number }, opts?: Parameters<typeof runQuery>[1]) =>
   runQuery<PromResult>(q, opts);
+/** One PromQL evaluation at a moment (epoch seconds): a value per series, e.g. over [$__range]. */
+export type PromInstant = { status: string; data: { resultType: string; result: { metric: Record<string, string>; value: [number, string] }[] } };
+export const promqlAt = (q: { promql: string; time: number }, opts?: Parameters<typeof runQuery>[1]) => runQuery<PromInstant>(q, opts);
 export type SqlResult = { columns: string[]; rows: unknown[][]; truncated?: boolean; stats?: Record<string, number> };
 export const sql = (q: { sql: string; start: string; end: string }, opts?: Parameters<typeof runQuery>[1]) =>
   runQuery<SqlResult>(q, opts);
