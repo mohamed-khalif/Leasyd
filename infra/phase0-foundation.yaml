@@ -305,8 +305,9 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_fast/*"      # fast-lane Parquet and blooms
                   - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_bloom/raw-*"  # blooms of the earlier fast lane
-                  # day filters (T6): old versions, and ID digests once no longer needed
+                  # day and hour filters (T6): old versions, and ID digests once no longer needed
                   - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_bloom/day/*"
+                  - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_bloom/hour/*"
                   - !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/data/tenant=*/*/_ids/*"
               - Sid: MeterUsage       # one usage record per compacted chunk (T5)
                 Effect: Allow
