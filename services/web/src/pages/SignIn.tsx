@@ -13,12 +13,13 @@ const HEADINGS: Record<Step, [string, string]> = {
   "new-password": ["Choose a new password", "Your invitation used a temporary password."],
   forgot: ["Reset your password", "We'll email you a code to set a new one."],
   reset: ["Enter your code", "If an account exists for that email, a code is on its way. It expires in 1 hour."],
-  signup: ["Create your Leasyd account", "Free: 1 GB of logs, traces and metrics a day, kept 30 days. No card needed."],
+  signup: ["Start your 7-day free trial", "Every feature, up to 1 GB of logs, traces and metrics a day."],
   sent: ["Check your inbox", "We're setting up your account. Within a couple of minutes you'll get an email with a temporary password; sign in with it here."],
 };
 
 export function SignIn(props: { onSignedIn: () => void }) {
-  const [step, setStep] = useState<Step>("signin");
+  // The website's "Start free trial" links to app.leasyd.com/#/signup.
+  const [step, setStep] = useState<Step>(() => (window.location.hash.startsWith("#/signup") ? "signup" : "signin"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Leasyd pricing: one price per million records, with storage, search, dashboards, alerts and every teammate included. 7-day free trial.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23101114'/%3E%3Cpath d='M9 7v18h14' stroke='%236ea8fe' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>Leasyd Pricing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: one centred column (max 1120px): nav, hero, price sheet, what's included, estimator, trial, FAQ. Dark, like the app. */
+:root {
+  --bg: #0d0e11; --surface: #15171c; --raised: #1c1f26; --line: #2a2e37;
+  --fg: #eceef2; --muted: #9aa1ad; --faint: #6c7380;
+  --accent: #6ea8fe; --accent-ink: #0b1630; --ok: #5fd0a0;
+  --display: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.6 var(--display); margin: 0; }
+a { color: inherit; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 24px; }
+nav.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 22px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; text-decoration: none; }
+.brand svg { width: 28px; height: 28px; }
+.navlinks { display: flex; align-items: center; gap: 22px; font-size: 15px; color: var(--muted); }
+.navlinks a { text-decoration: none; }
+.navlinks a:hover, .navlinks a[aria-current] { color: var(--fg); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding-inline: 20px; border-radius: 8px;
+  font: 600 15px var(--display); text-decoration: none; border: 1px solid var(--line); background: var(--raised); color: var(--fg); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn:hover { filter: brightness(1.08); }
+.btn:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.btn.small { height: 36px; padding-inline: 14px; font-size: 14px; }
+
+header.hero { padding-block: 64px 48px; display: grid; gap: 22px; }
+.eyebrow { font: 500 13px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: clamp(38px, 6vw, 64px); line-height: 1.04; letter-spacing: -0.025em; margin: 0; font-weight: 600; text-wrap: balance; max-width: 16ch; }
+.lede { font-size: 19px; color: var(--muted); max-width: 60ch; margin: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.trialtag { font: 500 13px var(--mono); color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent);
+  padding: 6px 12px; border-radius: 999px; }
+
+section { padding-block: 40px; display: grid; gap: 22px; }
+h2 { font-size: clamp(26px, 3.4vw, 34px); line-height: 1.15; letter-spacing: -0.015em; margin: 0; font-weight: 600; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0; max-width: 62ch; }
+
+.sheet { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.sheet-scroll { overflow-x: auto; }
+table.prices { width: 100%; border-collapse: collapse; min-width: 640px; }
+.prices th { text-align: left; font: 500 12px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); padding: 18px 24px 12px; }
+.prices td { padding: 22px 24px; border-top: 1px solid var(--line); vertical-align: baseline; }
+.prices .what { font-size: 18px; font-weight: 500; }
+.prices .what small { display: block; color: var(--faint); font-size: 14px; font-weight: 400; margin-top: 2px; }
+.prices .price { font: 600 22px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.prices .unit { font: 400 13px var(--mono); color: var(--muted); white-space: nowrap; }
+.prices .kept { font: 400 14px var(--mono); color: var(--muted); white-space: nowrap; }
+.prices tr.group td { padding: 14px 24px 8px; font: 500 12px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); border-top: 1px solid var(--line); background: var(--raised); }
+.sheet-notes { border-top: 1px solid var(--line); padding: 18px 24px 22px; display: grid; gap: 8px; color: var(--muted); font-size: 14.5px; }
+.sheet-notes p { margin: 0; }
+
+.included { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0; border-top: 1px solid var(--line); }
+.included div { padding: 20px 20px 22px 0; border-bottom: 1px solid var(--line); display: grid; gap: 4px; align-content: start; }
+.included b { font-weight: 600; font-size: 16.5px; }
+.included span { color: var(--muted); font-size: 14.5px; }
+
+.estimator { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.est-inputs { padding: 24px; display: grid; gap: 18px; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 6px 16px; align-items: center; }
+.field label { font-weight: 500; }
+.field .hint { grid-column: 1 / -1; color: var(--faint); font-size: 13.5px; margin-top: -4px; }
+.field .inp { display: flex; align-items: center; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.field input { width: 100%; min-width: 0; background: transparent; border: 0; color: var(--fg); font: 500 16px var(--mono); padding: 10px 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.field .inp span { padding-right: 12px; color: var(--faint); font: 400 13px var(--mono); }
+.presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.est-total { background: var(--raised); border-left: 1px solid var(--line); padding: 24px; display: grid; align-content: start; gap: 14px; }
+.est-total .label { font: 500 12px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.est-total .big { font: 600 44px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.est-total .big small { font-size: 16px; color: var(--muted); font-weight: 400; }
+.breakdown { display: grid; gap: 6px; font: 400 14px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.breakdown div { display: flex; justify-content: space-between; gap: 12px; }
+.est-total p { margin: 0; color: var(--faint); font-size: 13.5px; }
+
+.trial { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; padding: 32px; border-radius: 14px;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 16%, var(--surface)), var(--surface) 70%); border: 1px solid var(--line); }
+.trial h2 { font-size: clamp(24px, 3vw, 30px); }
+.trial ul { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; color: var(--muted); }
+.trial li::before { content: "✓"; color: var(--ok); margin-right: 10px; font-weight: 700; }
+
+.faq { border-top: 1px solid var(--line); }
+.faq details { border-bottom: 1px solid var(--line); }
+.faq summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 16px; padding: 20px 0; font-size: 17.5px; font-weight: 500; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; font: 400 22px/1 var(--mono); color: var(--faint); transition: transform .15s; }
+.faq details[open] summary::after { transform: rotate(45deg); }
+.faq .ans { padding: 0 0 22px; color: var(--muted); max-width: 70ch; display: grid; gap: 10px; }
+.faq .ans p { margin: 0; }
+footer { border-top: 1px solid var(--line); margin-top: 40px; padding-block: 28px 40px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; color: var(--faint); font-size: 14px; }
+@media (max-width: 760px) {
+  .navlinks .hide-sm { display: none; }
+  .estimator { grid-template-columns: 1fr; }
+  .est-total { border-left: 0; border-top: 1px solid var(--line); }
+  .trial { grid-template-columns: 1fr; padding: 24px; }
+  .field { grid-template-columns: 1fr; }
+  header.hero { padding-block: 40px 28px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <nav class="top" aria-label="Main">
+    <a class="brand" href="/" aria-label="Leasyd home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1c1f26"/><path d="M9 7v18h14" stroke="#6ea8fe" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Leasyd
+    </a>
+    <div class="navlinks">
+      <a href="#prices" aria-current="page" class="hide-sm">Pricing</a>
+      <a href="#faq" class="hide-sm">FAQ</a>
+      <a href="https://app.leasyd.com/">Sign in</a>
+      <a class="btn small primary" href="https://app.leasyd.com/#/signup">Start free trial</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <span class="eyebrow">Pricing</span>
+    <h1>Pay for the data you send. That's the whole bill.</h1>
+    <p class="lede">One price per million records, with storage, search, dashboards, alerts and every teammate included. No plans to compare, no seats, no minimums.</p>
+    <div class="actions">
+      <a class="btn primary" href="https://app.leasyd.com/#/signup">Start your 7-day free trial</a>
+      <a class="btn" href="mailto:hello@leasyd.com">Talk to us</a>
+      <span class="trialtag">7 days free · all features</span>
+    </div>
+  </header>
+
+  <section id="prices" aria-labelledby="prices-h">
+    <h2 id="prices-h">Prices</h2>
+    <div class="sheet">
+      <div class="sheet-scroll">
+        <table class="prices">
+          <thead><tr><th scope="col">What you send</th><th scope="col">Price</th><th scope="col">Per</th><th scope="col">Kept for</th></tr></thead>
+          <tbody>
+            <tr class="group"><td colspan="4">Telemetry (OpenTelemetry)</td></tr>
+            <tr><td class="what">Spans<small>each step of a request, from traces</small></td><td class="price">$0.30</td><td class="unit">million</td><td class="kept">30 days</td></tr>
+            <tr><td class="what">Log records<small>each log line or event</small></td><td class="price">$0.30</td><td class="unit">million</td><td class="kept">30 days</td></tr>
+            <tr><td class="what">Metric data points<small>each value of each series, e.g. one CPU reading</small></td><td class="price">$0.10</td><td class="unit">million</td><td class="kept">30 days</td></tr>
+            <tr class="group"><td colspan="4">Synthetic monitoring</td></tr>
+            <tr><td class="what">HTTP and API check runs<small>single requests or multi-step API flows</small></td><td class="price">$0.20</td><td class="unit">thousand runs</td><td class="kept">30 days</td></tr>
+            <tr><td class="what">Browser check runs<small>a real Chrome browser clicking through your site</small></td><td class="price">$3.00</td><td class="unit">thousand runs</td><td class="kept">30 days</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="sheet-notes">
+        <p>You're billed monthly for what arrived that month. Storing it for 30 days and searching it are already in the price.</p>
+        <p>Prices in US dollars, before tax. Sending billions of records a month? <a href="mailto:hello@leasyd.com">Ask us about volume rates.</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="incl-h">
+    <h2 id="incl-h">Included at no extra cost</h2>
+    <div class="included">
+      <div><b>Everyone on your team</b><span>Invite as many people as you like. No per-seat fees.</span></div>
+      <div><b>30 days of history</b><span>Every log, span and metric is kept and searchable for 30 days.</span></div>
+      <div><b>Search and SQL</b><span>Log search, trace view, PromQL and SQL over all your data.</span></div>
+      <div><b>Dashboards</b><span>Build your own, or start from the ready-made ones.</span></div>
+      <div><b>Alerts and SLOs</b><span>Email, Slack and webhooks, with error budgets.</span></div>
+      <div><b>Your data, walled off</b><span>Each account's data is kept apart, enforced by AWS itself.</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="est-h">
+    <h2 id="est-h">Estimate your monthly bill</h2>
+    <p class="sub">Type in roughly what you send in a month, or start from an example.</p>
+    <div class="estimator">
+      <div class="est-inputs">
+        <div class="presets" role="group" aria-label="Examples">
+          <button class="btn small" type="button" data-preset="small">Small app</button>
+          <button class="btn small" type="button" data-preset="growing">Growing product</button>
+          <button class="btn small" type="button" data-preset="busy">Busy platform</button>
+        </div>
+        <div class="field"><label for="e-spans">Spans</label><div class="inp"><input id="e-spans" inputmode="decimal" value="50"><span>M</span></div><span class="hint">millions a month</span></div>
+        <div class="field"><label for="e-logs">Log records</label><div class="inp"><input id="e-logs" inputmode="decimal" value="100"><span>M</span></div><span class="hint">millions a month</span></div>
+        <div class="field"><label for="e-metrics">Metric data points</label><div class="inp"><input id="e-metrics" inputmode="decimal" value="200"><span>M</span></div><span class="hint">millions a month (one series sending every 30 s is about 0.09 M)</span></div>
+        <div class="field"><label for="e-http">HTTP check runs</label><div class="inp"><input id="e-http" inputmode="decimal" value="45"><span>K</span></div><span class="hint">thousands a month (5 checks every 5 minutes ≈ 43 K)</span></div>
+        <div class="field"><label for="e-browser">Browser check runs</label><div class="inp"><input id="e-browser" inputmode="decimal" value="3"><span>K</span></div><span class="hint">thousands a month (1 check every 15 minutes ≈ 3 K)</span></div>
+      </div>
+      <div class="est-total" aria-live="polite">
+        <span class="label">Estimated monthly bill</span>
+        <div class="big" id="e-total">$0</div>
+        <div class="breakdown" id="e-breakdown"></div>
+        <p>An estimate at list prices, before tax. Your real bill follows what you actually send.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="trial-h">
+    <div class="trial">
+      <div>
+        <h2 id="trial-h">Try it free for 7 days</h2>
+        <ul>
+          <li>Every feature, from the first minute</li>
+          <li>Up to 1 GB of data a day during the trial</li>
+          <li>Connect any OpenTelemetry SDK or Collector in minutes</li>
+        </ul>
+      </div>
+      <a class="btn primary" href="https://app.leasyd.com/#/signup">Start free trial</a>
+    </div>
+  </section>
+
+  <section id="faq" aria-labelledby="faq-h">
+    <h2 id="faq-h">Questions</h2>
+    <div class="faq">
+      <details open><summary>What exactly am I paying for?</summary><div class="ans">
+        <p>Only the records you send: spans, log records and metric data points, counted per million, plus synthetic check runs, counted per thousand. Storage, search, dashboards, alerts and team members are all included.</p></div></details>
+      <details><summary>How does the free trial work?</summary><div class="ans">
+        <p>You get 7 days with every feature and up to 1 GB of data a day. Add a payment method before the trial ends to keep your data flowing. If you don't, sending stops, and nothing is charged.</p></div></details>
+      <details><summary>Are there plans or tiers?</summary><div class="ans">
+        <p>No. Everyone pays the same prices and gets the same product. You don't have to pick a plan or upgrade to unlock a feature.</p></div></details>
+      <details><summary>Do you charge per user?</summary><div class="ans">
+        <p>No. Invite your whole team at no extra cost.</p></div></details>
+      <details><summary>How long is my data kept?</summary><div class="ans">
+        <p>30 days for everything, included in the price. Older data is deleted automatically each day.</p></div></details>
+      <details><summary>Is searching really included?</summary><div class="ans">
+        <p>Yes. To keep Leasyd fast for everyone, each account has a daily search allowance that normal use doesn't come near. You can see how much you've used in Settings. If your team searches very heavily, talk to us and we'll raise it.</p></div></details>
+      <details><summary>How do I keep my bill under control?</summary><div class="ans">
+        <p>Your usage is visible at any time on the Usage & Cost page, broken down by service. We can also set a daily data limit on your account: anything over it is refused until midnight UTC, so a noisy service can't surprise you.</p>
+        <p>The biggest saving usually comes from sending less: drop debug logs in production, or sample busy traces in your OpenTelemetry Collector.</p></div></details>
+      <details><summary>What counts as one record?</summary><div class="ans">
+        <p>One span is one step of a traced request. One log record is one log line or event. One metric data point is one value of one series at one moment. For example, a CPU gauge reported every 30 seconds sends about 86,000 points a month.</p></div></details>
+      <details><summary>Where is my data stored?</summary><div class="ans">
+        <p>In AWS, in the US East (N. Virginia) region, encrypted at rest and in transit. Each account's data sits in its own space, and AWS permissions stop any other account from reading it.</p></div></details>
+      <details><summary>Can I cancel any time?</summary><div class="ans">
+        <p>Yes. There are no contracts. You pay for what you sent up to the day you stop.</p></div></details>
+    </div>
+  </section>
+
+  <footer>
+    <span>© 2026 Leasyd</span>
+    <span>Questions? <a href="mailto:hello@leasyd.com">hello@leasyd.com</a></span>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const PRICE = { spans: 0.30, logs: 0.30, metrics: 0.10, http: 0.20, browser: 3.00 };   // per million (telemetry) / thousand (checks)
+  const NAMES = { spans: "Spans", logs: "Log records", metrics: "Metric points", http: "HTTP checks", browser: "Browser checks" };
+  const PRESETS = {
+    small:   { spans: 10,  logs: 20,   metrics: 50,   http: 9,   browser: 0 },
+    growing: { spans: 50,  logs: 100,  metrics: 200,  http: 45,  browser: 3 },
+    busy:    { spans: 600, logs: 1500, metrics: 2000, http: 260, browser: 30 },
+  };
+  const ids = Object.keys(PRICE);
+  const el = (k) => document.getElementById("e-" + k);
+  const money = (v) => "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function update() {
+    let total = 0; const rows = [];
+    for (const k of ids) {
+      const n = Math.max(0, parseFloat(String(el(k).value).replace(/,/g, "")) || 0);
+      const cost = n * PRICE[k]; total += cost;
+      rows.push(`<div><span>${NAMES[k]}</span><span>${money(cost)}</span></div>`);
+    }
+    document.getElementById("e-total").innerHTML = money(total) + " <small>/ month</small>";
+    document.getElementById("e-breakdown").innerHTML = rows.join("");
+  }
+  ids.forEach((k) => el(k).addEventListener("input", update));
+  document.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
+    const p = PRESETS[b.dataset.preset]; ids.forEach((k) => { el(k).value = p[k]; }); update();
+  }));
+  update();
+})();
+</script>
+</body>
+</html>
