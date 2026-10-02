@@ -682,8 +682,16 @@ def test_daily_search_allowance(data, monkeypatch):
     status, out = http_user(ana, q)
     assert status == 429 and "allowance is used up (3 search units)" in out["error"]
     assert [http_user({"custom:tenant": "globex"}, q)[0] for _ in range(5)] == [200] * 5
-    # SQL uses units by the data it reads (at least 1).
-    t.put_item(Item={"pk": "tenant#initech", "plan": "standard"})
+    # A query with nothing to read (a time range without data) uses no units.
+    empty = {**q, "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T01:00:00Z"}
+    t.put_item(Item={"pk": "tenant#hooli", "plan": "standard", "search_units_per_day": 1})
+    assert [http_user({"custom:tenant": "hooli"}, empty)[0] for _ in range(3)] == [200] * 3
+    assert "Item" not in t.get_item(Key={"pk": f"usage#search#hooli#{query._day()}"})
+    # SQL uses units by the data it reads: at least 1 when there is some, none when there isn't.
     monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
-    status, out = http_user({"custom:tenant": "initech"}, {"sql": "SELECT count(*) FROM logs", "start": q["start"], "end": q["end"]})
-    assert status == 200 and t.get_item(Key={"pk": f"usage#search#initech#{query._day()}"})["Item"]["n"] == 1
+    sql = {"sql": "SELECT count(*) FROM logs", "start": q["start"], "end": q["end"]}
+    assert http_user({"custom:tenant": "globex"}, sql)[0] == 200
+    assert t.get_item(Key={"pk": f"usage#search#globex#{query._day()}"})["Item"]["n"] >= 6   # 5 queries + the SQL
+    t.put_item(Item={"pk": "tenant#initech", "plan": "standard"})
+    assert http_user({"custom:tenant": "initech"}, sql)[0] == 200
+    assert "Item" not in t.get_item(Key={"pk": f"usage#search#initech#{query._day()}"})

@@ -474,7 +474,7 @@ def run_sql(tenant, sql, start, end, invoke_worker=None):
         raise BadQuery(f"this time range has {count:,} files to read (at most {SQL_MAX_FILES:,}); choose a shorter time range")
     if size > SQL_MAX_BYTES:
         raise BadQuery(f"this would read {size / 2**30:.1f} GB (at most {SQL_MAX_BYTES / 2**30:.0f} GB); choose a shorter time range")
-    used_units(tenant, math.ceil(size / TARGET_BYTES_PER_WORKER))
+    used_units(tenant, max(1, math.ceil(size / TARGET_BYTES_PER_WORKER)) if count else 0)
     event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files}
     out = (invoke_worker or _invoke_worker)(event)
     out["stats"] = {**out.get("stats", {}), "files": sum(len(v) for v in files.values()), "total_ms": round((time.perf_counter() - t0) * 1000)}
@@ -821,13 +821,15 @@ def start_job(tenant, q):
 
 # Limits per tenant, by plan, so one customer can't use up the account's Lambda capacity (shared
 # with everyone's ingest) or run up the bill:
-#  - per minute: queries, and background jobs (each up to 5 minutes of a worker);
+#  - per minute: queries (a burst guard: one page of charts runs 20-40 at once), and background
+#    jobs (each up to 5 minutes of a worker);
 #    counted in obs-tenants rate#<kind>#<tenant>#<minute>, expiring with its TTL;
 #  - per day (UTC): search units, one per worker a query used (a worker reads ~256 MB), so a
-#    30-day search costs more of the allowance than a 1-hour one. Counted in
+#    30-day search costs more of the allowance than a 1-hour one; a query with no data to read
+#    costs nothing. Counted in
 #    usage#search#<tenant>#<day>; a tenant's own search_units_per_day overrides the plan's
 #    (0: no daily limit). Charged after the query, so the last one of the day may go over.
-RATE_LIMITS = {"query": {"free": 30, "standard": 300}, "job": {"free": 2, "standard": 10}}
+RATE_LIMITS = {"query": {"free": 300, "standard": 600}, "job": {"free": 5, "standard": 10}}
 DAILY_SEARCH_UNITS = {"free": 2_000, "standard": 20_000}
 _plans = {}   # tenant -> ((plan, daily units), read at)
 _units = {}   # tenant -> search units used by queries not yet charged
@@ -854,8 +856,9 @@ def _day():
 
 
 def used_units(tenant, n):
-    """Note n search units used by a query of the tenant (charged by charge_units)."""
-    _units[tenant] = _units.get(tenant, 0) + max(1, int(n))
+    """Note n search units used by a query of the tenant (charged by charge_units); 0: nothing read."""
+    if n > 0:
+        _units[tenant] = _units.get(tenant, 0) + int(n)
 
 
 def charge_units(tenant):
