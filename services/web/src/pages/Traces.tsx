@@ -11,10 +11,10 @@ import { fmtTs } from "./Logs";
 const SERVICE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
 const LOOKBACK_DAYS = 30;   // trace ids are looked up across 30 days (day/hour ID filters make this fast)
 
-export function Traces({ ctx, traceId }: { ctx: Ctx; traceId?: string }) {
+export function Traces({ ctx, traceId, service }: { ctx: Ctx; traceId?: string; service?: string }) {
   const [id, setId] = useState(traceId ?? "");
   const submit = (e: FormEvent) => { e.preventDefault(); if (id.trim()) ctx.go(`/traces/${id.trim().toLowerCase()}`); };
-  if (!traceId) return <Explorer ctx={ctx} />;
+  if (!traceId) return <Explorer ctx={ctx} service={service} />;
   return (
     <>
       <form className="toolbar" onSubmit={submit}>
@@ -64,10 +64,10 @@ const COLUMNS: Column[] = [
 const WIDTH: Record<string, number | undefined> = { service: 150, start: 190, duration: 100, root: 60, type: 110, kind: 90, status: 70 };
 const LIMIT = 200;
 
-function Explorer({ ctx }: { ctx: Ctx }) {
+function Explorer({ ctx, service: initialService }: { ctx: Ctx; service?: string }) {
   const [view, setView] = useState("all");
   const [chart, setChart] = useState<"outliers" | "red">("outliers");
-  const [service, setService] = useState("");
+  const [service, setService] = useState(initialService ?? "");
   const [text, setText] = useState(""), [applied, setApplied] = useState("");
   const [cell, setCell] = useState<{ t: number; b: number } | null>(null);
   const [sort, setSort] = useState<"start" | "duration">("start");

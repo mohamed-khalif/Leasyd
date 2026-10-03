@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark } from "./icons";
+import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { account } from "./api";
 
@@ -53,6 +53,7 @@ export function Shell(p: Props) {
         <div className="nav-section">Explore</div>
         {link("/logs", "Logs", <IconLogs />, p.path.startsWith("/logs"))}
         {link("/traces", "Traces", <IconTraces />, p.path.startsWith("/traces"))}
+        {link("/services", "Service Map", <IconMap />, p.path.startsWith("/services"))}
         {link("/metrics", "Metrics", <IconMetrics />, p.path.startsWith("/metrics"))}
         <div className="nav-section">Query data</div>
         {link("/query", "Query Builder", <IconFlask />, p.path.startsWith("/query"))}

@@ -585,3 +585,60 @@ tr:hover .link { text-decoration: underline; }
 .trial-banner { padding: 8px 20px; font-size: 13px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .trial-banner a { color: inherit; text-decoration: underline; }
 .trial-banner.ended { background: color-mix(in srgb, var(--sev-error) 16%, transparent); }
+
+/* ---- Service map */
+.svcmap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.svcmap.with-panel { grid-template-columns: minmax(0, 1fr) 420px; }
+.svcmap-main { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.svcmap-canvas { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); height: calc(100vh - 190px); min-height: 460px; overflow: hidden; }
+.svcmap-canvas svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+.svcmap-canvas svg:active { cursor: grabbing; }
+.svc-edge { fill: none; stroke: color-mix(in srgb, var(--series-2) 75%, transparent); stroke-width: 1.4; }
+.svc-edge.err { stroke: color-mix(in srgb, var(--series-2) 60%, var(--sev-error)); }
+.svc-dot { fill: var(--series-2); }
+.svc-dot.err { fill: var(--sev-error); }
+.svc-node { cursor: pointer; }
+.svc-node rect { fill: var(--surface-3); stroke: var(--border-strong); stroke-width: 1; }
+.svc-node.warning rect { fill: color-mix(in srgb, var(--sev-error) 45%, var(--surface-3)); stroke: color-mix(in srgb, var(--sev-error) 60%, var(--border)); }
+.svc-node.critical rect { fill: var(--sev-error); stroke: var(--sev-error); }
+.svc-node.sel rect { stroke: var(--accent); stroke-width: 2.5; }
+.svc-node:focus { outline: none; }
+.svc-node:focus-visible rect { stroke: var(--focus); stroke-width: 2.5; }
+.svc-rate { font: 600 11.5px var(--font-sans); fill: var(--text); pointer-events: none; }
+.svc-node.critical .svc-rate { fill: #fff; }
+.svc-name { font: 12px var(--font-sans); fill: var(--text-2); pointer-events: none; }
+.svc-node.sel .svc-name { fill: var(--accent); font-weight: 600; }
+.svcmap .dim { opacity: .2; }
+.svcmap-zoom { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; }
+.svcmap-zoom .btn { min-width: 32px; justify-content: center; }
+.svcmap-key { position: absolute; left: 12px; bottom: 14px; display: flex; gap: 10px; align-items: center; font-size: 12px; }
+.svcmap-key i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: -4px; background: var(--surface-3); border: 1px solid var(--border-strong); }
+.svcmap-key i.warning { background: color-mix(in srgb, var(--sev-error) 45%, var(--surface-3)); }
+.svcmap-key i.critical { background: var(--sev-error); border-color: var(--sev-error); }
+.svc-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); align-self: start; min-width: 0; display: grid; }
+.svc-panel-head { display: flex; gap: 10px; align-items: flex-start; padding: 14px 16px 10px; }
+.svc-panel-head > div { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.svc-panel-title { font-size: 16px; overflow-wrap: anywhere; }
+.svc-badge { font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); }
+.svc-badge.critical { background: var(--sev-error); color: #fff; }
+.svc-badge.warning { background: color-mix(in srgb, var(--sev-warn) 25%, transparent); color: var(--sev-warn); }
+.svc-panel .tabs { padding: 0 16px; }
+.svc-panel-body { padding: 14px 16px 16px; display: grid; gap: 14px; justify-items: start; }
+.svc-panel-body > * { justify-self: stretch; }
+.svc-panel-body > .btn { justify-self: start; }
+.svc-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.svc-tile { background: var(--well); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; display: grid; gap: 2px; font-size: 12px; min-width: 0; }
+.svc-tile b { font: 600 18px var(--font-sans); }
+.svc-tile b.bad, .dtable td.bad { color: var(--sev-error); }
+.svc-tile svg { width: 100%; height: 34px; margin-top: 6px; }
+.spark-bar { fill: var(--text-3); }
+.spark-line { fill: none; stroke: var(--text-2); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.spark-line.bad { stroke: var(--sev-error); }
+.svc-summary { border: 1px solid var(--border); border-radius: var(--radius); }
+.svc-sum-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px 12px; border-top: 1px solid var(--border); }
+.svc-sum-row:first-child { border-top: 0; }
+.svc-sum-title { font-weight: 600; font-size: 13px; }
+.svc-sum-kv { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; }
+.svc-sum-kv > div { display: grid; min-width: 0; }
+.svc-sum-kv .mono { overflow-wrap: anywhere; }
+@media (max-width: 1100px) { .svcmap.with-panel { grid-template-columns: minmax(0, 1fr); } }

@@ -11,6 +11,7 @@ import { Insights } from "./pages/Insights";
 import { Usage } from "./pages/Usage";
 import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
+import { ServiceMap } from "./pages/ServiceMap";
 import { Metrics } from "./pages/Metrics";
 import { Synthetics } from "./pages/Synthetics";
 import { Slos } from "./pages/Slos";
@@ -54,8 +55,11 @@ export function App() {
   let page: React.ReactElement, crumb: [string, string];
   if (path.startsWith("/traces")) {
     const id = path.split("/")[2];
-    page = <Traces ctx={ctx} traceId={id} />;
+    page = <Traces ctx={ctx} traceId={id} service={params.get("service") ?? undefined} />;
     crumb = ["Traces", id ? `${id.slice(0, 16)}…` : "Explorer"];
+  } else if (path.startsWith("/services")) {
+    page = <ServiceMap ctx={ctx} />;
+    crumb = ["Services", "Service map"];
   } else if (path.startsWith("/synthetics")) {
     page = <Synthetics ctx={ctx} path={path} />;
     const sub = path.split("/")[2];
