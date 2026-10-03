@@ -1,7 +1,7 @@
-import { FormEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { records, Where } from "../api";
 import type { Ctx } from "../App";
-import { bucketLow, Cell, Column, ColumnPicker, Heatmap, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
+import { bucketLow, Cell, LOG_STEPS, Column, ColumnPicker, Heatmap, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtMs, fmtNum, rangeWindow } from "../time";
@@ -12,19 +12,8 @@ const SERVICE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)",
 const LOOKBACK_DAYS = 30;   // trace ids are looked up across 30 days (day/hour ID filters make this fast)
 
 export function Traces({ ctx, traceId, service }: { ctx: Ctx; traceId?: string; service?: string }) {
-  const [id, setId] = useState(traceId ?? "");
-  const submit = (e: FormEvent) => { e.preventDefault(); if (id.trim()) ctx.go(`/traces/${id.trim().toLowerCase()}`); };
   if (!traceId) return <Explorer ctx={ctx} service={service} />;
-  return (
-    <>
-      <form className="toolbar" onSubmit={submit}>
-        <a href="#/traces" className="btn" onClick={(e) => { e.preventDefault(); ctx.go("/traces"); }}>← All spans</a>
-        <input className="input grow mono" placeholder="Trace ID (32 hex characters)" value={id} onChange={(e) => setId(e.target.value)} aria-label="Trace ID" />
-        <button className="btn primary">Open trace</button>
-      </form>
-      <Waterfall ctx={ctx} traceId={traceId} />
-    </>
-  );
+  return <Waterfall ctx={ctx} traceId={traceId} />;
 }
 
 // ------------------------------------------------------------------ explorer
@@ -229,50 +218,90 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
   const spans = useQuery({ signal: "traces", ...w, match: { trace_id: traceId }, search: { limit: 2000 } }, "t" + traceId + ctx.tick);
   const logs = useQuery({ signal: "logs", ...w, match: { trace_id: traceId }, search: { limit: 200 } }, "l" + traceId + ctx.tick);
   const [sel, setSel] = useState<string | null>(null);
+  const [closed, setClosed] = useState<Set<string>>(new Set());
 
   const tree = useMemo(() => (spans.data ? layout(records(spans.data)) : []), [spans.data]);
+  const logRows = useMemo(() => (logs.data ? records(logs.data) : []).sort((a, b) => Number(a.ts_unix_nano) - Number(b.ts_unix_nano)), [logs.data]);
   const t0 = Math.min(...tree.map((s) => s.start)), t1 = Math.max(...tree.map((s) => s.start + s.dur));
   const services = [...new Set(tree.map((s) => s.service))];
   const color = (svc: string) => SERVICE_COLORS[services.indexOf(svc) % SERVICE_COLORS.length];
-  const selected = tree.find((s) => s.span_id === sel);
+  const kids = useMemo(() => {
+    const m = new Map<string, number>();
+    tree.forEach((s) => s.parent_span_id && m.set(s.parent_span_id, (m.get(s.parent_span_id) ?? 0) + 1));
+    return m;
+  }, [tree]);
+  // Rows under a collapsed span are hidden (tree order: a span's descendants follow it, deeper).
+  const visible = useMemo(() => {
+    const out: Span[] = [];
+    let hideBelow: number | null = null;
+    for (const s of tree) {
+      if (hideBelow != null && s.depth > hideBelow) continue;
+      hideBelow = closed.has(s.span_id) ? s.depth : null;
+      out.push(s);
+    }
+    return out;
+  }, [tree, closed]);
+  const errors = tree.filter((s) => isError(s.status)).length;
+  const root = tree[0];
+  const selected = tree.find((s) => s.span_id === sel) ?? tree.find((s) => isError(s.status)) ?? root;
+  const toggle = (id: string) => setClosed((c) => { const n = new Set(c); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const attrs = (s?: Span) => (s?.raw.attributes ?? {}) as Record<string, string>;
+  const rootStatus = attrs(root)["http.response.status_code"] ?? attrs(root)["http.status_code"];
+  const rootKind = spanType(attrs(root));
 
   return (
     <>
-      <Panel title={`Trace ${traceId}`} flush
-             right={tree.length > 0 && <span className="faint mono">{tree.length} spans · {services.length} services · {fmtMs(t1 - t0)}
-               <button type="button" className="btn ask-btn" onClick={() => ctx.go(`/ai?ask=${encodeURIComponent(`Explain trace \`${traceId}\`: what happened, what was slow or failed, and why?`)}&page=${encodeURIComponent(JSON.stringify({ trace_id: traceId }))}`)}>Ask Leasyd AI</button></span>}>
-        <Loads q={spans} empty={!tree.length} height={200}>
-          {() => (
-            <div>
-              <div className="legend" style={{ padding: "8px 14px 0" }}>{services.map((s) => <span key={s}><i style={{ background: color(s) }} />{s}</span>)}</div>
-              {tree.map((s) => {
-                const left = ((s.start - t0) / (t1 - t0 || 1)) * 100, width = Math.max((s.dur / (t1 - t0 || 1)) * 100, 0.2);
-                return (
-                  <div key={s.span_id} className="wf-row" onClick={() => setSel(sel === s.span_id ? null : s.span_id)}
-                       style={sel === s.span_id ? { background: "var(--surface-2)" } : undefined}>
-                    <div className="wf-name" style={{ paddingLeft: 12 + s.depth * 14 }} title={`${s.service} ${s.name}`}>
-                      <span style={{ color: color(s.service) }}>{s.service}</span> <span className="muted">{s.name}</span>
-                    </div>
-                    <div className="wf-track">
-                      <div className="wf-bar" style={{ left: `${left}%`, width: `${width}%`, background: isError(s.status) ? "var(--sev-error)" : color(s.service) }} />
-                      {s.events.map((e, j) => (
-                        <span key={j} className={`wf-event${isException(e) ? " exc" : ""}`} title={`${e.name} · +${fmtMs(e.at - s.start)}`}
-                              style={{ left: `${((e.at - t0) / (t1 - t0 || 1)) * 100}%` }} />
-                      ))}
-                      <span className="wf-dur" style={left + width > 80 ? { right: `${100 - left + 0.5}%` } : { left: `calc(${left + width}% + 6px)` }}>{fmtMs(s.dur)}</span>
-                    </div>
-                  </div>
-                );
-              })}
+      <Loads q={spans} empty={!tree.length} height={260}>
+        {() => (
+          <>
+            <div className="trace-head">
+              <button className="btn" onClick={() => ctx.go("/traces")}>← Tracing</button>
+              {rootKind !== "—" && <span className="trace-kind">{rootKind}</span>}
+              <b className="trace-title">{root.name}</b>
+              {rootStatus && <span className={Number(rootStatus) >= 500 || isError(root.status) ? "bad" : "faint"}>{rootStatus}</span>}
+              {!rootStatus && isError(root.status) && <span className="bad">Error</span>}
+              <span className="faint mono">#{traceId.slice(0, 16)}…</span>
+              <span className="spacer" />
+              <span className="faint">{tree.length} spans · {services.length} services · {fmtMs(t1 - t0)}</span>
+              {errors > 0 && <span className="bad">{errors} error{errors > 1 ? "s" : ""} ({((errors / tree.length) * 100).toFixed(1)}%)</span>}
+              <button type="button" className="btn ask-btn" onClick={() => ctx.go(`/ai?ask=${encodeURIComponent(`Explain trace \`${traceId}\`: what happened, what was slow or failed, and why?`)}&page=${encodeURIComponent(JSON.stringify({ trace_id: traceId }))}`)}>Ask Leasyd AI</button>
             </div>
-          )}
-        </Loads>
-      </Panel>
-      {selected && <SpanDetail span={selected} />}
+            <div className="trace-split">
+              <section className="panel trace-table" aria-label="Spans">
+                <div className="tw-row tw-headrow">
+                  <span>Span</span><span>Service</span><span className="num">Duration</span>
+                  <span className="tw-axis"><span>0</span><span>{fmtMs((t1 - t0) / 2)}</span><span>{fmtMs(t1 - t0)}</span></span>
+                </div>
+                {visible.map((s) => {
+                  const left = ((s.start - t0) / (t1 - t0 || 1)) * 100, width = Math.max((s.dur / (t1 - t0 || 1)) * 100, 0.3);
+                  const n = kids.get(s.span_id) ?? 0, err = isError(s.status);
+                  return (
+                    <div key={s.span_id} className={`tw-row${selected?.span_id === s.span_id ? " on" : ""}${err ? " err" : ""}`} onClick={() => setSel(s.span_id)}>
+                      <span className="tw-name" style={{ paddingLeft: 6 + s.depth * 14 }} title={s.name}>
+                        {n > 0 ? <button className="tw-toggle" onClick={(e) => { e.stopPropagation(); toggle(s.span_id); }} aria-label={closed.has(s.span_id) ? "Expand" : "Collapse"}>{closed.has(s.span_id) ? "+" : "−"}</button> : <span className="tw-toggle none" />}
+                        <span className={err ? "bad" : undefined}>{s.name}</span>
+                        {closed.has(s.span_id) && <span className="tw-count">{n}</span>}
+                        {s.events.length > 0 && <span className={`tw-ev${s.events.some(isException) ? " exc" : ""}`} title={`${s.events.length} events`}>◆{s.events.length}</span>}
+                      </span>
+                      <span className="tw-svc" title={s.service}><i style={{ background: color(s.service) }} />{s.service}</span>
+                      <span className="num">{fmtMs(s.dur)}</span>
+                      <span className="tw-track">
+                        <span className="wf-bar" style={{ left: `${left}%`, width: `${width}%`, background: err ? "var(--sev-error)" : color(s.service) }} />
+                        {s.events.map((e, j) => <span key={j} className={`wf-event${isException(e) ? " exc" : ""}`} style={{ left: `${((e.at - t0) / (t1 - t0 || 1)) * 100}%` }} title={e.name} />)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </section>
+              {selected && <SpanPanel span={selected} logs={logRows.filter((l) => String(l.span_id ?? "") === selected.span_id)} />}
+            </div>
+          </>
+        )}
+      </Loads>
       <Panel title="Logs in this trace" flush>
-        <Loads q={logs} empty={!(logs.data && logs.data.rows.length)} height={80}>
+        <Loads q={logs} empty={!logRows.length} height={80}>
           {() => (
-            <div>{records(logs.data!).sort((a, b) => Number(a.ts_unix_nano) - Number(b.ts_unix_nano)).map((r, i) => (
+            <div>{logRows.map((r, i) => (
               <div key={i} className="logrow" style={{ cursor: "default" }}>
                 <span className="faint">{fmtTs(String(r.ts))}</span>
                 <span className={`sev ${String(r.severity_text ?? "").toLowerCase()}`}>{String(r.severity_text ?? "—")}</span>
@@ -287,46 +316,122 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
   );
 }
 
-function SpanDetail({ span }: { span: Span }) {
-  const fields = Object.entries(flatten(span.raw)).filter(([k, v]) => k !== "events" && k !== "links" && v != null && v !== "");
-  const linkList = Array.isArray(span.raw.links) ? (span.raw.links as Record<string, unknown>[]) : [];
+type SpanTab = "overview" | "attributes" | "resource" | "events" | "links";
+
+/** The selected span: when it ran, how its duration compares with the same operation's other
+ *  spans, and its attributes, resource, events and logs, and links. */
+function SpanPanel({ span, logs }: { span: Span; logs: Record<string, unknown>[] }) {
+  const [tab, setTab] = useState<SpanTab>("overview");
+  const attrs = (span.raw.attributes ?? {}) as Record<string, unknown>;
+  const resource = (span.raw.resource_attributes ?? {}) as Record<string, unknown>;
+  const links = Array.isArray(span.raw.links) ? (span.raw.links as Record<string, unknown>[]) : [];
+  const kind = KINDS[Number(span.raw.kind)] ?? "";
+  const at = (ns: number) => new Date(ns / 1e6).toISOString().slice(11, 23);
+  const tabs: [SpanTab, string][] = [["overview", "Overview"], ["attributes", `Attributes ${Object.keys(attrs).length}`], ["resource", "Resource"],
+    ["events", `Events & Logs ${span.events.length + logs.length}`], ["links", `Links ${links.length}`]];
   return (
-    <Panel title={`Span ${span.name}`} flush right={span.events.length > 0 && <span className="faint">{span.events.length} event{span.events.length > 1 ? "s" : ""}</span>}>
-      {span.events.length > 0 && (
-        <div className="span-events">
-          <div className="span-sec">Events</div>
-          {span.events.map((e, i) => {
-            const { "exception.stacktrace": stack, ...attrs } = e.attributes;
-            return (
-              <div key={i} className={`span-event${isException(e) ? " exc" : ""}`}>
-                <div className="span-event-head">
-                  <span className="mono faint">+{fmtMs(e.at - span.start)}</span>
-                  <b>{isException(e) ? `${attrs["exception.type"] ?? "exception"}` : e.name}</b>
-                  {isException(e) && attrs["exception.message"] && <span>{attrs["exception.message"]}</span>}
-                </div>
-                {Object.keys(attrs).length > 0 && (
-                  <div className="kv">
-                    {Object.entries(attrs).map(([k, v]) => <div key={k} style={{ display: "contents" }}><span className="k">{k}</span><span className="v">{String(v)}</span></div>)}
-                  </div>
-                )}
-                {stack && <pre className="stack">{stack}</pre>}
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {linkList.length > 0 && (
-        <div className="span-events">
-          <div className="span-sec">Links</div>
-          {linkList.map((l, i) => <div key={i} className="mono" style={{ fontSize: 12 }}>trace {String(l.trace_id)} · span {String(l.span_id)}</div>)}
-        </div>
-      )}
-      <div className="logdetail" style={{ background: "transparent" }}>
-        <div className="kv">
-          {fields.map(([k, v]) => <div key={k} style={{ display: "contents" }}><span className="k">{k}</span><span className="v">{String(v)}</span></div>)}
-        </div>
+    <aside className="panel span-panel" aria-label={`Span ${span.name}`}>
+      <div className="span-panel-head">
+        <span className="faint mono">Span #{span.span_id.slice(0, 12)}</span>
+        <div className="span-panel-title"><b>{span.name}</b>{kind && kind !== "Unspecified" && <span className="trace-kind">{kind.toUpperCase()}</span>}</div>
+        <span className="faint">{span.service}{isError(span.status) && <span className="bad"> · error{span.raw.status_message ? `: ${String(span.raw.status_message)}` : ""}</span>}</span>
       </div>
-    </Panel>
+      <Tabs tabs={tabs} active={tab} onPick={setTab} />
+      <div className="span-panel-body">
+        {tab === "overview" && (
+          <>
+            <div className="span-when mono">
+              <span>{at(span.start)}</span><b>{fmtMs(span.dur)}</b><span>{at(span.start + span.dur)}</span>
+            </div>
+            <DurationCompare span={span} />
+            <KV entries={Object.entries(attrs).slice(0, 12)} title="Attributes" />
+          </>
+        )}
+        {tab === "attributes" && <KV entries={Object.entries(attrs)} />}
+        {tab === "resource" && <KV entries={Object.entries(resource)} />}
+        {tab === "events" && (
+          <>
+            {span.events.length === 0 && logs.length === 0 && <div className="faint">No events or logs for this span.</div>}
+            {span.events.map((e, i) => {
+              const { "exception.stacktrace": stack, ...rest } = e.attributes;
+              return (
+                <div key={i} className={`span-event${isException(e) ? " exc" : ""}`}>
+                  <div className="span-event-head"><span className="mono faint">+{fmtMs(e.at - span.start)}</span>
+                    <b>{isException(e) ? rest["exception.type"] ?? "exception" : e.name}</b>{isException(e) && rest["exception.message"] && <span>{rest["exception.message"]}</span>}</div>
+                  <KV entries={Object.entries(rest)} />
+                  {stack && <pre className="stack">{stack}</pre>}
+                </div>
+              );
+            })}
+            {logs.map((l, i) => (
+              <div key={"l" + i} className="span-event">
+                <div className="span-event-head"><span className={`sev ${String(l.severity_text ?? "").toLowerCase()}`}>{String(l.severity_text ?? "LOG")}</span><span>{String(l.body ?? "")}</span></div>
+              </div>
+            ))}
+          </>
+        )}
+        {tab === "links" && (links.length ? links.map((l, i) => <div key={i} className="mono" style={{ fontSize: 12 }}>trace {String(l.trace_id)} · span {String(l.span_id)}</div>) : <div className="faint">No links.</div>)}
+      </div>
+    </aside>
+  );
+}
+
+function KV({ entries, title }: { entries: [string, unknown][]; title?: string }) {
+  const shown = entries.filter(([, v]) => v != null && v !== "");
+  if (!shown.length) return title ? null : <div className="faint">None.</div>;
+  return (
+    <div className="span-kv">
+      {title && <div className="span-sec">{title}</div>}
+      <div className="kv">{shown.map(([k, v]) => <div key={k} style={{ display: "contents" }}><span className="k">{k}</span><span className="v">{typeof v === "object" ? JSON.stringify(v) : String(v)}</span></div>)}</div>
+    </div>
+  );
+}
+
+/** This span's duration against the same operation's spans within half an hour either side. */
+function DurationCompare({ span }: { span: Span }) {
+  const w = { start: new Date(span.start / 1e6 - 1_800_000).toISOString(), end: new Date(span.start / 1e6 + 1_800_000).toISOString() };
+  const base = { signal: "traces" as const, ...w, services: [span.service], where: [{ field: "name", op: "=", value: span.name }] };
+  const k = span.span_id;
+  const hist = useQuery({ ...base, group_by: ["log:duration_ns"], aggs: [{ fn: "count" }], limit: 500 }, "dh" + k);
+  const pct = useQuery({ ...base, aggs: ["p50", "p75", "p90", "p99"].map((fn) => ({ fn, field: "duration_ns" })) }, "dp" + k);
+  const bars = (hist.data ? records(hist.data) : []).filter((r) => r["log:duration_ns"] != null)
+    .map((r) => ({ b: Number(r["log:duration_ns"]), n: Number(r.count) })).sort((a, b) => a.b - b.b);
+  const total = bars.reduce((a, x) => a + x.n, 0);
+  const mine = Math.floor(Math.log2(Math.max(span.dur, 1)) * LOG_STEPS);   // its log:duration_ns bucket (see bucketLow)
+  const p = pct.data ? records(pct.data)[0] ?? {} : {};
+  const lo = bars.length ? bars[0].b : 0, hi = bars.length ? bars[bars.length - 1].b + 1 : 1;
+  const xOf = (b: number) => ((Math.min(Math.max(b, lo), hi) - lo) / (hi - lo || 1)) * 100;
+  // Share of the operation's spans in lower buckets (faster), and in this span's own bucket.
+  const faster = total ? (bars.filter((x) => x.b < mine).reduce((a, x) => a + x.n, 0) / total) * 100 : 0;
+  const share = total ? ((bars.find((x) => x.b === mine)?.n ?? 0) / total) * 100 : 0;
+  const max = Math.max(1, ...bars.map((x) => x.n));
+  return (
+    <div className="dur-compare">
+      <div className="span-sec">Span duration</div>
+      <Loads q={hist} empty={!total} height={70}>
+        {() => (
+          <>
+            <p className="faint" style={{ margin: 0 }}>
+              {fmtMs(span.dur)} against {fmtNum(total)} <span className="mono">{span.name}</span> spans within 30 min:{" "}
+              {faster >= 50 ? `slower than ${faster.toFixed(0)}%` : `faster than ${(100 - faster - share).toFixed(0)}%`} of them.
+            </p>
+            <div className="dur-chart">
+              {bars.map((x) => (
+                <span key={x.b} className={`dur-bar${x.b === mine ? " mine" : ""}`}
+                      style={{ left: `${xOf(x.b)}%`, width: `${100 / (hi - lo || 1)}%`, height: `${Math.max(6, (x.n / max) * 100)}%` }}
+                      title={`${fmtMs(bucketLow(x.b))}–${fmtMs(bucketLow(x.b + 1))}: ${x.n}`} />
+              ))}
+              <span className="dur-mine" style={{ left: `${xOf(mine)}%` }} title={`this span: ${fmtMs(span.dur)}`} />
+            </div>
+            <div className="dur-marks mono">
+              {(["p50", "p75", "p90", "p99"] as const).filter((q) => p[`${q}(duration_ns)`] != null).map((q) => (
+                <span key={q}><span className="faint">{q === "p50" ? "median" : q}</span> {fmtMs(Number(p[`${q}(duration_ns)`]))}</span>
+              ))}
+            </div>
+          </>
+        )}
+      </Loads>
+    </div>
   );
 }
 
@@ -354,15 +459,5 @@ function layout(rows: Record<string, unknown>[]): Span[] {
     for (const c of (kids.get(s.span_id) ?? []).sort((a, b) => a.start - b.start)) walk(c, d + 1);
   };
   roots.sort((a, b) => a.start - b.start).forEach((r) => walk(r, 0));
-  return out;
-}
-
-function flatten(r: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(r)) {
-    if (v && typeof v === "object" && !Array.isArray(v)) for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) out[`${k === "resource_attributes" ? "resource" : k}.${k2}`] = v2;
-    else if (Array.isArray(v)) out[k] = v.length ? JSON.stringify(v) : null;
-    else out[k] = v;
-  }
   return out;
 }

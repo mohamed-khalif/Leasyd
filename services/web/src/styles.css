@@ -642,3 +642,50 @@ tr:hover .link { text-decoration: underline; }
 .svc-sum-kv > div { display: grid; min-width: 0; }
 .svc-sum-kv .mono { overflow-wrap: anywhere; }
 @media (max-width: 1100px) { .svcmap.with-panel { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- Trace view */
+.trace-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.trace-title { font-size: 15px; }
+.trace-kind { font: 600 10.5px var(--font-mono); padding: 2px 6px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); letter-spacing: .04em; }
+.trace-head .bad, .tw-row .bad, .span-panel .bad { color: var(--sev-error); }
+.trace-split { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 12px; align-items: start; }
+@media (max-width: 1150px) { .trace-split { grid-template-columns: minmax(0, 1fr); } }
+.trace-table { overflow-x: auto; }
+.tw-row { display: grid; grid-template-columns: minmax(240px, 2.2fr) minmax(110px, 1fr) 76px minmax(160px, 2fr); gap: 10px; align-items: center;
+  min-height: 28px; padding-right: 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); font: 12px var(--font-mono); cursor: pointer; }
+.tw-row:hover { background: var(--surface-2); }
+.tw-row.on { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.tw-headrow { cursor: default; color: var(--text-2); background: var(--surface-2); min-height: 32px; position: sticky; top: 0; z-index: 1; }
+.tw-headrow:hover { background: var(--surface-2); }
+.tw-row .num { text-align: right; }
+.tw-name { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.tw-name > span:not(.tw-toggle):not(.tw-count):not(.tw-ev) { overflow: hidden; text-overflow: ellipsis; }
+.tw-toggle { width: 16px; height: 16px; flex: none; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--surface);
+  color: var(--text-2); font: 11px/1 var(--font-mono); padding: 0; cursor: pointer; }
+.tw-toggle.none { border-color: transparent; background: none; }
+.tw-count { font-size: 10.5px; padding: 0 5px; border-radius: 8px; background: var(--surface-3); color: var(--text-2); }
+.tw-ev { font-size: 10.5px; color: var(--text-2); }
+.tw-ev.exc { color: var(--sev-error); }
+.tw-svc { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.tw-svc i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.tw-track { position: relative; height: 28px; }
+.tw-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); }
+.span-panel { position: sticky; top: 0; max-height: calc(100vh - 120px); overflow: auto; display: grid; align-content: start; }
+.span-panel-head { padding: 14px 16px 8px; display: grid; gap: 4px; }
+.span-panel-title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 15px; overflow-wrap: anywhere; }
+.span-panel .tabs { padding: 0 16px; }
+.span-panel-body { padding: 14px 16px 16px; display: grid; gap: 14px; }
+.span-when { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
+.span-when b { justify-self: center; padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); font-weight: 500;
+  background: linear-gradient(var(--border), var(--border)) left center / 100% 1px no-repeat; }
+.dur-compare { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--well); }
+.dur-chart { position: relative; height: 54px; border-bottom: 1px solid var(--border); }
+.dur-bar { position: absolute; bottom: 0; background: color-mix(in srgb, var(--accent) 35%, var(--surface-3)); border-right: 1px solid var(--well); }
+.dur-bar.mine { background: var(--accent); }
+.dur-mine { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--text); }
+.dur-marks { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; }
+.span-kv { display: grid; gap: 6px; }
+.span-kv .kv { font-size: 12px; }
+.span-panel .kv { grid-template-columns: minmax(110px, 42%) minmax(0, 1fr); }
+.span-panel .tabs { overflow-x: auto; }
+.span-panel .tabs button { white-space: nowrap; }
