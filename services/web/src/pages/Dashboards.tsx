@@ -18,8 +18,8 @@ const TYPES: [PanelType, string][] = [["timeseries", "Line"], ["bars", "Stacked 
 function favorites(): string[] { try { return JSON.parse(localStorage.getItem("leasyd.dash.fav") ?? "[]"); } catch { return []; } }
 function saveFavorites(f: string[]) { try { localStorage.setItem("leasyd.dash.fav", JSON.stringify(f)); } catch { /* ignore */ } }
 
-export function Dashboards({ ctx, path }: { ctx: Ctx; path: string }) {
-  const [, , id, mode] = path.split("/");          // /dashboards[/<id>[/edit]]
+export function Dashboards({ ctx, path, params }: { ctx: Ctx; path: string; params: URLSearchParams }) {
+  const [, , id, mode] = path.split("/");          // /dashboards[/<id>[/edit]][?service_name=a]
   const [list, setList] = useState<DashboardSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -67,7 +67,8 @@ export function Dashboards({ ctx, path }: { ctx: Ctx; path: string }) {
         {!list && !error ? <div className="skeleton" style={{ height: 120, margin: 12 }} /> : shown.map(item)}
       </aside>
       <div className="dash-main">
-        {current ? <DashboardView key={`${current}:${nonce}`} ctx={ctx} id={current} edit={mode === "edit"} onChanged={reload} /> :
+        {current ? <DashboardView key={`${current}:${nonce}`} ctx={ctx} id={current} edit={mode === "edit"} onChanged={reload}
+                                  service={params.get("service_name")} /> :
           <div className="state">No dashboards yet</div>}
       </div>
     </div>
@@ -76,14 +77,14 @@ export function Dashboards({ ctx, path }: { ctx: Ctx; path: string }) {
 
 // ------------------------------------------------------------------ one dashboard
 
-function DashboardView({ ctx, id, edit, onChanged }: { ctx: Ctx; id: string; edit: boolean; onChanged: () => void }) {
+function DashboardView({ ctx, id, edit, onChanged, service }: { ctx: Ctx; id: string; edit: boolean; onChanged: () => void; service: string | null }) {
   const [saved, setSaved] = useState<Dashboard | null>(null);
   const [draft, setDraft] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Panel | null>(null);
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState(false);
-  const [vars, setVars] = useState<Record<string, string[]>>({});
+  const [vars, setVars] = useState<Record<string, string[]>>(service ? { service_name: [service] } : {});
   useEffect(() => {
     setError(null);
     const builtin = BUILTIN.find((d) => d.id === id);

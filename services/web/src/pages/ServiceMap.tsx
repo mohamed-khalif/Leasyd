@@ -248,7 +248,11 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
               </div>
             ))}
           </div>
-          <button className="btn" onClick={() => ctx.go(`/traces?service=${encodeURIComponent(node.service)}`)}>View its traces</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={() => ctx.go(`/traces?service=${encodeURIComponent(node.service)}`)}>View its traces</button>
+            {a.language === "java" &&
+              <button className="btn" onClick={() => ctx.go(`/dashboards/builtin-jvm?service_name=${encodeURIComponent(node.service)}`)}>JVM dashboard</button>}
+          </div>
         </div>
       ) : (
         <div className="svc-panel-body">

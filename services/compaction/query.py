@@ -946,14 +946,17 @@ def _s3():
 
 def _epoch_of(v, name):
     """ISO-8601 or epoch seconds -> epoch seconds."""
+    t = None
     if isinstance(v, (int, float)) and not isinstance(v, bool):
-        return int(v)
-    if isinstance(v, str) and v:
+        t = int(v)
+    elif isinstance(v, str) and v:
         try:
-            return int(float(v))
+            t = int(float(v))
         except ValueError:
-            return int(lookup._parse(v).timestamp())
-    raise BadQuery(f"{name} is required (ISO-8601 or epoch seconds)")
+            t = int(lookup._parse(v).timestamp())
+    if t is None or not 0 <= t < 253402300800:               # before year 10000: not milli/nanoseconds
+        raise BadQuery(f"{name} is required (ISO-8601 or epoch seconds)")
+    return t
 
 
 def _promql_api(tenant, q):

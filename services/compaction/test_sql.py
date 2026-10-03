@@ -72,3 +72,4 @@ def test_api_takes_iso_or_epoch_times(monkeypatch):
         assert query._sql_api("acme", {"sql": "SELECT 1", "start": start, "end": end})["statusCode"] == 200
     assert seen[0] == (f"{DAY}T10:00:00Z", f"{DAY}T11:00:00Z") and seen[1] == ("2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z")
     assert query._sql_api("acme", {"sql": "SELECT 1", "start": "yesterday", "end": E})["statusCode"] == 400
+    assert query._sql_api("acme", {"sql": "SELECT 1", "start": str(1767261600 * 10**9), "end": E})["statusCode"] == 400   # nanoseconds

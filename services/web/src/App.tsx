@@ -73,7 +73,7 @@ export function App() {
     const [, , tab, sub] = path.split("/");
     crumb = ["Alerts", tab === "rules" && sub ? (sub === "new" ? "New rule" : "Rule") : tab === "channels" ? "Channels" : tab === "history" ? "History" : "Rules"];
   } else if (path.startsWith("/dashboards")) {
-    page = <Dashboards ctx={ctx} path={path} />;
+    page = <Dashboards ctx={ctx} path={path} params={params} />;
     crumb = ["Dashboards", path.endsWith("/edit") ? "Edit dashboard" : "All dashboards"];
   } else if (path.startsWith("/query")) {
     page = <QueryBuilder ctx={ctx} params={params} />;
