@@ -48,6 +48,7 @@ export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bu
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const Y = (v: number) => padT + (1 - v / ymax) * (h - padT - padB);
   const bw = Math.max(1, X(x0 + p.bucketMs) - X(x0) - 1);
+  const nX = Math.max(2, Math.min(5, Math.floor((w - padL - padR) / 64)));   // time labels need ~64 px each
   const hb = hover == null ? null : p.bars.find((b) => hover >= X(b.t) && hover <= X(b.t) + bw + 1);
   return (
     <div>
@@ -62,7 +63,7 @@ export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bu
               <text x={padL - 6} y={Y(v) + 3} textAnchor="end" fill="var(--text-3)" style={axis}>{fmt(v)}</text>
             </g>
           ))}
-          {Array.from({ length: 5 }, (_, i) => x0 + ((x1 - x0) * (i + 0.5)) / 5).map((t) => (
+          {Array.from({ length: nX }, (_, i) => x0 + ((x1 - x0) * (i + 0.5)) / nX).map((t) => (
             <text key={t} x={X(t)} y={h - 5} textAnchor="middle" fill="var(--text-3)" style={axis}>{fmtTime(new Date(t).toISOString(), p.range)}</text>
           ))}
           {p.bars.map((b) => {

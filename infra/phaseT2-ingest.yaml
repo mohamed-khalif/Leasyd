@@ -114,6 +114,15 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/authorizers/${Authorizer}"
 
+  # A customer's Firehose (CloudWatch metric streams) sends the key as X-Amz-Firehose-Access-Key.
+  FirehoseAuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/authorizers/${FirehoseAuthorizer}"
+
   # ---------- Ingest ----------
 
   IngestRole:
@@ -238,6 +247,16 @@ Resources:
       # takes effect sooner). 60 s costs only a few extra authorizer calls.
       AuthorizerResultTtlInSeconds: 60
 
+  FirehoseAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: firehose-access-key
+      RestApiId: !Ref Api
+      Type: REQUEST
+      IdentitySource: method.request.header.X-Amz-Firehose-Access-Key
+      AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations"
+      AuthorizerResultTtlInSeconds: 60
+
   V1Resource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -257,6 +276,12 @@ Resources:
   QueryResource:
     Type: AWS::ApiGateway::Resource
     Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: query }
+  AwsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: aws }
+  CloudWatchMetricsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AwsResource, PathPart: cloudwatch-metrics }
 
   LogsMethod:
     Type: AWS::ApiGateway::Method
@@ -304,6 +329,23 @@ Resources:
       Integration:
         # The tenant reaches the Lambda in requestContext.authorizer, which
         # only the authorizer can set.
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
+        TimeoutInMillis: 29000
+
+  # CloudWatch metric streams from a customer's account, through their Firehose's HTTP endpoint
+  # destination (examples/aws/cloudwatch-metrics.yaml); ingest converts them to metrics.
+  CloudWatchMetricsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref CloudWatchMetricsResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref FirehoseAuthorizer
+      ApiKeyRequired: true
+      Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
@@ -856,9 +898,9 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV12:
+  DeploymentV13:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, QueryMethod, QueryJobMethod]
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
@@ -869,7 +911,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV12
+      DeploymentId: !Ref DeploymentV13
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

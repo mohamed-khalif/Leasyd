@@ -49,7 +49,13 @@ def test_valid_key_maps_to_tenant(auth):
     stmt = out["policyDocument"]["Statement"][0]
     assert stmt["Effect"] == "Allow"
     base = "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest"
-    assert stmt["Resource"] == [f"{base}/POST/v1/logs", f"{base}/POST/v1/traces", f"{base}/POST/v1/metrics"]
+    assert stmt["Resource"] == [f"{base}/POST/v1/logs", f"{base}/POST/v1/traces", f"{base}/POST/v1/metrics",
+                                f"{base}/POST/v1/aws/cloudwatch-metrics"]
+
+
+def test_firehose_sends_the_key_in_its_own_header(auth):
+    out = call(auth, {"X-Amz-Firehose-Access-Key": "good-key"})
+    assert out["context"] == {"tenant": "acme", "scope": "ingest"} and out["usageIdentifierKey"] == "good-key"
 
 
 def test_read_key_may_only_query(auth):

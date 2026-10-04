@@ -1,7 +1,8 @@
 """OTLP/HTTP ingest Lambda (behind API Gateway and the API-key authorizer).
 
 POST /v1/logs | /v1/traces | /v1/metrics, body OTLP protobuf or JSON,
-optionally gzip-encoded. The request is converted to one OTLP JSON line per
+optionally gzip-encoded. POST /v1/aws/cloudwatch-metrics takes a customer's
+CloudWatch metric stream through their Firehose (cloudwatch.py) as metrics. The request is converted to one OTLP JSON line per
 Firehose record and put on the tenant's own delivery stream
 (obs-t-<tenant>-<signal>), which batches it into
 s3://.../_incoming/tenant=<T>/<signal>/dt=/hour=/ for compaction.
@@ -34,6 +35,8 @@ from google.protobuf.message import DecodeError
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+import cloudwatch
 
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
 TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "")   # empty: no metering, no caps
@@ -73,6 +76,8 @@ def handler(event, context):
         if not tenant or not _TENANT.match(tenant):
             raise HttpError(401, "no tenant for this API key")
         signal = (event.get("path") or "").rstrip("/").rsplit("/", 1)[-1]
+        if signal == "cloudwatch-metrics":
+            return firehose_handler(event, tenant)
         if signal not in SIGNALS:
             raise HttpError(404, f"unknown signal path {event.get('path')!r}")
         headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
@@ -97,21 +102,58 @@ def handler(event, context):
             out["headers"]["Retry-After"] = str(wait)
             return out
         doc = parse(signal, _body(event, headers), ctype)
-        records = list(to_records(signal, doc))
-        raw_bytes = sum(len(r) for r in records)
-        if RECORD_COMPRESSION == "gzip":
-            # Firehose bills the bytes it receives: send each record gzipped (~5x
-            # smaller). Its S3 objects are then gzip members back to back, which
-            # read as one gzip stream; the tenant's streams pass them through.
-            records = [gzip.compress(r, compresslevel=6) for r in records]
-        put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
-        meter.add(tenant, raw_bytes, _count(signal, doc))
-        print(json.dumps({"tenant": tenant, "signal": signal, "records": len(records),
-                          "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records)}))
+        out = accept(tenant, signal, doc)
+        print(json.dumps({"tenant": tenant, "signal": signal, **out}))
         return _response(200, ctype, None)
     except HttpError as e:
         print(json.dumps({"status": e.status, "error": str(e)}))
         return _response(e.status, "application/json", str(e))
+
+
+def accept(tenant, signal, doc):
+    """Puts an OTLP JSON document on the tenant's stream and meters it."""
+    records = list(to_records(signal, doc))
+    raw_bytes = sum(len(r) for r in records)
+    if RECORD_COMPRESSION == "gzip":
+        # Firehose bills the bytes it receives: send each record gzipped (~5x
+        # smaller). Its S3 objects are then gzip members back to back, which
+        # read as one gzip stream; the tenant's streams pass them through.
+        records = [gzip.compress(r, compresslevel=6) for r in records]
+    put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
+    meter.add(tenant, raw_bytes, _count(signal, doc))
+    return {"records": len(records), "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records)}
+
+
+def firehose_handler(event, tenant):
+    """POST /v1/aws/cloudwatch-metrics from the customer's Firehose (HTTP endpoint destination): answers
+    as Firehose expects, {requestId, timestamp[, errorMessage]}; on an error Firehose retries, then keeps
+    the data in the customer's backup bucket."""
+    headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+    request_id = headers.get("x-amz-firehose-request-id", "")
+
+    def answer(status, error=None):
+        body = {"requestId": request_id, "timestamp": int(time.time() * 1000)}
+        if error:
+            body["errorMessage"] = error
+            print(json.dumps({"status": status, "error": error, "source": "cloudwatch"}))
+        return {"statusCode": status, "headers": {"Content-Type": "application/json"}, "body": json.dumps(body)}
+
+    ended = meter.trial_ended(tenant)
+    if ended:
+        return answer(403, f"this Leasyd free trial ended on {ended[:10]}; contact {CONTACT_EMAIL}")
+    if meter.over_cap(tenant):
+        return answer(429, "daily data limit reached; accepted again from 00:00 UTC")
+    try:
+        rid, lines = cloudwatch.firehose_lines(_body(event, headers))
+        request_id = request_id or rid
+        doc = cloudwatch.to_otlp(lines)
+        out = accept(tenant, "metrics", doc) if doc["resourceMetrics"] else {"records": 0}
+    except cloudwatch.BadRequest as e:
+        return answer(400, str(e))
+    except HttpError as e:
+        return answer(e.status, str(e))
+    print(json.dumps({"tenant": tenant, "signal": "metrics", "source": "cloudwatch", "lines": len(lines), **out}))
+    return answer(200)
 
 
 # ------------------------------------------------------------------ metering and daily caps

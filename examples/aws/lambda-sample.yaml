@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  A sample Lambda function to try Leasyd's Lambda view: invoked 5 times a minute with an order
+  event, it fails about 1 in 12 times, and sends each invocation (a span) and its logs to Leasyd.
+  Delete the stack to stop.
+
+  aws cloudformation deploy --stack-name leasyd-lambda-sample \
+    --template-file lambda-sample.yaml --capabilities CAPABILITY_IAM \
+    --parameter-overrides LeasydApiKey=obs_...
+
+Parameters:
+  LeasydApiKey:
+    Type: String
+    NoEcho: true
+    Description: A Leasyd API key that sends data (Leasyd > Settings > API keys)
+  LeasydEndpoint:
+    Type: String
+    Default: https://ingest.leasyd.com
+
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: leasyd-sample-orders
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt Role.Arn
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          LEASYD_API_KEY: !Ref LeasydApiKey
+          LEASYD_ENDPOINT: !Ref LeasydEndpoint
+      Code:
+        ZipFile: |
+          """Sample Lambda function for trying Leasyd's Lambda view; it has no dependencies. It handles an
+          order event and fails now and then. Each invocation sends one OpenTelemetry span
+          (faas.invocation_id, cold start, the event) and its log lines to Leasyd as OTLP JSON. For your
+          own functions, use the OpenTelemetry Lambda layer instead.
+          Inline code (CloudFormation's limit: 4,096 characters)."""
+          import json, os, random, secrets, time, urllib.request
+
+          EP = os.environ.get("LEASYD_ENDPOINT", "https://ingest.leasyd.com")
+          KEY = os.environ.get("LEASYD_API_KEY", "")
+          cold = True
+
+
+          def work(event):
+              time.sleep(random.uniform(0.02, 0.3))
+              if random.random() < 0.08:
+                  raise RuntimeError(f"payment declined for order {event.get('order_id')}")
+              return {"status": "processed", "order_id": event.get("order_id")}
+
+
+          def kv(d):
+              return [{"key": k, "value": {"boolValue": v} if isinstance(v, bool) else
+                       {"intValue": str(v)} if isinstance(v, int) else {"stringValue": str(v)}} for k, v in d.items()]
+
+
+          def send(path, body):
+              req = urllib.request.Request(EP + path, json.dumps(body).encode(), {"content-type": "application/json", "x-api-key": KEY})
+              try:
+                  urllib.request.urlopen(req, timeout=3).read()
+              except Exception as e:
+                  print("leasyd export failed:", e)
+
+
+          def handler(event, context):
+              global cold
+              tid, sid, t0, logs = secrets.token_hex(16), secrets.token_hex(8), time.time_ns(), []
+              log = lambda sev, n, msg: logs.append({"timeUnixNano": str(time.time_ns()), "severityText": sev, "severityNumber": n,
+                                                     "body": {"stringValue": msg}, "traceId": tid, "spanId": sid})
+              attrs = {"faas.invocation_id": context.aws_request_id, "faas.coldstart": cold, "faas.trigger": "pubsub",
+                       "cloud.resource_id": context.invoked_function_arn, "aws.lambda.event": json.dumps(event)[:4000]}
+              cold, status, events = False, {"code": 1}, []
+              log("INFO", 9, f"order {event.get('order_id')} received")
+              try:
+                  out = work(event)
+                  log("INFO", 9, f"order {event.get('order_id')} processed")
+                  return out
+              except Exception as e:
+                  status = {"code": 2, "message": str(e)}
+                  events = [{"timeUnixNano": str(time.time_ns()), "name": "exception",
+                             "attributes": kv({"exception.type": type(e).__name__, "exception.message": str(e)})}]
+                  log("ERROR", 17, f"order {event.get('order_id')} failed: {e}")
+                  raise
+              finally:
+                  arn = context.invoked_function_arn.split(":")
+                  res = {"attributes": kv({"service.name": context.function_name, "cloud.provider": "aws", "cloud.platform": "aws_lambda",
+                                           "cloud.region": arn[3], "cloud.account.id": arn[4], "faas.name": context.function_name,
+                                           "faas.version": context.function_version, "faas.max_memory": int(context.memory_limit_in_mb),
+                                           "telemetry.sdk.language": "python"})}
+                  span = {"traceId": tid, "spanId": sid, "name": context.function_name, "kind": 2, "startTimeUnixNano": str(t0),
+                          "endTimeUnixNano": str(time.time_ns()), "attributes": kv(attrs), "status": status, "events": events}
+                  send("/v1/traces", {"resourceSpans": [{"resource": res, "scopeSpans": [{"scope": {"name": "sample"}, "spans": [span]}]}]})
+                  send("/v1/logs", {"resourceLogs": [{"resource": res, "scopeLogs": [{"scope": {"name": "sample"}, "logRecords": logs}]}]})
+
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      Targets:
+        - { Id: t0, Arn: !GetAtt Function.Arn, Input: '{"order_id": "ord-0", "source": "sample.orders", "detail-type": "OrderPlaced", "items": 1}' }
+        - { Id: t1, Arn: !GetAtt Function.Arn, Input: '{"order_id": "ord-1", "source": "sample.orders", "detail-type": "OrderPlaced", "items": 2}' }
+        - { Id: t2, Arn: !GetAtt Function.Arn, Input: '{"order_id": "ord-2", "source": "sample.orders", "detail-type": "OrderPlaced", "items": 3}' }
+        - { Id: t3, Arn: !GetAtt Function.Arn, Input: '{"order_id": "ord-3", "source": "sample.orders", "detail-type": "OrderPlaced", "items": 4}' }
+        - { Id: t4, Arn: !GetAtt Function.Arn, Input: '{"order_id": "ord-4", "source": "sample.orders", "detail-type": "OrderPlaced", "items": 5}' }
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn

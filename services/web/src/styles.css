@@ -689,3 +689,23 @@ tr:hover .link { text-decoration: underline; }
 .span-panel .kv { grid-template-columns: minmax(110px, 42%) minmax(0, 1fr); }
 .span-panel .tabs { overflow-x: auto; }
 .span-panel .tabs button { white-space: nowrap; }
+
+/* ---- AWS Lambda */
+.lambda { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.lambda.with-panel { grid-template-columns: minmax(0, 1fr) 440px; }
+.lambda-main { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.lambda .panel { grid-column: auto; min-width: 0; }
+.lambda-head { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 20px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.lambda-head > div { display: grid; gap: 3px; min-width: 0; }
+.lambda-head b { font-weight: 500; overflow-wrap: anywhere; }
+.lambda-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.lambda-h { margin: 6px 0 0; font-size: 16px; }
+.lambda-panel { position: sticky; top: 0; max-height: calc(100vh - 90px); overflow: auto; }
+.lambda-panel .svc-panel-body { justify-items: stretch; }
+.lambda-payload { margin: 0; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius); font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; }
+.lambda-logs { display: grid; gap: 2px; font-size: 12.5px; }
+.lambda-log { display: grid; grid-template-columns: 76px 52px 1fr; gap: 8px; padding: 3px 6px; border-radius: 4px; }
+.lambda-log.bad { background: color-mix(in srgb, var(--sev-error) 14%, transparent); }
+@media (max-width: 1100px) { .lambda.with-panel, .lambda-charts { grid-template-columns: minmax(0, 1fr); } }

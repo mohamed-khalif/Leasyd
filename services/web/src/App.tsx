@@ -12,6 +12,7 @@ import { Usage } from "./pages/Usage";
 import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
 import { ServiceMap } from "./pages/ServiceMap";
+import { Lambda } from "./pages/Lambda";
 import { Metrics } from "./pages/Metrics";
 import { Synthetics } from "./pages/Synthetics";
 import { Slos } from "./pages/Slos";
@@ -60,6 +61,10 @@ export function App() {
   } else if (path.startsWith("/services")) {
     page = <ServiceMap ctx={ctx} />;
     crumb = ["Services", "Service map"];
+  } else if (path.startsWith("/lambda")) {
+    const fn = path.split("/")[2];
+    page = <Lambda key={fn ?? ""} ctx={ctx} fn={fn ? decodeURIComponent(fn) : undefined} />;
+    crumb = ["AWS Lambda", fn ? decodeURIComponent(fn) : "Functions"];
   } else if (path.startsWith("/synthetics")) {
     page = <Synthetics ctx={ctx} path={path} />;
     const sub = path.split("/")[2];

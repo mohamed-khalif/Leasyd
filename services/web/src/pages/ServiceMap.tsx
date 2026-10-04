@@ -4,11 +4,11 @@
 // Clicking a service opens its panel: what it runs on, requests / errors / duration over time,
 // and its operations.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { records, sql } from "../api";
+import { records } from "../api";
 import type { Ctx } from "../App";
 import { Tabs } from "../components/Charts";
 import { Loads } from "../components/Panel";
-import { Loaded } from "../useQuery";
+import { useSql } from "../useQuery";
 import { bucketSeconds, fmtMs, fmtNum, rangeWindow } from "../time";
 
 type Node = { service: string; requests: number; errors: number; avg_ms: number; attrs: Record<string, string>; x: number; y: number };
@@ -20,7 +20,7 @@ const ATTRS: [string, string][] = [
   ["namespace", "service.namespace"], ["version", "service.version"], ["language", "telemetry.sdk.language"],
   ["runtime", "process.runtime.name"], ["runtime_version", "process.runtime.version"],
   ["k8s_namespace", "k8s.namespace.name"], ["k8s_deployment", "k8s.deployment.name"], ["k8s_pod", "k8s.pod.name"],
-  ["cloud", "cloud.provider"], ["account", "cloud.account.id"], ["region", "cloud.region"], ["zone", "cloud.availability_zone"],
+  ["cloud", "cloud.provider"], ["platform", "cloud.platform"], ["account", "cloud.account.id"], ["region", "cloud.region"], ["zone", "cloud.availability_zone"],
   ["host", "host.name"],
 ];
 const NODES_SQL = `SELECT service, count(*) FILTER (WHERE ${ENTRY}) AS requests,
@@ -33,21 +33,6 @@ const EDGES_SQL = `SELECT p.service AS source, c.service AS target, count(*) AS 
 FROM spans c JOIN spans p ON c.trace_id = p.trace_id AND c.parent_span_id = p.span_id
 WHERE c.service <> p.service GROUP BY 1, 2`;
 const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
-
-/** Runs one SQL query when `key` changes. */
-function useSql(text: string | null, w: { start: string; end: string }, key: string): Loaded {
-  const [state, setState] = useState<Loaded>({ data: null, error: null, loading: !!text });
-  useEffect(() => {
-    if (!text) return;
-    let live = true;
-    setState((s) => ({ ...s, loading: true, error: null }));
-    sql({ sql: text, ...w }).then((data) => live && setState({ data, error: null, loading: false }),
-      (e: Error) => live && setState({ data: null, error: e.message, loading: false }));
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
-  return state;
-}
 
 const errPct = (n: { requests: number; errors: number }) => (n.requests ? (n.errors / n.requests) * 100 : 0);
 const health = (pct: number) => (pct >= 5 ? "critical" : pct >= 1 ? "warning" : "ok");
@@ -197,7 +182,8 @@ function Dots({ d, n, err }: { d: string; n: number; err: number }) {
 }
 
 // telemetry.sdk.language -> its runtime dashboard
-const RUNTIME_DASHBOARDS: Record<string, [string, string]> = { java: ["builtin-jvm", "JVM dashboard"], nodejs: ["builtin-nodejs", "Node.js dashboard"] };
+const RUNTIME_DASHBOARDS: Record<string, [string, string]> = { java: ["builtin-jvm", "JVM dashboard"], nodejs: ["builtin-nodejs", "Node.js dashboard"],
+                                                              python: ["builtin-python", "Python dashboard"], ruby: ["builtin-ruby", "Ruby dashboard"] };
 
 function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: Node; minutes: number; edges: Edge[]; onClose: () => void }) {
   const [tab, setTab] = useState<"overview" | "operations">("overview");
@@ -251,12 +237,13 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
               </div>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn" onClick={() => ctx.go(`/traces?service=${encodeURIComponent(node.service)}`)}>View its traces</button>
             {RUNTIME_DASHBOARDS[a.language] &&
               <button className="btn" onClick={() => ctx.go(`/dashboards/${RUNTIME_DASHBOARDS[a.language][0]}?service_name=${encodeURIComponent(node.service)}`)}>
                 {RUNTIME_DASHBOARDS[a.language][1]}</button>}
             {a.host && <button className="btn" onClick={() => ctx.go(`/dashboards/builtin-hosts?host_name=${encodeURIComponent(a.host)}`)}>Host dashboard</button>}
+            {a.platform === "aws_lambda" && <button className="btn" onClick={() => ctx.go(`/lambda/${encodeURIComponent(node.service)}`)}>Lambda function</button>}
           </div>
         </div>
       ) : (

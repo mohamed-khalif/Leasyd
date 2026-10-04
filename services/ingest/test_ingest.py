@@ -374,3 +374,82 @@ def test_counts_metric_points():
     doc = {"resourceMetrics": [{"scopeMetrics": [{"metrics": [
         {"name": "a", "gauge": {"dataPoints": [{}, {}]}}, {"name": "b", "histogram": {"dataPoints": [{}]}}]}]}]}
     assert ingest._count("metrics", doc) == 3
+
+
+# ------------------------------------------------------------------ CloudWatch metric streams (Firehose)
+
+def cw_line(name="Duration", dims=None, ns="AWS/Lambda", unit="Milliseconds", value=None, ts=H20 // 10**6):
+    return {"metric_stream_name": "leasyd", "account_id": "123456789012", "region": "eu-west-1",
+            "namespace": ns, "metric_name": name, "dimensions": {"FunctionName": "checkout"} if dims is None else dims,
+            "timestamp": ts, "value": value or {"max": 812.0, "min": 3.5, "sum": 4210.5, "count": 37.0}, "unit": unit}
+
+
+def firehose_event(*records, gz=False, key_header=True):
+    body = json.dumps({"requestId": "req-1", "timestamp": 1, "records": [
+        {"data": base64.b64encode("".join(json.dumps(l) + "\n" for l in r).encode()).decode()} for r in records]}).encode()
+    e = event(body, ctype="application/json", path="/v1/aws/cloudwatch-metrics", gz=gz,
+              headers={"X-Amz-Firehose-Request-Id": "req-1"})
+    return e
+
+
+def test_cloudwatch_metric_stream_becomes_metrics(fh):
+    out = ingest.handler(firehose_event(
+        [cw_line(), cw_line("Invocations", unit="Count", value={"max": 1, "min": 1, "sum": 37, "count": 37})],
+        [cw_line("ConcurrentExecutions", dims={}, unit="Count"),
+         cw_line("Duration", dims={"FunctionName": "checkout", "Resource": "checkout:live"})], gz=True), None)
+    assert out["statusCode"] == 200
+    body = json.loads(out["body"])
+    assert body["requestId"] == "req-1" and "errorMessage" not in body and body["timestamp"] > 0
+    assert {s for s, _ in fh.puts} == {"obs-t-acme-metrics"}
+    [doc] = lines(fh)
+    res = {next(a["value"]["stringValue"] for a in r["resource"]["attributes"] if a["key"] == "service.name"): r
+           for r in doc["resourceMetrics"]}
+    assert set(res) == {"checkout", "aws-cloudwatch"}
+    attrs = {a["key"]: a["value"]["stringValue"] for a in res["checkout"]["resource"]["attributes"]}
+    assert attrs == {"service.name": "checkout", "cloud.provider": "aws", "cloud.account.id": "123456789012",
+                     "cloud.region": "eu-west-1", "cloud.platform": "aws_lambda", "faas.name": "checkout"}
+    metrics = {m["name"]: m for m in res["checkout"]["scopeMetrics"][0]["metrics"]}
+    assert set(metrics) == {"aws.lambda.duration", "aws.lambda.invocations"}
+    dur = metrics["aws.lambda.duration"]
+    assert dur["unit"] == "ms" and dur["histogram"]["aggregationTemporality"] == 1
+    p0, p1 = dur["histogram"]["dataPoints"]
+    assert (p0["count"], p0["sum"], p0["min"], p0["max"], p0["timeUnixNano"]) == ("37", 4210.5, 3.5, 812.0, str(H20 // 10**6 * 10**6))
+    assert {a["key"]: a["value"]["stringValue"] for a in p1["attributes"]} == {
+        "aws.namespace": "AWS/Lambda", "aws.metric_name": "Duration", "FunctionName": "checkout", "Resource": "checkout:live"}
+    assert metrics["aws.lambda.invocations"]["unit"] == "1"
+    [conc] = res["aws-cloudwatch"]["scopeMetrics"][0]["metrics"]
+    assert conc["name"] == "aws.lambda.concurrent_executions"
+
+
+def test_cloudwatch_metrics_compact_like_any_histogram(fh, tmp_path):
+    import compact
+    import duckdb
+    assert ingest.handler(firehose_event([cw_line()]), None)["statusCode"] == 200
+    obj = tmp_path / "m.json.gz"
+    obj.write_bytes(gzip.compress(b"".join(d for _, d in fh.puts)))
+    [w] = compact.compact("metrics", [str(obj)], str(tmp_path / "out"), "b1", "2026-09-26", "20")
+    got = duckdb.connect().execute(f"SELECT service, metric_name, metric_type, temporality, count, sum, min, max "
+                                   f"FROM read_parquet('{w['path']}')").fetchall()
+    assert got == [("checkout", "aws.lambda.duration", "histogram", 1, 37, 4210.5, 3.5, 812.0)]
+
+
+@pytest.mark.parametrize("name,ns,expected", [
+    ("Duration", "AWS/Lambda", "aws.lambda.duration"),
+    ("ConcurrentExecutions", "AWS/Lambda", "aws.lambda.concurrent_executions"),
+    ("CPUUtilization", "AWS/EC2", "aws.ec2.cpu_utilization"),
+    ("ApproximateNumberOfMessagesVisible", "AWS/SQS", "aws.sqs.approximate_number_of_messages_visible"),
+    ("Orders", "MyApp/Checkout", "aws.my_app.checkout.orders")])
+def test_cloudwatch_metric_names(name, ns, expected):
+    import cloudwatch
+    assert cloudwatch.metric_name(ns, name) == expected
+
+
+@pytest.mark.parametrize("body", [b"not json", b'{"records": "x"}',
+                                  json.dumps({"records": [{"data": "%%%"}]}).encode(),
+                                  json.dumps({"records": [{"data": base64.b64encode(b"opentelemetry bytes").decode()}]}).encode()])
+def test_cloudwatch_bad_requests_answer_as_firehose_expects(fh, body):
+    e = event(body, ctype="application/json", path="/v1/aws/cloudwatch-metrics", headers={"X-Amz-Firehose-Request-Id": "r9"})
+    out = ingest.handler(e, None)
+    assert out["statusCode"] == 400
+    b = json.loads(out["body"])
+    assert b["requestId"] == "r9" and b["errorMessage"] and not fh.puts

@@ -1,0 +1,10 @@
+source "https://rubygems.org"
+
+gem "sinatra", "~> 4.1"
+gem "puma", "~> 6.6"
+gem "rackup", "~> 2.2"
+gem "opentelemetry-sdk", "~> 1.13"
+gem "opentelemetry-exporter-otlp", "~> 0.31"
+gem "opentelemetry-instrumentation-all", "~> 0.86"
+gem "opentelemetry-metrics-sdk", "~> 0.19.0"   # see leasyd_runtime_metrics.rb before upgrading
+gem "opentelemetry-exporter-otlp-metrics", "~> 0.13"

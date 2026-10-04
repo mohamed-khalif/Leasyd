@@ -33,7 +33,8 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const Y = (v: number) => padT + (1 - v / ymax) * (h - padT - padB);
   const ticksY = [0, ymax / 2, ymax];
-  const ticksX = Array.from({ length: 5 }, (_, i) => x0 + ((x1 - x0) * (i + 0.5)) / 5);
+  const nX = Math.max(2, Math.min(5, Math.floor((w - padL - padR) / 64)));   // time labels need ~64 px each
+  const ticksX = Array.from({ length: nX }, (_, i) => x0 + ((x1 - x0) * (i + 0.5)) / nX);
 
   const hoverT = hover == null ? null : x0 + ((hover - padL) / (w - padL - padR)) * (x1 - x0);
   const nearest = (s: Series) => {

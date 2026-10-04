@@ -198,7 +198,7 @@ function Explorer({ ctx, service: initialService }: { ctx: Ctx; service?: string
 }
 
 type SpanEvent = { at: number; name: string; attributes: Record<string, string> };   // at: ns since the epoch
-type Span = { span_id: string; parent_span_id?: string; name: string; service: string; start: number; dur: number; status?: string; depth: number;
+export type Span = { span_id: string; parent_span_id?: string; name: string; service: string; start: number; dur: number; status?: string; depth: number;
               events: SpanEvent[]; raw: Record<string, unknown> };
 
 /** A span's events (OTLP span events: name, time, attributes), oldest first. */
@@ -376,7 +376,7 @@ function SpanPanel({ span, logs }: { span: Span; logs: Record<string, unknown>[]
   );
 }
 
-function KV({ entries, title }: { entries: [string, unknown][]; title?: string }) {
+export function KV({ entries, title }: { entries: [string, unknown][]; title?: string }) {
   const shown = entries.filter(([, v]) => v != null && v !== "");
   if (!shown.length) return title ? null : <div className="faint">None.</div>;
   return (
@@ -388,7 +388,7 @@ function KV({ entries, title }: { entries: [string, unknown][]; title?: string }
 }
 
 /** This span's duration against the same operation's spans within half an hour either side. */
-function DurationCompare({ span }: { span: Span }) {
+export function DurationCompare({ span, noun = "span" }: { span: Span; noun?: string }) {
   const w = { start: new Date(span.start / 1e6 - 1_800_000).toISOString(), end: new Date(span.start / 1e6 + 1_800_000).toISOString() };
   const base = { signal: "traces" as const, ...w, services: [span.service], where: [{ field: "name", op: "=", value: span.name }] };
   const k = span.span_id;
@@ -407,12 +407,12 @@ function DurationCompare({ span }: { span: Span }) {
   const max = Math.max(1, ...bars.map((x) => x.n));
   return (
     <div className="dur-compare">
-      <div className="span-sec">Span duration</div>
+      <div className="span-sec">{noun[0].toUpperCase() + noun.slice(1)} duration</div>
       <Loads q={hist} empty={!total} height={70}>
         {() => (
           <>
             <p className="faint" style={{ margin: 0 }}>
-              {fmtMs(span.dur)} against {fmtNum(total)} <span className="mono">{span.name}</span> spans within 30 min:{" "}
+              {fmtMs(span.dur)} against {fmtNum(total)} <span className="mono">{span.name}</span> {noun}s within 30 min:{" "}
               {faster >= 50 ? `slower than ${faster.toFixed(0)}%` : `faster than ${(100 - faster - share).toFixed(0)}%`} of them.
             </p>
             <div className="dur-chart">
@@ -421,7 +421,7 @@ function DurationCompare({ span }: { span: Span }) {
                       style={{ left: `${xOf(x.b)}%`, width: `${100 / (hi - lo || 1)}%`, height: `${Math.max(6, (x.n / max) * 100)}%` }}
                       title={`${fmtMs(bucketLow(x.b))}–${fmtMs(bucketLow(x.b + 1))}: ${x.n}`} />
               ))}
-              <span className="dur-mine" style={{ left: `${xOf(mine)}%` }} title={`this span: ${fmtMs(span.dur)}`} />
+              <span className="dur-mine" style={{ left: `${xOf(mine)}%` }} title={`this ${noun}: ${fmtMs(span.dur)}`} />
             </div>
             <div className="dur-marks mono">
               {(["p50", "p75", "p90", "p99"] as const).filter((q) => p[`${q}(duration_ns)`] != null).map((q) => (

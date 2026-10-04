@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Sends this account's CloudWatch metrics (AWS Lambda by default) to Leasyd: a CloudWatch metric
+  stream delivers them every minute through Amazon Data Firehose to Leasyd's HTTP endpoint. Data
+  Leasyd refuses (e.g. a wrong key) is kept for 7 days in a bucket here. Deploy it once per region.
+
+  aws cloudformation deploy --stack-name leasyd-cloudwatch-metrics \
+    --template-file cloudwatch-metrics.yaml --capabilities CAPABILITY_IAM \
+    --parameter-overrides LeasydApiKey=obs_...
+
+  AWS bills the stream ($0.003 per 1,000 metric updates; about 8 a minute per Lambda function)
+  and Firehose (per GB). Delete the stack to stop.
+
+Parameters:
+  LeasydApiKey:
+    Type: String
+    NoEcho: true
+    Description: A Leasyd API key that sends data (Leasyd > Settings > API keys)
+  LeasydEndpoint:
+    Type: String
+    Default: https://ingest.leasyd.com/v1/aws/cloudwatch-metrics
+  ExtraNamespace1:
+    Type: String
+    Default: ""
+    Description: Another CloudWatch namespace to send too, e.g. AWS/SQS, AWS/ApiGateway, AWS/DynamoDB (optional)
+  ExtraNamespace2:
+    Type: String
+    Default: ""
+    Description: And another (optional)
+
+Conditions:
+  Extra1: !Not [!Equals [!Ref ExtraNamespace1, ""]]
+  Extra2: !Not [!Equals [!Ref ExtraNamespace2, ""]]
+
+Resources:
+  # What Leasyd could not take after 5 minutes of retries, gzipped, kept for 7 days.
+  FailedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      LifecycleConfiguration:
+        Rules: [{ Id: expire, Status: Enabled, ExpirationInDays: 7 }]
+
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: firehose.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition: { StringEquals: { "sts:ExternalId": !Ref AWS::AccountId } }
+      Policies:
+        - PolicyName: failed-data
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload, s3:GetBucketLocation, s3:ListBucket, s3:ListBucketMultipartUploads]
+                Resource: [!GetAtt FailedBucket.Arn, !Sub "${FailedBucket.Arn}/*"]
+              - Effect: Allow
+                Action: logs:PutLogEvents
+                Resource: !GetAtt FirehoseLogStream.Arn
+
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 7
+  FirehoseLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      LogStreamName: delivery
+
+  DeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamType: DirectPut
+      HttpEndpointDestinationConfiguration:
+        EndpointConfiguration:
+          Name: Leasyd
+          Url: !Ref LeasydEndpoint
+          AccessKey: !Ref LeasydApiKey
+        RequestConfiguration:
+          ContentEncoding: GZIP
+        BufferingHints:
+          SizeInMBs: 1
+          IntervalInSeconds: 60
+        RetryOptions:
+          DurationInSeconds: 300
+        RoleARN: !GetAtt FirehoseRole.Arn
+        S3BackupMode: FailedDataOnly
+        S3Configuration:
+          BucketARN: !GetAtt FailedBucket.Arn
+          RoleARN: !GetAtt FirehoseRole.Arn
+          CompressionFormat: GZIP
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogGroup
+          LogStreamName: !Ref FirehoseLogStream
+
+  MetricStreamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: streams.metrics.cloudwatch.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition: { StringEquals: { "aws:SourceAccount": !Ref AWS::AccountId } }
+      Policies:
+        - PolicyName: to-firehose
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [firehose:PutRecord, firehose:PutRecordBatch]
+                Resource: !GetAtt DeliveryStream.Arn
+
+  MetricStream:
+    Type: AWS::CloudWatch::MetricStream
+    Properties:
+      FirehoseArn: !GetAtt DeliveryStream.Arn
+      RoleArn: !GetAtt MetricStreamRole.Arn
+      OutputFormat: json            # Leasyd reads the JSON format
+      IncludeFilters:
+        - Namespace: AWS/Lambda
+        - !If [Extra1, { Namespace: !Ref ExtraNamespace1 }, !Ref AWS::NoValue]
+        - !If [Extra2, { Namespace: !Ref ExtraNamespace2 }, !Ref AWS::NoValue]
+
+Outputs:
+  MetricStream:
+    Value: !Ref MetricStream
+  FailedDataBucket:
+    Description: Where data Leasyd refused is kept (check Firehose's log group too)
+    Value: !Ref FailedBucket
