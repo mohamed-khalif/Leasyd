@@ -196,6 +196,9 @@ function Dots({ d, n, err }: { d: string; n: number; err: number }) {
   );
 }
 
+// telemetry.sdk.language -> its runtime dashboard
+const RUNTIME_DASHBOARDS: Record<string, [string, string]> = { java: ["builtin-jvm", "JVM dashboard"], nodejs: ["builtin-nodejs", "Node.js dashboard"] };
+
 function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: Node; minutes: number; edges: Edge[]; onClose: () => void }) {
   const [tab, setTab] = useState<"overview" | "operations">("overview");
   const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
@@ -250,8 +253,10 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={() => ctx.go(`/traces?service=${encodeURIComponent(node.service)}`)}>View its traces</button>
-            {a.language === "java" &&
-              <button className="btn" onClick={() => ctx.go(`/dashboards/builtin-jvm?service_name=${encodeURIComponent(node.service)}`)}>JVM dashboard</button>}
+            {RUNTIME_DASHBOARDS[a.language] &&
+              <button className="btn" onClick={() => ctx.go(`/dashboards/${RUNTIME_DASHBOARDS[a.language][0]}?service_name=${encodeURIComponent(node.service)}`)}>
+                {RUNTIME_DASHBOARDS[a.language][1]}</button>}
+            {a.host && <button className="btn" onClick={() => ctx.go(`/dashboards/builtin-hosts?host_name=${encodeURIComponent(a.host)}`)}>Host dashboard</button>}
           </div>
         </div>
       ) : (

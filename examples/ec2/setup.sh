@@ -204,7 +204,7 @@ sleep 5
 if systemctl is-active --quiet otelcol-contrib; then
   echo
   echo "Done. The collector is running and sending to ${LEASYD_ENDPOINT}."
-  echo "Data shows up in Leasyd within a minute or two: Metrics (service ${HOST_SERVICE}), Logs$($SAMPLE_APP && echo ", Traces (shop-api, inventory)")."
+  echo "Data shows up in Leasyd within a minute or two: Dashboards > Leasyd - Hosts, Metrics (service ${HOST_SERVICE}), Logs$($SAMPLE_APP && echo ", Traces (shop-api, inventory)")."
   echo "Its own log: sudo journalctl -u otelcol-contrib -f"
 else
   echo "The collector did not start; see: sudo journalctl -u otelcol-contrib -n 50" >&2

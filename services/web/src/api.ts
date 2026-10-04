@@ -212,7 +212,7 @@ export function records(r: Result): Record<string, unknown>[] {
 export type PanelType = "timeseries" | "bars" | "stat" | "text";
 export type Panel = { id: string; type: PanelType; title: string; description?: string; w: number; h: number;
                       queries?: { promql: string; legend?: string }[]; unit?: string; decimals?: number; text?: string };
-export type Dashboard = { id: string; name: string; description: string; variables: { name: string; label: string }[]; panels: Panel[];
+export type Dashboard = { id: string; name: string; description: string; variables: { name: string; label: string; field?: string }[]; panels: Panel[];
                           version: number; updated_at?: string; updated_by?: string; created_by?: string; builtin?: boolean };
 export type DashboardSummary = { id: string; name: string; description: string; panels: number; version: number; updated_at?: string; updated_by?: string };
 export const dashboards = {

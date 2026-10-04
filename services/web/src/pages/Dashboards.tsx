@@ -19,7 +19,8 @@ function favorites(): string[] { try { return JSON.parse(localStorage.getItem("l
 function saveFavorites(f: string[]) { try { localStorage.setItem("leasyd.dash.fav", JSON.stringify(f)); } catch { /* ignore */ } }
 
 export function Dashboards({ ctx, path, params }: { ctx: Ctx; path: string; params: URLSearchParams }) {
-  const [, , id, mode] = path.split("/");          // /dashboards[/<id>[/edit]][?service_name=a]
+  const [, , id, mode] = path.split("/");          // /dashboards[/<id>[/edit]][?service_name=a&host_name=b]
+  const initial = Object.fromEntries([...new Set(params.keys())].map((k) => [k, params.getAll(k)]));
   const [list, setList] = useState<DashboardSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -68,7 +69,7 @@ export function Dashboards({ ctx, path, params }: { ctx: Ctx; path: string; para
       </aside>
       <div className="dash-main">
         {current ? <DashboardView key={`${current}:${nonce}`} ctx={ctx} id={current} edit={mode === "edit"} onChanged={reload}
-                                  service={params.get("service_name")} /> :
+                                  initial={initial} /> :
           <div className="state">No dashboards yet</div>}
       </div>
     </div>
@@ -77,14 +78,14 @@ export function Dashboards({ ctx, path, params }: { ctx: Ctx; path: string; para
 
 // ------------------------------------------------------------------ one dashboard
 
-function DashboardView({ ctx, id, edit, onChanged, service }: { ctx: Ctx; id: string; edit: boolean; onChanged: () => void; service: string | null }) {
+function DashboardView({ ctx, id, edit, onChanged, initial }: { ctx: Ctx; id: string; edit: boolean; onChanged: () => void; initial: Record<string, string[]> }) {
   const [saved, setSaved] = useState<Dashboard | null>(null);
   const [draft, setDraft] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Panel | null>(null);
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState(false);
-  const [vars, setVars] = useState<Record<string, string[]>>(service ? { service_name: [service] } : {});
+  const [vars, setVars] = useState<Record<string, string[]>>(initial);
   useEffect(() => {
     setError(null);
     const builtin = BUILTIN.find((d) => d.id === id);
@@ -196,9 +197,9 @@ function DashboardView({ ctx, id, edit, onChanged, service }: { ctx: Ctx; id: st
   );
 }
 
-// ------------------------------------------------------------------ filters ($service_name)
+// ------------------------------------------------------------------ filters ($service_name, $host_name)
 
-function Variables({ ctx, variables, values, onChange }: { ctx: Ctx; variables: { name: string; label: string }[];
+function Variables({ ctx, variables, values, onChange }: { ctx: Ctx; variables: Dashboard["variables"];
                     values: Record<string, string[]>; onChange: (v: Record<string, string[]>) => void }) {
   const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
   const opts = { group_by: ["service"], aggs: [{ fn: "count" }], limit: 500, ...w };
@@ -206,10 +207,13 @@ function Variables({ ctx, variables, values, onChange }: { ctx: Ctx; variables: 
   const l = useQuery({ signal: "logs", ...opts }, "vl" + ctx.range.key + ctx.tick);
   const m = useQuery({ signal: "metrics", ...opts }, "vm" + ctx.range.key + ctx.tick);
   const services = [...new Set([t, l, m].flatMap((q) => (q.data ? records(q.data).map((r) => String(r.service)) : [])))].sort();
+  const field = variables.find((v) => v.field)?.field;   // e.g. resource.host.name: options from the metrics
+  const f = useQuery(field ? { signal: "metrics", ...opts, group_by: [field] } : null, "vf" + field + ctx.range.key + ctx.tick);
+  const fieldValues = f.data ? records(f.data).map((r) => String(r[field!] ?? "")).filter(Boolean).sort() : [];
   return (
     <div className="dash-vars">
       {variables.map((v) => (
-        <VariablePicker key={v.name} label={v.label} options={v.name === "service_name" ? services : []} selected={values[v.name] ?? []}
+        <VariablePicker key={v.name} label={v.label} options={v.name === "service_name" ? services : v.field ? fieldValues : []} selected={values[v.name] ?? []}
                         onChange={(s) => onChange({ ...values, [v.name]: s })} />
       ))}
     </div>
@@ -252,7 +256,7 @@ export function fillQuery(text: string, vars: Record<string, string[]>, step: nu
     const re = vals.length ? vals.map(reEscape).join("|") : ".*";
     out = out.replace(new RegExp(`\\$\\{?${name}\\}?`, "g"), re.replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
   }
-  return out.replace(/\$\{?service_name\}?/g, ".*");
+  return out.replace(/\$\{?([a-z][a-z0-9_]*)\}?/g, ".*");   // filters left at "is any"
 }
 
 // ------------------------------------------------------------------ panels
