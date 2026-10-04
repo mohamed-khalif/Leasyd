@@ -21,4 +21,5 @@ export const IconDb = () => <svg {...s}><ellipse cx="8" cy="4" rx="5" ry="2" /><
 export const IconGear = () => <svg {...s}><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1" /></svg>;
 export const IconSpark = () => <svg {...s}><path d="M8 1.8l1.5 4.2 4.2 1.5-4.2 1.5L8 13.2 6.5 9 2.3 7.5 6.5 6z" /><path d="M13 11.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" /></svg>;
 export const IconMap = () => <svg {...s}><circle cx="3.5" cy="8" r="1.8" /><circle cx="12.5" cy="3.5" r="1.8" /><circle cx="12.5" cy="12.5" r="1.8" /><path d="M5.2 7.2 10.8 4.3M5.2 8.8l5.6 2.9" /></svg>;
+export const IconStart = () => <svg {...s}><path d="M3 13.5c1-3 2.5-5 4.5-6.5M7.5 7c.8-2 2.6-4.2 6-4.5-.3 3.4-2.5 5.2-4.5 6L7.5 7z" /><circle cx="10.4" cy="5.6" r=".9" /></svg>;
 export const IconLambda = () => <svg {...s}><path d="M3.5 2.5h2.6l6.4 11h-2.6L7.6 9.1 5.2 13.5H2.8l3.5-6.4L4.6 4.1H3.5z" /></svg>;

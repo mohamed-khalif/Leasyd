@@ -29,6 +29,11 @@ URL="$(out obs-phaseW1 WebUrl)"
 LOGINS=obs-state; aws cloudformation describe-stacks --stack-name obs-state >/dev/null 2>&1 || LOGINS=obs-phaseU1
 
 (cd services/web && npm ci --no-audit --no-fund && npm run build)
+# Install files the Get started page links to (<app>/install/...), from examples/.
+mkdir -p services/web/dist/install
+cp examples/ec2/setup.sh services/web/dist/install/collector.sh
+cp examples/ruby/leasyd_runtime_metrics.rb examples/aws/cloudwatch-metrics.yaml examples/aws/lambda-sample.yaml \
+  services/web/dist/install/
 cat > services/web/dist/config.json <<JSON
 { "region": "${AWS_DEFAULT_REGION}", "userPoolId": "$(out "$LOGINS" UserPoolId)",
   "clientId": "$(out "$LOGINS" AppClientId)", "apiBase": "", "ingestUrl": "$(out obs-phaseT2 IngestEndpoint)" }

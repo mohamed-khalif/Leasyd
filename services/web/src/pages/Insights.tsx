@@ -77,9 +77,18 @@ export function Insights({ ctx }: { ctx: Ctx }) {
   const svcCount = services.data?.rows.length ?? 0, opCount = operations.data?.rows.length ?? 0;
   const errPct = spans.data && errorSpans.data && Number(spans.data.rows[0]?.[0]) ? (Number(errorSpans.data.rows[0]?.[0] ?? 0) / Number(spans.data.rows[0][0])) * 100 : null;
 
+  const count = (q: typeof spans) => (q.data ? Number(q.data.rows[0]?.[0] ?? 0) : null);
+  const empty = count(spans) === 0 && count(logs) === 0 && count(points) === 0;   // nothing in the time range yet
+
   return (
     <>
       <div className="page-head"><h1>Home</h1><span className="faint">{ctx.range.label}</span></div>
+      {empty && (
+        <div className="start-banner">
+          <div><b>No data in this time range yet.</b> <span className="muted">Connect a server, an app or AWS Lambda in about five minutes.</span></div>
+          <button className="btn primary" onClick={() => ctx.go("/start")}>Get started</button>
+        </div>
+      )}
       <div className="grid">
         <div className="span-6">
           <div className="panel" style={{ height: "100%" }}>

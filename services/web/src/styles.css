@@ -709,3 +709,32 @@ tr:hover .link { text-decoration: underline; }
 .lambda-log { display: grid; grid-template-columns: 76px 52px 1fr; gap: 8px; padding: 3px 6px; border-radius: 4px; }
 .lambda-log.bad { background: color-mix(in srgb, var(--sev-error) 14%, transparent); }
 @media (max-width: 1100px) { .lambda.with-panel, .lambda-charts { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- Get started */
+.start { display: grid; gap: 14px; max-width: 1100px; }
+.start-head h2 { margin: 0 0 4px; font-size: 22px; }
+.start-head p { margin: 0; }
+.start .panel { grid-column: auto; }
+.start-step { display: grid; gap: 10px; }
+.start-step p { margin: 0; }
+.start-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.start-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.start-source { display: grid; gap: 3px; text-align: left; padding: 10px 12px; border-radius: var(--radius); cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text); font: inherit; }
+.start-source span { font-size: 12px; }
+.start-source:hover { border-color: var(--border-strong); }
+.start-source.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); }
+.start-guide { display: grid; gap: 10px; padding-top: 6px; }
+.start-code { position: relative; }
+.start-code .code { margin: 0; padding-right: 76px; }
+.start-code .btn { position: absolute; top: 6px; right: 6px; }
+.start-check { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.start-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border-strong); display: inline-grid; place-items: center;
+  font-size: 11px; flex: none; animation: start-pulse 1.4s ease-in-out infinite; }
+.start-check.ok .start-dot { background: var(--accent); border-color: var(--accent); color: #fff; animation: none; }
+@keyframes start-pulse { 50% { border-color: var(--accent); } }
+@media (prefers-reduced-motion: reduce) { .start-dot { animation: none; } }
+.start-svc { margin: 0 4px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); }
+.start-banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }

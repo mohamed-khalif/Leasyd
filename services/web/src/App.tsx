@@ -8,6 +8,7 @@ import { getConfig } from "./config";
 import { Shell } from "./Shell";
 import { SignIn } from "./pages/SignIn";
 import { Insights } from "./pages/Insights";
+import { GetStarted } from "./pages/GetStarted";
 import { Usage } from "./pages/Usage";
 import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
@@ -95,6 +96,9 @@ export function App() {
   } else if (path.startsWith("/ai")) {
     page = <Ai ctx={ctx} path={path} params={params} />;
     crumb = ["Leasyd AI", path.split("/")[2] ? "Investigation" : "Ask"];
+  } else if (path.startsWith("/start")) {
+    page = <GetStarted ctx={ctx} />;
+    crumb = ["Get started", "Send your first data"];
   } else if (path.startsWith("/settings")) {
     page = <Settings ctx={ctx} />;
     crumb = ["Settings", "Account"];
