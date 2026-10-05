@@ -2,7 +2,12 @@
 """Sets up Stripe for Leasyd's usage-based billing, and stores the settings in SSM (/obs/stripe/*),
 where obs-account-api and obs-tenant-admin read them (services/tenants/billing.py).
 
-  STRIPE_SECRET_KEY=sk_test_... AWS_DEFAULT_REGION=us-east-1 python3 infra/stripe-setup.py
+  STRIPE_SECRET_KEY=sk_test_... STRIPE_APP_KEY=rk_test_... AWS_DEFAULT_REGION=us-east-1 python3 infra/stripe-setup.py
+
+STRIPE_SECRET_KEY sets Stripe up (used here only, never stored). STRIPE_APP_KEY is the key Leasyd
+runs with, stored in SSM: a restricted key (rk_...) with only these permissions, Write on each:
+Checkout Sessions, Customer portal, Customers, Subscriptions, Billing Meter Events (others None).
+Without it, the secret key is stored instead (works, but has every permission).
 
 Run it with a test-mode key first (sk_test_...); later again with the live key (sk_live_...), which
 replaces the settings. Safe to repeat: what exists is reused (meters by event name, prices by lookup
@@ -27,6 +32,7 @@ import boto3
 API = "https://api.stripe.com/v1"
 VERSION = "2025-03-31.basil"
 KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+APP_KEY = os.environ.get("STRIPE_APP_KEY", "") or KEY
 API_DOMAIN = os.environ.get("API_DOMAIN", "ingest.leasyd.com")
 PARAMS = "/obs/stripe"
 PRODUCT = "leasyd_usage"
@@ -84,6 +90,10 @@ def main():
     if not KEY.startswith(("sk_test_", "sk_live_", "rk_test_", "rk_live_")):
         sys.exit("set STRIPE_SECRET_KEY to your Stripe secret key (sk_test_... first)")
     mode = "LIVE" if "_live_" in KEY else "test"
+    if not APP_KEY.startswith(("rk_", "sk_")) or ("_live_" in APP_KEY) != ("_live_" in KEY):
+        sys.exit(f"STRIPE_APP_KEY must be a {mode}-mode restricted key (rk_{'live' if mode == 'LIVE' else 'test'}_...)")
+    if APP_KEY == KEY:
+        print("  note: storing the secret key for Leasyd to run with; a restricted key (STRIPE_APP_KEY) is safer")
     print(f"Stripe account in {mode} mode")
 
     try:
@@ -147,7 +157,7 @@ def main():
         secret, endpoint = h["secret"], h["id"]
     print(f"  webhook {endpoint} -> {url}")
 
-    for name, value, kind in (("secret_key", KEY, "SecureString"), ("webhook_secret", secret, "SecureString"),
+    for name, value, kind in (("secret_key", APP_KEY, "SecureString"), ("webhook_secret", secret, "SecureString"),
                               ("endpoint", endpoint, "String"), ("config", json.dumps(config), "String")):
         ssm.put_parameter(Name=f"{PARAMS}/{name}", Value=value, Type=kind, Overwrite=True)
     print(f"Stored in SSM {PARAMS}/ (secret_key, webhook_secret, endpoint, config).")
