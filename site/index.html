@@ -4,21 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Leasyd brings your logs, traces and metrics together, with uptime checks, dashboards and alerts. Built on OpenTelemetry, priced per record, whole team included. 7-day free trial, no card.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23101114'/%3E%3Cpath d='M9 7v18h14' stroke='%236ea8fe' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b34d6'/%3E%3Cpath d='M9 7v18h14' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <title>Leasyd · Logs, traces and metrics, priced per record</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/site.css">
 </head>
-<body>
+<body class="lp">
 <div class="wrap">
   <nav class="top" aria-label="Main">
     <a class="brand" href="/" aria-label="Leasyd home">
-      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1c1f26"/><path d="M9 7v18h14" stroke="#6ea8fe" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#5b34d6"/><path d="M9 7v18h14" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Leasyd
     </a>
     <div class="navlinks">
-      <a href="#features" class="hide-sm">Product</a>
+      <a href="#products" class="hide-sm">Product</a>
       <a href="/pricing" class="hide-sm">Pricing</a>
       <a href="/docs" class="hide-sm">Docs</a>
       <a href="https://app.leasyd.com/">Sign in</a>
@@ -26,61 +26,115 @@
     </div>
   </nav>
 
-  <header class="hero-home">
-    <span class="eyebrow">Observability on OpenTelemetry</span>
-    <h1>See what your software is doing. Pay only for the data you send.</h1>
-    <p class="lede">Leasyd brings your logs, traces and metrics into one place, with uptime checks, dashboards and alerts on top. Point your OpenTelemetry SDK at it and your data shows up in about a minute.</p>
+  <header class="lp-hero">
+    <h1>Observability for every log, trace and metric</h1>
+    <p class="lede">See inside every service, request and check. Built on OpenTelemetry, with an AI SRE on call, and priced per record.</p>
     <div class="actions">
-      <a class="btn primary" href="https://app.leasyd.com/#/signup">Start your 7-day free trial</a>
-      <a class="btn" href="/pricing">See pricing</a>
-      <span class="trialtag">No card needed</span>
+      <a class="btn primary caps" href="https://app.leasyd.com/#/signup">Free trial</a>
+      <a class="btn outline caps" href="#products">&#9654;&nbsp; See the platform</a>
     </div>
   </header>
 
-  <div class="shot"><img src="/img/dashboard.jpg" width="1440" height="900" alt="A Leasyd dashboard: requests, error rate and response times for each service of an online shop, over the last 30 minutes."></div>
+  <div class="stage" aria-hidden="true">
+    <div class="board" id="board"><img src="/img/app-dash.jpg" alt="" width="1100" height="640" style="width:100%;height:100%;object-fit:cover;grid-column:1/-1;grid-row:1/-1;border-radius:14px"></div>
+  </div>
 
-  <section id="features" aria-labelledby="feat-h">
-    <h2 id="feat-h">Everything you need to run production</h2>
-    <div class="features">
-      <div><b>Logs</b><span>Search every log line across 30 days in seconds, filter by service and severity, and jump from a log to the request that wrote it.</span></div>
-      <div><b>Traces</b><span>Follow a request through every service. Spot slow and failing steps at a glance, with the outliers chart.</span></div>
-      <div><b>Metrics</b><span>Chart any metric your apps send, and query it with PromQL, including percentiles from your histograms.</span></div>
-      <div><b>Synthetic checks</b><span>Check your APIs and web pages every minute, from single requests to multi-step logins in a real browser.</span></div>
-      <div><b>Dashboards</b><span>Start from the built-in ones for services and checks, or build your own panel by panel.</span></div>
-      <div><b>Alerts and SLOs</b><span>Get told by email, Slack or webhook when something breaks, and track error budgets over time.</span></div>
+  <section class="lp-logos" aria-label="Works with">
+    <small>Works with the tools you already use</small>
+    <div class="row">
+      <span>OpenTelemetry</span><span class="mono">PromQL</span><span class="mono">SQL</span><span>Kubernetes</span><span>AWS Lambda</span><span>MCP</span>
     </div>
   </section>
 
-  <section aria-labelledby="trace-h">
-    <div class="split">
-      <div class="copy">
-        <h2 id="trace-h">Find the slow step, not just the slow service</h2>
-        <p class="sub">Every span from every service sits in one view, so you can go from "checkout is slow" to the one database call behind it.</p>
-        <ul>
-          <li>Outliers and errors stand out in red</li>
-          <li>Ready-made views for HTTP, gRPC, databases and AI calls</li>
-          <li>SQL over your raw data when you need an exact answer</li>
-        </ul>
+  <section class="band b-violet" aria-labelledby="mcp-h">
+    <div class="split-band">
+      <div class="chips" aria-hidden="true">
+        <div class="cloud">
+          <span class="chip">Logs</span><span class="chip">Traces</span><span class="chip">Metrics</span><span class="chip core">Leasyd Vault</span>
+          <span class="chip">Checks</span><span class="chip">Alerts</span><span class="chip">PromQL</span><span class="chip">SQL</span><span class="chip">SLOs</span>
+          <span class="chip">Claude</span><span class="chip">Cursor</span><span class="chip">VS Code</span>
+        </div>
       </div>
-      <div class="shot"><img src="/img/traces.jpg" width="1440" height="900" loading="lazy" alt="The Leasyd trace explorer: an outliers heat map of span durations and the newest spans, by service."></div>
+      <div class="band-copy">
+        <h2 id="mcp-h">New: the Leasyd MCP server</h2>
+        <p>Let Claude, Cursor and VS Code investigate with you. AI agents read your logs, traces, metrics, checks and alerts in Leasyd Vault through the same read-only tools as our AI SRE: ask "why did checkout get slow?" and get the trace behind it.</p>
+        <a class="more" href="/docs#mcp">Learn more</a>
+      </div>
     </div>
   </section>
 
-  <section aria-labelledby="how-h">
-    <h2 id="how-h">Up and running in three steps</h2>
-    <ol class="steps">
-      <li><b>Start a free trial</b><span>Sign up with your work email. No card, no sales call.</span></li>
-      <li><b>Create an API key</b><span>In Settings, create a key that sends data.</span></li>
-      <li><b>Point OpenTelemetry at Leasyd</b><span>Set these in any OpenTelemetry SDK or Collector:</span>
-        <pre class="code">OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.leasyd.com
-OTEL_EXPORTER_OTLP_HEADERS=x-api-key=&lt;your key&gt;</pre></li>
-    </ol>
+  <section class="band b-violet2" aria-labelledby="price-h">
+    <div class="band-inner">
+      <div class="band-copy">
+        <small style="font:700 12px var(--display);letter-spacing:.08em;text-transform:uppercase;opacity:.85">Simple pricing</small>
+        <h2 id="price-h">Pay for the data you keep, not for seats</h2>
+        <p><span class="price-big">$0.50 <small>per million spans or log records, kept 30 days</small></span></p>
+        <p>Drop the noise as it arrives and pay just $0.05 per million for it. Search, dashboards, alerts and every teammate included.</p>
+        <div><a class="btn ghost-w caps" href="/pricing">See pricing</a></div>
+      </div>
+      <div class="blocks" aria-hidden="true">
+        <i style="left:10%;top:20px"></i><i style="left:42%;top:0"></i><i style="left:70%;top:30px"></i>
+        <i style="left:25%;top:80px"></i><i style="left:56%;top:70px"></i><i style="left:84%;top:96px"></i>
+        <i style="left:12%;top:150px"></i><i style="left:44%;top:140px"></i><i style="left:74%;top:170px"></i>
+      </div>
+    </div>
+  </section>
+
+  <section class="band b-dark" id="products" aria-labelledby="prod-h">
+    <div class="band-inner">
+      <div class="prod">
+        <h2 id="prod-h">Products</h2>
+        <div class="prod-list" id="prod-list">
+          <details open data-img="/img/app-home.jpg" data-alt="Leasyd's home page: services, errors, volume and span durations at a glance.">
+            <summary>Overview</summary>
+            <div class="pd">Every service, error and check at a glance, with what changed since the hour before.<a href="https://app.leasyd.com/#/signup">Try it free ›</a></div>
+          </details>
+          <details data-img="/img/app-logs.jpg" data-alt="The Leasyd log explorer: log counts by severity over time and the newest log lines.">
+            <summary>Log Management</summary>
+            <div class="pd">Search every log line across 30 days in seconds, by service, severity or any attribute, and jump to the request that wrote it.<a href="/docs#explore">Learn more ›</a></div>
+          </details>
+          <details data-img="/img/app-traces.jpg" data-alt="The Leasyd trace explorer: an outliers heat map of span durations and the newest spans.">
+            <summary>APM &amp; Tracing</summary>
+            <div class="pd">Follow a request through every service; outliers and errors stand out in red, down to the one slow database call.<a href="/docs#explore">Learn more ›</a></div>
+          </details>
+          <details data-img="/img/app-dash.jpg" data-alt="A Leasyd dashboard: requests, errors and duration per service.">
+            <summary>Metrics &amp; Dashboards</summary>
+            <div class="pd">PromQL over every metric, span and log; ready-made dashboards for JVM, Node.js, Python, Ruby, hosts and AWS Lambda.<a href="/docs#dashboards">Learn more ›</a></div>
+          </details>
+          <details data-img="/img/app-synth.jpg" data-alt="Leasyd synthetic checks: uptime and response times of HTTP and browser checks.">
+            <summary>Synthetic Checks</summary>
+            <div class="pd">Check APIs and pages every minute, from one request to multi-step logins in a real browser, with alerts and SLOs.<a href="/docs#checks">Learn more ›</a></div>
+          </details>
+          <details data-img="/img/app-ai.jpg" data-alt="Leasyd AI: ask in plain words and get the evidence.">
+            <summary>AI SRE &amp; MCP</summary>
+            <div class="pd">Ask in plain words: Leasyd AI investigates your data and answers with the evidence. Or connect your own agents over MCP.<a href="/docs#mcp">Learn more ›</a></div>
+          </details>
+        </div>
+        <div class="prod-shot"><img id="prod-img" src="/img/app-home.jpg" width="1440" height="900" loading="lazy" alt="Leasyd's home page: services, errors, volume and span durations at a glance."></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band b-teal" aria-labelledby="start-h">
+    <div class="teal-grid">
+      <div class="band-copy">
+        <small style="font:700 12px var(--display);letter-spacing:.08em;text-transform:uppercase">Get started</small>
+        <h2 id="start-h">Your data in about a minute</h2>
+        <p>Point any OpenTelemetry SDK or Collector at Leasyd: no agent to install, nothing to rewrite. Java, Node.js, Python, Ruby, Go, .NET, Linux servers and AWS Lambda.</p>
+        <a class="more" href="/docs#quickstart">Read the quickstart</a>
+      </div>
+      <div class="teal-art">
+<pre class="code"><span class="k">OTEL_EXPORTER_OTLP_ENDPOINT</span>=<span class="v">https://ingest.leasyd.com</span>
+<span class="k">OTEL_EXPORTER_OTLP_HEADERS</span>=<span class="v">x-api-key=&lt;your key&gt;</span>
+<span class="k">OTEL_SERVICE_NAME</span>=<span class="v">checkout</span></pre>
+      </div>
+    </div>
   </section>
 
   <section aria-labelledby="why-h">
     <h2 id="why-h">Why teams pick Leasyd</h2>
     <div class="why">
-      <div><b>Simple, low pricing</b><span>$0.50 per million spans or log records kept 30 days. Drop the noise as it arrives and pay just $0.05 per million for it. Search included.</span></div>
+      <div><b>Simple, low pricing</b><span>One price per record, no plans or tiers. Drop rules cut the noise before it costs you.</span></div>
       <div><b>Your whole team, free</b><span>No seats to count. Invite everyone who's on call, and everyone who isn't.</span></div>
       <div><b>Open standards</b><span>OpenTelemetry in; PromQL, SQL and MCP out, all reading one store, Leasyd Vault. Nothing to rewrite if you ever leave.</span></div>
       <div><b>Your data, walled off</b><span>Each account's data sits apart, and AWS permissions stop any other account from reading it.</span></div>
@@ -103,5 +157,7 @@ OTEL_EXPORTER_OTLP_HEADERS=x-api-key=&lt;your key&gt;</pre></li>
     <nav aria-label="Footer"><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="https://app.leasyd.com/">Sign in</a><a href="mailto:support@leasyd.com">support@leasyd.com</a></nav>
   </footer>
 </div>
+<script src="/hero.js" defer></script>
+<script src="/home.js" defer></script>
 </body>
 </html>
