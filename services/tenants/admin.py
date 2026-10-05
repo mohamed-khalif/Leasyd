@@ -385,7 +385,7 @@ def delete(tenant, context=None):
             _remove_login(u)
     # Synthetic checks (S1): stop running them; and their excluded runs, maintenance windows, SLOs,
     # alert rules and channels (A1; an email channel's SNS topic too).
-    for prefix in ("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#", "dash#", "meter#", "ai#"):
+    for prefix in ("check#", "exclude#", "window#", "slo#", "alert#", "astate#", "channel#", "dash#", "meter#", "ai#", "drop#"):
         for c in _items(tenant, prefix):
             if c.get("topic_arn"):
                 try:
@@ -512,7 +512,8 @@ def status(tenant, context=None):
     meter = tenants.get_item(Key={"pk": f"meter#{tenant}#{_now():%Y-%m-%d}"}).get("Item") or {}
     return {"tenant": tenant, **{k: v for k, v in rec.items() if k not in ("pk", "tenant")},
             "today": {"bytes": int(meter.get("bytes", 0)), "records": int(meter.get("records", 0)),
-                      "refused_bytes": int(meter.get("refused_bytes", 0))},
+                      "refused_bytes": int(meter.get("refused_bytes", 0)),
+                      **{k: int(v) for k, v in meter.items() if k.startswith(("in_", "dropped_"))}},
             "searches": _searches(rec, tenant),
             "keys": sorted(keys, key=lambda k: k.get("created_at", ""))}
 

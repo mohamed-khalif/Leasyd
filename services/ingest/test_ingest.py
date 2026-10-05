@@ -453,3 +453,27 @@ def test_cloudwatch_bad_requests_answer_as_firehose_expects(fh, body):
     assert out["statusCode"] == 400
     b = json.loads(out["body"])
     assert b["requestId"] == "r9" and b["errorMessage"] and not fh.puts
+
+
+# ------------------------------------------------------------------ drop rules
+
+def test_drop_rules_drop_and_meter_per_signal(metered, fh):
+    ddb = metered
+    rules = [{"id": "r1", "name": "Debug logs", "signal": "logs", "enabled": True, "keep_percent": 0,
+              "conditions": [{"field": "body", "op": "contains", "value": "noise"}]}]
+    ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "drop#acme"}, "rules_json": {"S": json.dumps(rules)}})
+    assert ingest.handler(event(logs_pb(n=4, body="noise here").SerializeToString()), None)["statusCode"] == 200
+    assert not fh.puts                                   # everything dropped: nothing stored
+    assert ingest.handler(event(logs_pb(n=3, body="keep me").SerializeToString()), None)["statusCode"] == 200
+    assert len(lines(fh)) == 1
+    ingest.meter.flush()
+    m = meter_item(ddb, "acme")
+    assert m["records"] == 7 and m["in_logs"] == 7 and m["dropped_logs"] == 4
+    assert m["bytes"] == sum(len(r) for _, r in fh.puts)   # stored bytes only
+
+
+def test_unreadable_drop_rules_keep_everything(metered, fh):
+    ddb = metered
+    ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "drop#acme"}, "rules_json": {"S": "not json"}})
+    assert ingest.handler(event(logs_pb(n=2).SerializeToString()), None)["statusCode"] == 200
+    assert len(lines(fh)) == 1

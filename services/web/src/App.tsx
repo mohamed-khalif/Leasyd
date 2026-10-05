@@ -9,6 +9,7 @@ import { Shell } from "./Shell";
 import { SignIn } from "./pages/SignIn";
 import { Insights } from "./pages/Insights";
 import { GetStarted } from "./pages/GetStarted";
+import { DropRules } from "./pages/DropRules";
 import { Usage } from "./pages/Usage";
 import { Logs } from "./pages/Logs";
 import { Traces } from "./pages/Traces";
@@ -99,6 +100,9 @@ export function App() {
   } else if (path.startsWith("/start")) {
     page = <GetStarted ctx={ctx} />;
     crumb = ["Get started", "Send your first data"];
+  } else if (path.startsWith("/drop-rules")) {
+    page = <DropRules ctx={ctx} />;
+    crumb = ["Account", "Drop rules"];
   } else if (path.startsWith("/settings")) {
     page = <Settings ctx={ctx} />;
     crumb = ["Settings", "Account"];

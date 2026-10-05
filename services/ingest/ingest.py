@@ -37,6 +37,7 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportM
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 import cloudwatch
+import droprules
 
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
 TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "")   # empty: no metering, no caps
@@ -102,7 +103,7 @@ def handler(event, context):
             out["headers"]["Retry-After"] = str(wait)
             return out
         doc = parse(signal, _body(event, headers), ctype)
-        out = accept(tenant, signal, doc)
+        out = accept(tenant, signal, doc, drop=True)
         print(json.dumps({"tenant": tenant, "signal": signal, **out}))
         return _response(200, ctype, None)
     except HttpError as e:
@@ -110,8 +111,10 @@ def handler(event, context):
         return _response(e.status, "application/json", str(e))
 
 
-def accept(tenant, signal, doc):
-    """Puts an OTLP JSON document on the tenant's stream and meters it."""
+def accept(tenant, signal, doc, drop=False):
+    """Applies the tenant's drop rules (drop=True), puts what is left of an OTLP JSON document on the
+    tenant's stream and meters it: items received (billed for ingest) and dropped (never stored)."""
+    received, dropped = droprules.apply(signal, doc, meter.drop_rules(tenant)) if drop else (_count(signal, doc), 0)
     records = list(to_records(signal, doc))
     raw_bytes = sum(len(r) for r in records)
     if RECORD_COMPRESSION == "gzip":
@@ -119,9 +122,11 @@ def accept(tenant, signal, doc):
         # smaller). Its S3 objects are then gzip members back to back, which
         # read as one gzip stream; the tenant's streams pass them through.
         records = [gzip.compress(r, compresslevel=6) for r in records]
-    put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
-    meter.add(tenant, raw_bytes, _count(signal, doc))
-    return {"records": len(records), "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records)}
+    if records:
+        put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
+    meter.add(tenant, raw_bytes, received, signal=signal, dropped=dropped)
+    return {"records": len(records), "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records),
+            "items": received, "dropped": dropped}
 
 
 def firehose_handler(event, tenant):
@@ -147,7 +152,7 @@ def firehose_handler(event, tenant):
         rid, lines = cloudwatch.firehose_lines(_body(event, headers))
         request_id = request_id or rid
         doc = cloudwatch.to_otlp(lines)
-        out = accept(tenant, "metrics", doc) if doc["resourceMetrics"] else {"records": 0}
+        out = accept(tenant, "metrics", doc, drop=True) if doc["resourceMetrics"] else {"records": 0}
     except cloudwatch.BadRequest as e:
         return answer(400, str(e))
     except HttpError as e:
@@ -159,12 +164,31 @@ def firehose_handler(event, tenant):
 # ------------------------------------------------------------------ metering and daily caps
 
 class Meter:
-    """Per container: bytes and records accepted per (tenant, UTC day), added to obs-tenants'
-    meter#<tenant>#<day> every METER_FLUSH_S; and each tenant's cap and usage, re-read every
-    CAP_CHECK_S (so a cap is enforced within about that, plus the other containers' unflushed counts)."""
+    """Per container: what was accepted per (tenant, UTC day), added to obs-tenants'
+    meter#<tenant>#<day> every METER_FLUSH_S: bytes (stored), records (received, all signals),
+    refused_bytes, and per signal in_<signal> (received) and dropped_<signal> (by drop rules).
+    Each tenant's cap and usage are re-read every CAP_CHECK_S (so a cap is enforced within about
+    that, plus the other containers' unflushed counts), and its drop rules (drop#<tenant>) likewise."""
 
     def __init__(self):
-        self.pending, self.caps, self.flushed_at = {}, {}, time.time()
+        self.pending, self.caps, self.rules, self.flushed_at = {}, {}, {}, time.time()
+
+    def drop_rules(self, tenant):
+        """The tenant's drop rules (a list), re-read every CAP_CHECK_S; none if unreadable."""
+        if not TENANTS_TABLE:
+            return []
+        now = time.time()
+        cached = self.rules.get(tenant)
+        if not cached or now - cached[0] > CAP_CHECK_S:
+            try:
+                item = ddb.get_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"drop#{tenant}"}},
+                                    ProjectionExpression="rules_json").get("Item") or {}
+                rules = json.loads(item.get("rules_json", {}).get("S", "[]"))
+            except Exception as e:   # never fail ingest on rules: keep everything
+                print(json.dumps({"drop_rules": "read failed", "error": str(e)[:200]}))
+                rules = cached[1] if cached else []
+            cached = self.rules[tenant] = (now, rules if isinstance(rules, list) else [])
+        return cached[1]
 
     def trial_ended(self, tenant):
         """-> when the tenant's free trial ended (ISO-8601), if it has; else None."""
@@ -195,34 +219,39 @@ class Meter:
                 return None
             c = self.caps[tenant] = (now, day, cap, used, trial_end)
         _, _, cap, used, _ = c
-        pending = self.pending.get((tenant, day), (0, 0, 0))[0]
+        pending = self.pending.get((tenant, day), {}).get("bytes", 0)
         return cap if cap is not None and used + pending >= cap else None
 
-    def add(self, tenant, nbytes, records, refused=0):
+    def add(self, tenant, nbytes, records, refused=0, signal=None, dropped=0):
         if not TENANTS_TABLE:
             return
-        k = (tenant, _day())
-        b, r, x = self.pending.get(k, (0, 0, 0))
-        self.pending[k] = (b + nbytes, r + records, x + refused)
+        p = self.pending.setdefault((tenant, _day()), {})
+        counts = {"bytes": nbytes, "records": records, "refused_bytes": refused}
+        if signal:
+            counts.update({f"in_{signal}": records, f"dropped_{signal}": dropped})
+        for k, v in counts.items():
+            p[k] = p.get(k, 0) + v
         if time.time() - self.flushed_at >= METER_FLUSH_S:
             self.flush()
 
     def flush(self):
         self.flushed_at = time.time()
-        for (tenant, day), (b, r, x) in list(self.pending.items()):
+        for (tenant, day), counts in list(self.pending.items()):
+            names = sorted(counts)
             try:
                 ddb.update_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"meter#{tenant}#{day}"}},
-                                UpdateExpression="ADD #b :b, records :r, refused_bytes :x SET tenant = :t, #d = :d",
-                                ExpressionAttributeNames={"#b": "bytes", "#d": "day"},
-                                ExpressionAttributeValues={":b": {"N": str(b)}, ":r": {"N": str(r)}, ":x": {"N": str(x)},
-                                                           ":t": {"S": tenant}, ":d": {"S": day}})
+                                UpdateExpression="ADD " + ", ".join(f"#c{i} :c{i}" for i in range(len(names)))
+                                                 + " SET tenant = :t, #d = :d",
+                                ExpressionAttributeNames={"#d": "day", **{f"#c{i}": n for i, n in enumerate(names)}},
+                                ExpressionAttributeValues={":t": {"S": tenant}, ":d": {"S": day},
+                                                           **{f":c{i}": {"N": str(counts[n])} for i, n in enumerate(names)}})
             except Exception as e:   # keep the counts for the next flush
                 print(json.dumps({"meter": "flush failed", "error": str(e)[:200]}))
                 continue
             del self.pending[(tenant, day)]
             c = self.caps.get(tenant)
             if c and c[1] == day:
-                self.caps[tenant] = (c[0], day, c[2], c[3] + b, c[4])
+                self.caps[tenant] = (c[0], day, c[2], c[3] + counts.get("bytes", 0), c[4])
 
 
 def _size(n):

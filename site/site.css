@@ -133,3 +133,5 @@ footer a:hover { color: var(--fg); }
   .hero-home { padding-block: 40px 24px; }
   .cta-band { padding: 24px; }
 }
+.prices th .th-note { display: block; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12px; font-family: inherit; color: var(--faint); margin-top: 4px; max-width: 220px; }
+.breakdown .saved { color: var(--accent); }

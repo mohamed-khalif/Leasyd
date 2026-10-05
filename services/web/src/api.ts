@@ -100,7 +100,18 @@ export const account = {
   createKey: (scope: "ingest" | "read") =>
     call<{ key_id: string; scope: string; api_key: string }>("/v1/app/account/keys", { method: "POST", body: JSON.stringify({ scope }) }),
   revokeKey: (id: string) => call<unknown>(`/v1/app/account/keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  dropRules: () => call<{ rules: DropRule[]; updated_at?: string; updated_by?: string; limits: { rules: number; conditions: number } }>(
+    "/v1/app/account/drop-rules"),
+  saveDropRules: (rules: DropRule[]) =>
+    call<{ rules: DropRule[] }>("/v1/app/account/drop-rules", { method: "PUT", body: JSON.stringify({ rules }) }),
+  meters: (days = 2) => call<{ days: Meter[] }>(`/v1/app/account/meters?days=${days}`),
 };
+// Drop rules: data discarded as it arrives (billed for ingest only). The first enabled rule a
+// record matches keeps keep_percent of such records (0 drops them all).
+export type DropCondition = { field: string; op: "=" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "contains"; value: string | number | string[] };
+export type DropRule = { id?: string; name: string; signal: Signal; enabled: boolean; keep_percent: number; conditions: DropCondition[] };
+// One UTC day of the account's meter: records received (all signals), and per signal received and dropped.
+export type Meter = { day: string; records?: number; bytes?: number } & Partial<Record<`in_${Signal}` | `dropped_${Signal}`, number>>;
 export const query = (q: Query, opts?: Parameters<typeof runQuery>[1]) => runQuery<Result>(q, opts);
 
 // Synthetic checks (/v1/app/checks): the signed-in user's tenant's own checks.

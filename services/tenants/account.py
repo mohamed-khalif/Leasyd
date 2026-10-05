@@ -8,6 +8,10 @@
   DELETE /v1/app/account/users/{email}   owners: remove someone (not yourself)
   POST   /v1/app/account/keys         owners: a new API key {scope: ingest | read}, shown once
   DELETE /v1/app/account/keys/{id}    owners: revoke a key
+  GET  /v1/app/account/drop-rules     the tenant's drop rules (data discarded as it arrives)
+  PUT  /v1/app/account/drop-rules     owners: replace them {rules: [...]} (see check_drop_rules)
+  GET  /v1/app/account/meters?days=N  per UTC day (today and the N-1 before, N <= 31): records
+                                      received and, per signal, received (in_<s>) and dropped
 
 The tenant comes only from the signed-in user's token (custom:tenant). Changes are made by
 obs-tenant-admin (invoked here), which owns keys, streams and logins; this function only checks
@@ -24,6 +28,7 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from urllib.parse import unquote
 
 import boto3
@@ -65,7 +70,8 @@ def handler(event, context):
         if not tenant or not email:
             raise Refused(401, "sign in first")
         parts = [unquote(p) for p in ((event.get("pathParameters") or {}).get("proxy") or "").split("/") if p]
-        return _http(*account(tenant, email, method, parts, body))
+        params = event.get("queryStringParameters") or {}
+        return _http(*account(tenant, email, method, parts, body, params))
     except Refused as e:
         return _http(e.status, {"error": str(e)})
 
@@ -153,7 +159,7 @@ def _source_address(event):
 
 # ------------------------------------------------------------------ the tenant's account
 
-def account(tenant, email, method, parts, body):
+def account(tenant, email, method, parts, body, params=None):
     me = table.get_item(Key={"pk": f"user#{email}"}).get("Item")
     if not me or me.get("tenant") != tenant or me.get("status") != "active":
         raise Refused(403, "you are not a user of this account")
@@ -170,8 +176,20 @@ def account(tenant, email, method, parts, body):
                      "created_at": st.get("created_at"), "you": {"email": email, "role": role},
                      "users": [u for u in us["users"] if u["status"] == "active"], "keys": keys,
                      "limits": {"keys": MAX_KEYS, "users": MAX_USERS}}
+    if parts == ["drop-rules"] and method == "GET":
+        item = table.get_item(Key={"pk": f"drop#{tenant}"}).get("Item") or {}
+        return 200, {"rules": json.loads(item.get("rules_json", "[]")), "updated_at": item.get("updated_at"),
+                     "updated_by": item.get("updated_by"), "limits": {"rules": MAX_DROP_RULES, "conditions": MAX_CONDITIONS}}
+    if parts == ["meters"] and method == "GET":
+        return 200, {"days": meters(tenant, (params or {}).get("days"))}
     if role != "owner":
-        raise Refused(403, "only the account's owners can change its users and keys")
+        raise Refused(403, "only the account's owners can change its users, keys and drop rules")
+    if parts == ["drop-rules"] and method == "PUT":
+        rules = check_drop_rules(body.get("rules"))
+        table.put_item(Item={"pk": f"drop#{tenant}", "tenant": tenant, "rules_json": json.dumps(rules),
+                             "updated_at": _iso(_now()), "updated_by": email})
+        print(json.dumps({"drop_rules_saved": len(rules), "tenant": tenant, "by": email}))
+        return 200, {"rules": rules}
     what, ident = parts[0], (parts[1] if len(parts) > 1 else None)
     if what == "users" and method == "POST" and ident is None:
         users = [u for u in _admin("users", tenant)["users"] if u["status"] == "active"]
@@ -197,6 +215,83 @@ def account(tenant, email, method, parts, body):
         print(json.dumps({"key_revoked": ident, "tenant": tenant, "by": email}))
         return 200, out
     raise Refused(404, "not found")
+
+
+# ------------------------------------------------------------------ drop rules and meters
+
+MAX_DROP_RULES, MAX_CONDITIONS, MAX_IN_VALUES = 50, 5, 50
+DROP_SIGNALS = ("logs", "traces", "metrics")
+DROP_OPS = {"=", "!=", "<", "<=", ">", ">=", "in", "contains"}
+NUMERIC_OPS = {"<", "<=", ">", ">="}
+DROP_FIELDS = {"logs": {"service", "severity_number", "severity_text", "body"},
+               "traces": {"service", "name", "kind", "status_code", "duration_ns"},
+               "metrics": {"service", "metric_name"}}
+_ATTR_FIELD = re.compile(r"^(attributes|resource)\.[A-Za-z0-9_.\-/:]{1,128}$")
+_RULE_ID = re.compile(r"^[a-z0-9]{1,16}$")
+
+
+def check_drop_rules(rules):
+    """Validated drop rules (see services/ingest/droprules.py for how ingest applies them)."""
+    if not isinstance(rules, list) or len(rules) > MAX_DROP_RULES:
+        raise Refused(400, f"rules: a list of at most {MAX_DROP_RULES}")
+    out = []
+    for i, r in enumerate(rules):
+        where = f"rule {i + 1}"
+        if not isinstance(r, dict):
+            raise Refused(400, f"{where}: not an object")
+        name = str(r.get("name") or "").strip()[:80] or f"Rule {i + 1}"
+        signal = r.get("signal")
+        if signal not in DROP_SIGNALS:
+            raise Refused(400, f"{where}: signal must be one of {', '.join(DROP_SIGNALS)}")
+        try:
+            keep = float(r.get("keep_percent", 0))
+        except (TypeError, ValueError):
+            raise Refused(400, f"{where}: keep_percent must be a number")
+        if not 0 <= keep < 100:
+            raise Refused(400, f"{where}: keep_percent must be 0 (drop all) to 99.9")
+        conds = r.get("conditions")
+        if not isinstance(conds, list) or not 1 <= len(conds) <= MAX_CONDITIONS:
+            raise Refused(400, f"{where}: 1 to {MAX_CONDITIONS} conditions")
+        checked = []
+        for c in conds:
+            if not isinstance(c, dict):
+                raise Refused(400, f"{where}: a condition is not an object")
+            field, op, value = c.get("field"), c.get("op"), c.get("value")
+            if not isinstance(field, str) or not (field in DROP_FIELDS[signal] or _ATTR_FIELD.match(field)):
+                raise Refused(400, f"{where}: unknown field {field!r} for {signal}")
+            if op not in DROP_OPS:
+                raise Refused(400, f"{where}: op must be one of {', '.join(sorted(DROP_OPS))}")
+            if op in NUMERIC_OPS:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise Refused(400, f"{where}: {field} {op} needs a number")
+            elif op == "in":
+                if not isinstance(value, list) or not 1 <= len(value) <= MAX_IN_VALUES:
+                    raise Refused(400, f"{where}: 'in' takes a list of 1 to {MAX_IN_VALUES} values")
+                value = [str(v)[:256] for v in value]
+            else:
+                if not isinstance(value, (str, int, float)) or isinstance(value, bool) or str(value) == "":
+                    raise Refused(400, f"{where}: {field} {op} needs a value")
+                value = value if isinstance(value, (int, float)) else value[:256]
+            checked.append({"field": field, "op": op, "value": value})
+        rid = r.get("id") if isinstance(r.get("id"), str) and _RULE_ID.match(r["id"]) else secrets.token_hex(4)
+        out.append({"id": rid, "name": name, "signal": signal, "enabled": r.get("enabled", True) is not False,
+                    "keep_percent": int(keep) if keep == int(keep) else keep, "conditions": checked})
+    return out
+
+
+def meters(tenant, days=None):
+    """Today and the days before (UTC), newest first: records received and, per signal, received and dropped."""
+    try:
+        n = max(1, min(31, int(days or 2)))
+    except (TypeError, ValueError):
+        raise Refused(400, "days must be a number")
+    out, today = [], _now()
+    for i in range(n):
+        day = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        m = table.get_item(Key={"pk": f"meter#{tenant}#{day}"}).get("Item") or {}
+        out.append({"day": day, **{k: int(v) for k, v in m.items()
+                                   if k not in ("pk", "tenant", "day") and isinstance(v, (int, float, Decimal))}})
+    return out
 
 
 def _admin(action, tenant, **kw):

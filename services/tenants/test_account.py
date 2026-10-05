@@ -150,3 +150,54 @@ def test_trial_upgrade_and_extension(acc, adm, mail, monkeypatch):  # noqa: F811
     in_plan = lambda name: [k["id"] for k in boto3.client("apigateway").get_usage_plan_keys(usagePlanId=plans[name])["items"]]  # noqa: E731
     assert key["key_id"] in in_plan("obs-standard") and key["key_id"] not in in_plan("obs-free")
     assert app(acc, "ana@acme.com", "acme")[1]["trial_ends_at"] is None
+
+
+def _owner_and_member(acc, adm):  # noqa: F811
+    signup(acc, {"email": "ana@acme.com", "company": "Acme"})
+    adm.handler(acc.started.pop(), CTX)
+    app(acc, "ana@acme.com", "acme", "POST", "users", {"email": "bo@acme.com"})
+
+
+def test_drop_rules_saved_by_owners_read_by_everyone(acc, adm, mail):  # noqa: F811
+    _owner_and_member(acc, adm)
+    assert app(acc, "ana@acme.com", "acme", "GET", "drop-rules")[1]["rules"] == []
+    rules = [{"name": "Debug logs", "signal": "logs", "keep_percent": 0,
+              "conditions": [{"field": "severity_number", "op": "<", "value": 9}]},
+             {"name": "Health checks", "signal": "traces", "keep_percent": 10,
+              "conditions": [{"field": "attributes.http.route", "op": "in", "value": ["/health", "/ready"]}]}]
+    status, out = app(acc, "ana@acme.com", "acme", "PUT", "drop-rules", {"rules": rules})
+    assert status == 200 and [r["name"] for r in out["rules"]] == ["Debug logs", "Health checks"]
+    assert all(r["id"] and r["enabled"] for r in out["rules"])
+    got = app(acc, "bo@acme.com", "acme", "GET", "drop-rules")[1]
+    assert got["rules"] == out["rules"] and got["updated_by"] == "ana@acme.com"
+    assert app(acc, "bo@acme.com", "acme", "PUT", "drop-rules", {"rules": []})[0] == 403
+    # Stored where ingest reads them.
+    item = boto3.resource("dynamodb").Table("obs-tenants").get_item(Key={"pk": "drop#acme"})["Item"]
+    assert json.loads(item["rules_json"]) == out["rules"]
+
+
+@pytest.mark.parametrize("rule,error", [
+    ({"signal": "events", "conditions": [{"field": "service", "op": "=", "value": "a"}]}, "signal"),
+    ({"signal": "logs", "conditions": []}, "conditions"),
+    ({"signal": "logs", "conditions": [{"field": "name", "op": "=", "value": "a"}]}, "unknown field"),
+    ({"signal": "logs", "conditions": [{"field": "attributes.a b", "op": "=", "value": "a"}]}, "unknown field"),
+    ({"signal": "logs", "conditions": [{"field": "severity_number", "op": "<", "value": "nine"}]}, "number"),
+    ({"signal": "logs", "conditions": [{"field": "body", "op": "matches", "value": ".*"}]}, "op"),
+    ({"signal": "logs", "keep_percent": 100, "conditions": [{"field": "body", "op": "contains", "value": "x"}]}, "keep_percent"),
+    ({"signal": "traces", "conditions": [{"field": "name", "op": "in", "value": "x"}]}, "list"),
+])
+def test_bad_drop_rules_refused(acc, adm, mail, rule, error):  # noqa: F811
+    _owner_and_member(acc, adm)
+    status, out = app(acc, "ana@acme.com", "acme", "PUT", "drop-rules", {"rules": [rule]})
+    assert status == 400 and error in out["error"]
+
+
+def test_meters_per_day(acc, adm, mail):  # noqa: F811
+    _owner_and_member(acc, adm)
+    t = boto3.resource("dynamodb").Table("obs-tenants")
+    today = adm._now().strftime("%Y-%m-%d")
+    t.put_item(Item={"pk": f"meter#acme#{today}", "tenant": "acme", "day": today, "records": 10, "in_logs": 10, "dropped_logs": 4, "bytes": 99})
+    days = app(acc, "bo@acme.com", "acme", "GET", "meters")[1]["days"]
+    assert len(days) == 2 and days[0] == {"day": today, "records": 10, "in_logs": 10, "dropped_logs": 4, "bytes": 99}
+    assert days[1]["day"] < today and set(days[1]) == {"day"}
+    assert app(acc, "ana@acme.com", "acme")[1]["today"]["dropped_logs"] == 4

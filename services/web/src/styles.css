@@ -738,3 +738,28 @@ tr:hover .link { text-decoration: underline; }
 .start-banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--radius);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+
+/* ---- Usage prices, drop rules */
+.price-mini { border-collapse: collapse; font-size: 13px; width: 100%; }
+.price-mini th, .price-mini td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
+.price-mini th { color: var(--text-3); font-weight: 400; }
+.drop { display: grid; gap: 14px; max-width: 1150px; }
+.drop .panel { grid-column: auto; }
+.drop-head h2 { margin: 0 0 4px; font-size: 22px; }
+.drop-head p { margin: 0; }
+.drop-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.drop-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 4px; }
+.drop-card b { font-size: 20px; font-weight: 600; }
+.drop-conds { display: flex; flex-wrap: wrap; gap: 4px; }
+.drop-cond { font: 11.5px var(--font-mono); background: var(--surface-2); border-radius: 4px; padding: 1px 6px; }
+.drop-edit { display: grid; gap: 12px; padding: 14px; }
+.drop-edit-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.drop-edit label.field { display: grid; gap: 4px; font-size: 12px; color: var(--text-2); }
+.drop-preview { padding: 10px 12px; border-radius: 6px; background: var(--surface-2); font-size: 13px; }
+.drop-templates { display: flex; gap: 8px; flex-wrap: wrap; }
+.switch { position: relative; width: 30px; height: 17px; border-radius: 9px; background: var(--surface-3); border: 1px solid var(--border-strong); cursor: pointer; flex: none; }
+.switch::after { content: ""; position: absolute; top: 1px; left: 1px; width: 13px; height: 13px; border-radius: 50%; background: var(--text-3); transition: left .15s; }
+.switch.on { background: var(--accent); border-color: var(--accent); }
+.switch.on::after { left: 14px; background: #fff; }
+.switch:disabled { opacity: .5; cursor: default; }
+@media (max-width: 900px) { .drop-cards { grid-template-columns: minmax(0, 1fr); } }
