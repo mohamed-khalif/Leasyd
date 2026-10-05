@@ -18,9 +18,9 @@ const HEADINGS: Record<Step, [string, string]> = {
 };
 
 export function SignIn(props: { onSignedIn: () => void }) {
-  // The website's "Start free trial" links to app.leasyd.com/#/signup.
+  // The website's "Start free trial" links to app.leasyd.com/#/signup (?email=... from its email box).
   const [step, setStep] = useState<Step>(() => (window.location.hash.startsWith("#/signup") ? "signup" : "signin"));
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => (new URLSearchParams(window.location.hash.split("?")[1] || "").get("email") || "").slice(0, 254));
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [newPw, setNewPw] = useState("");
