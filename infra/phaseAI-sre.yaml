@@ -5,7 +5,8 @@ Description: >
   signed-in user's tenant only) and Claude on Amazon Bedrock (its Messages API endpoint, this role). Routes
   /v1/app/ai/conversations[/{id}] are in obs-phaseT2; the permission for them to invoke this function
   is here. Requires obs-phase0 (its boundary allows bedrock-mantle:CreateInference),
-  obs-phase4 and obs-phaseT2. Deploy with infra/deploy-phaseAI.sh.
+  obs-phase4 and obs-phaseT2. Also Leasyd's MCP server (obs-mcp, mcp.py): the same read-only tools for
+  AI agents, at POST /v1/mcp (obs-phaseT2) with a read API key. Deploy with infra/deploy-phaseAI.sh.
 
 Parameters:
   ClaudeModel:
@@ -108,6 +109,82 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/v1/app/ai/*"
 
+  # ---------- MCP server (obs-mcp): the same tools for customers' AI agents, with a read API key ----------
+
+  # Reads only: the tenant's data through obs-query, its checks and alert rules; counts its tool calls.
+  McpRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-mcp
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: mcp
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Settings        # the tenant's checks and alert rules (read)
+                Effect: Allow
+                Action: dynamodb:Query
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
+              - Sid: Limits          # rate#mcp#<tenant>#<minute|day> counters
+                Effect: Allow
+                Action: dynamodb:UpdateItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                Condition:
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["rate#mcp#*"] }
+              - Sid: Query           # the tenant's data only through obs-query
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: AI }
+
+  McpLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/obs-mcp
+      RetentionInDays: 30
+
+  McpFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: McpLogGroup
+    Properties:
+      FunctionName: obs-mcp
+      Description: MCP server - read-only tools over a tenant's telemetry for AI agents
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: mcp.handler
+      Code: ../services/ai/build
+      Role: !GetAtt McpRole.Arn
+      MemorySize: 512
+      Timeout: 28
+      Environment:
+        Variables:
+          TENANTS_TABLE: obs-tenants
+          QUERY_FUNCTION: obs-query
+      Tags:
+        - { Key: project, Value: obs }
+        - { Key: phase, Value: AI }
+
+  McpApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref McpFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/v1/mcp"
+
 Outputs:
   Function:
     Value: !Ref Function
+  McpFunction:
+    Value: !Ref McpFunction

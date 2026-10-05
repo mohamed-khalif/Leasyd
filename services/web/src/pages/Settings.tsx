@@ -91,6 +91,18 @@ OTEL_SERVICE_NAME=my-service`}</pre>
         </div>
       </Panel>
 
+      <Panel title="Connect your AI tools (MCP)">
+        <div className="connect">
+          <p className="muted">
+            Let AI agents (Claude Code, Claude Desktop, Cursor, VS Code…) read your logs, traces, metrics, checks and alerts in Leasyd Vault
+            through Leasyd's MCP server. Use an API key that <b>reads data</b>; agents can only read, never change anything. For Claude Code:
+          </p>
+          <pre className="code">{`claude mcp add --transport http leasyd ${endpoint}/v1/mcp \\
+  --header "x-api-key: ${newKey?.scope === "read" ? newKey.api_key : "<your read key>"}"`}</pre>
+          <p className="faint">Other tools: <a href="https://www.leasyd.com/docs#mcp" target="_blank" rel="noreferrer">setup for Cursor, VS Code and Claude Desktop</a>.</p>
+        </div>
+      </Panel>
+
       <Panel title="API keys" flush right={<span className="faint">{acc.keys.length} of {acc.limits.keys}</span>}>
         {newKey && (
           <div className="newkey">

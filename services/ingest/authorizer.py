@@ -14,6 +14,7 @@ rotation) until its expires_at.
 Each key has a scope (keys created before scopes existed are "ingest"):
   ingest  POST /v1/logs, /v1/traces, /v1/metrics, /v1/aws/cloudwatch-metrics   (customers' SDKs, Firehose)
   read    POST /v1/query, GET /v1/query/{job}    (dashboards, scripts, the UI)
+          /v1/mcp                                 (the MCP server, for AI agents)
 so a key embedded in an application can send data but never read it back.
 
 API Gateway caches the answer per key for 60 s, so a revoked key is refused
@@ -34,7 +35,7 @@ import boto3
 TABLE = os.environ["TENANTS_TABLE"]
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 
-ROUTES = {"ingest": ["POST/v1/logs", "POST/v1/traces", "POST/v1/metrics", "POST/v1/aws/cloudwatch-metrics"], "read": ["POST/v1/query", "GET/v1/query/*"]}
+ROUTES = {"ingest": ["POST/v1/logs", "POST/v1/traces", "POST/v1/metrics", "POST/v1/aws/cloudwatch-metrics"], "read": ["POST/v1/query", "GET/v1/query/*", "*/v1/mcp"]}
 
 ddb = boto3.client("dynamodb")
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="Leasyd documentation: send OpenTelemetry logs, traces and metrics, use dashboards, checks and drop rules, query the API, and manage billing.">
+<meta name="description" content="Leasyd documentation: send OpenTelemetry logs, traces and metrics, use dashboards, checks and drop rules, query the API, connect AI agents over MCP, and manage billing.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23101114'/%3E%3Cpath d='M9 7v18h14' stroke='%236ea8fe' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <title>Documentation · Leasyd</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -47,6 +47,7 @@
       <a href="#checks">Synthetic checks</a>
       <a href="#drop-rules">Drop rules</a>
       <a href="#query-api">Query API</a>
+      <a href="#mcp">AI agents (MCP)</a>
       <b>Account</b>
       <a href="#team">Team</a>
       <a href="#billing">Billing</a>
@@ -57,7 +58,7 @@
     <article class="prose">
       <h1>Leasyd documentation</h1>
       <p class="meta">Last updated 5 October 2026</p>
-      <p>Leasyd stores and searches your logs, traces and metrics. You send data with <a href="https://opentelemetry.io/">OpenTelemetry</a>, the open standard most languages and tools already support, so there is no Leasyd agent or SDK to learn and nothing locks you in.</p>
+      <p>Leasyd stores and searches your logs, traces and metrics in <strong>Leasyd Vault</strong>, one store for every signal that the app, the API, PromQL, SQL and AI agents all read. You send data with <a href="https://opentelemetry.io/">OpenTelemetry</a>, the open standard most languages and tools already support, so there is no Leasyd agent or SDK to learn and nothing locks you in.</p>
 
       <h2 id="quickstart">Quickstart</h2>
       <ol>
@@ -75,7 +76,7 @@ export OTEL_EXPORTER_OTLP_HEADERS=x-api-key=YOUR_API_KEY</code></pre>
       <p>Keys are made in <strong>Settings › API keys</strong> by the account's owners. Each key has one job:</p>
       <ul>
         <li><strong>Send data</strong> (ingest): may only send logs, traces and metrics. Safe to put in your apps' configuration: it can't read anything back.</li>
-        <li><strong>Read data</strong> (API): may only query, through the <a href="#query-api">query API</a>.</li>
+        <li><strong>Read data</strong> (API): may only query, through the <a href="#query-api">query API</a> and the <a href="#mcp">MCP server</a>.</li>
       </ul>
       <p>A key is shown once, when it's made: store it like a password. We keep only a hash of it. Revoke a key in Settings and it stops working within about a minute. A new key can take a minute or two before it's accepted everywhere.</p>
 
@@ -188,6 +189,50 @@ opentelemetry-instrument python app.py</code></pre>
         <li><strong>JSON</strong>: <code>{"signal", "start", "end", "where", "group_by", "aggs", "search"}</code>; the app's <strong>Query builder</strong> shows the JSON of any query you build.</li>
       </ul>
       <p>A query still running after 20 seconds (or sent with <code>"async": true</code>) answers <code>202 {"job"}</code>; ask <code>GET /v1/query/{job}</code> until it answers 200. Limits: 600 queries a minute, and a daily search allowance that grows with how much data a query reads (the app shows today's use in Settings).</p>
+
+      <h2 id="mcp">AI agents (MCP)</h2>
+      <p>Leasyd has an MCP server, so AI agents and coding assistants can investigate your systems with you: "why did checkout get slow after 2 pm?", "show me the errors behind this trace". They get the same read-only tools as Leasyd's AI SRE: services overview, PromQL, log and span search, a whole trace, top values, SQL, synthetic checks and alerts. They can read, never change anything, and only your account's data.</p>
+      <table>
+        <tr><th>What</th><th>Where</th></tr>
+        <tr><td>Server</td><td><code>https://ingest.leasyd.com/v1/mcp</code> (Streamable HTTP)</td></tr>
+        <tr><td>Key</td><td>header <code>x-api-key: YOUR_READ_KEY</code>, a <a href="#keys">Read data</a> key</td></tr>
+      </table>
+      <h3>Claude Code</h3>
+<pre class="code"><code>claude mcp add --transport http leasyd https://ingest.leasyd.com/v1/mcp \
+  --header "x-api-key: YOUR_READ_KEY"</code></pre>
+      <h3>Cursor</h3>
+      <p>In <code>~/.cursor/mcp.json</code> (or <code>.cursor/mcp.json</code> in a project):</p>
+<pre class="code"><code>{
+  "mcpServers": {
+    "leasyd": {
+      "url": "https://ingest.leasyd.com/v1/mcp",
+      "headers": { "x-api-key": "YOUR_READ_KEY" }
+    }
+  }
+}</code></pre>
+      <h3>VS Code</h3>
+      <p>In <code>.vscode/mcp.json</code>:</p>
+<pre class="code"><code>{
+  "servers": {
+    "leasyd": {
+      "type": "http",
+      "url": "https://ingest.leasyd.com/v1/mcp",
+      "headers": { "x-api-key": "YOUR_READ_KEY" }
+    }
+  }
+}</code></pre>
+      <h3>Claude Desktop</h3>
+      <p>In Settings › Developer › Edit config (needs Node.js):</p>
+<pre class="code"><code>{
+  "mcpServers": {
+    "leasyd": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://ingest.leasyd.com/v1/mcp", "--header", "x-api-key:${LEASYD_KEY}"],
+      "env": { "LEASYD_KEY": "YOUR_READ_KEY" }
+    }
+  }
+}</code></pre>
+      <p>Limits: 60 tool calls a minute and 5,000 a day per account; a call that would run longer than about 25 seconds stops with a message to narrow it. Tool calls are included in the price.</p>
 
       <h2 id="team">Team</h2>
       <p>Invite teammates in <strong>Settings › Team</strong>; there's no charge per person. <strong>Owners</strong> manage people, API keys, drop rules and billing; <strong>members</strong> use everything else.</p>

@@ -58,12 +58,13 @@ def test_firehose_sends_the_key_in_its_own_header(auth):
     assert out["context"] == {"tenant": "acme", "scope": "ingest"} and out["usageIdentifierKey"] == "good-key"
 
 
-def test_read_key_may_only_query(auth):
+def test_read_key_may_only_query_and_use_the_mcp_server(auth):
     out = call(auth, {"x-api-key": "read-key"})
     assert out["context"] == {"tenant": "acme", "scope": "read"}
     assert out["policyDocument"]["Statement"][0]["Resource"] == [
         "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/POST/v1/query",
-        "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/GET/v1/query/*"]   # a long query's answer
+        "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/GET/v1/query/*",   # a long query's answer
+        "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/*/v1/mcp"]
 
 
 @pytest.mark.parametrize("headers", [{}, {"x-api-key": ""}, {"x-api-key": "nope"}, {"x-api-key": "old-key"}, {"x-api-key": "expired-key"},

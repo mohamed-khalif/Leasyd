@@ -368,6 +368,26 @@ Resources:
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-api/invocations"
         TimeoutInMillis: 29000
 
+  # POST /v1/mcp: Leasyd's MCP server (obs-mcp, obs-phaseAI, which holds its invoke permission) for
+  # AI agents, with a read key. ANY, so GET/DELETE reach it and get its 405 (no stream, no session).
+  McpResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: mcp }
+  McpMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref McpResource
+      HttpMethod: ANY
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-mcp/invocations"
+        TimeoutInMillis: 29000
+
   QueryApiPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -920,9 +940,9 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV14:
+  DeploymentV15:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod]
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
@@ -933,7 +953,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV14
+      DeploymentId: !Ref DeploymentV15
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"
