@@ -3,7 +3,7 @@ import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoo
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { account } from "./api";
 
-export const CONTACT_EMAIL = "mkhalif@leasyd.com";
+export const CONTACT_EMAIL = "support@leasyd.com";
 
 /** A free trial's days left, or that it (or the subscription) ended: shown above every page. Once
  * billing is set up the way out is adding payment details in Settings; before that, an email. */

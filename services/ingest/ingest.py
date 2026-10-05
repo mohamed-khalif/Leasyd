@@ -43,7 +43,7 @@ STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
 TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "")   # empty: no metering, no caps
 METER_FLUSH_S = 1     # how often a container adds its counts to the day's meter (billing: a
                       # container frozen or recycled loses at most this much of its counts)
-CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "mkhalif@leasyd.com")   # where an ended trial is told to write
+CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "support@leasyd.com")   # where an ended trial is told to write
 ENDED_BILLING = {"canceled", "unpaid"}   # a subscription's statuses (billing.py) whose data is refused
 CAP_CHECK_S = 30      # how long a container trusts what it read of a tenant's cap and usage
 RECORD_COMPRESSION = os.environ.get("RECORD_COMPRESSION", "none")   # "gzip": compress records before Firehose

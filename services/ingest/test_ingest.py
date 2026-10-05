@@ -348,7 +348,7 @@ def test_an_ended_trial_refuses_data(metered, fh):
     body = logs_pb(n=2).SerializeToString()
     assert ingest.handler(event(body), None)["statusCode"] == 200                  # trial still running
     out = ingest.handler(event(body, tenant="beta"), None)
-    assert out["statusCode"] == 403 and "free trial ended on 2020-01-01" in out["body"] and "mkhalif@leasyd.com" in out["body"]
+    assert out["statusCode"] == 403 and "free trial ended on 2020-01-01" in out["body"] and "support@leasyd.com" in out["body"]
     assert all(stream.endswith("acme-logs") for stream, _ in fh.puts)            # nothing of beta's was stored
     ingest.meter.flush()
     assert meter_item(ddb, "beta")["refused_bytes"] > 0

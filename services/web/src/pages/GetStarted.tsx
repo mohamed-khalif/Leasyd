@@ -145,7 +145,7 @@ export function GetStarted({ ctx }: { ctx: Ctx }) {
             <p className="faint">
               Nothing yet after a few minutes? Check the key (a new key takes about 2 minutes; until then data is refused with 403),
               that the endpoint is <code className="mono">{endpoint}</code>, and your app's or collector's own log for export errors.
-              Write to us at <a href="mailto:mkhalif@leasyd.com">mkhalif@leasyd.com</a> and we'll help.
+              Write to us at <a href="mailto:support@leasyd.com">support@leasyd.com</a> and we'll help.
             </p>
           )}
         </div>
