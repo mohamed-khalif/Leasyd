@@ -1,7 +1,7 @@
 // Small line icons (16 px), drawn to match the UI's thin strokes.
 const s = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 export const IconLogo = () => (
-  <svg width="22" height="22" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="var(--surface-3)" /><path d="M9 7v18h14" stroke="var(--accent)" strokeWidth="3.2" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+  <svg width="22" height="22" viewBox="0 0 32 32"><defs><linearGradient id="leasyd-logo" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#8f90fb" /><stop offset="1" stopColor="#5354e8" /></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#leasyd-logo)" /><path d="M5.5 17h5l3-7.5 4.5 13 3-5.5h5.5" stroke="#fff" strokeWidth="2.8" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
 );
 export const IconDash = () => <svg {...s}><rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="3" rx="1" /><rect x="9" y="7" width="5" height="7" rx="1" /><rect x="2" y="9" width="5" height="5" rx="1" /></svg>;
 export const IconLogs = () => <svg {...s}><path d="M3 4h10M3 8h10M3 12h6" /></svg>;
