@@ -39,11 +39,11 @@ else
   fi
 fi
 
-# The pages: HTML always revalidated; the rest cached for an hour.
+# Pages, styles and scripts are always revalidated (so a deploy shows at once); images cached an hour.
 BUCKET="$(out BucketName)"
-aws s3 sync site/ "s3://${BUCKET}/" --delete --exclude "*" --include "*.css" --include "*.js" --include "img/*" \
-  --cache-control "public,max-age=3600"
-aws s3 sync site/ "s3://${BUCKET}/" --delete --exclude "*" --include "*.html" --cache-control "no-cache"
+aws s3 sync site/ "s3://${BUCKET}/" --delete --exclude "*" --include "img/*" --cache-control "public,max-age=3600"
+aws s3 sync site/ "s3://${BUCKET}/" --delete --exclude "*" --include "*.html" --include "*.css" --include "*.js" \
+  --cache-control "no-cache"
 aws cloudfront create-invalidation --distribution-id "$(out DistributionId)" --paths "/*" >/dev/null
 
 if [[ -z "$(out CertificateArn)" || "$(out CertificateArn)" == None ]]; then
