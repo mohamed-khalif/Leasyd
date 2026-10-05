@@ -336,3 +336,28 @@ html:has(body.lp) { overflow-x: clip; }
   .phead { flex-wrap: wrap; } .phead h2 { width: 100%; } .feat { justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) { .marquee .track, .constel i, .chat .typed::after { animation: none; } .win img { transition: none; } }
+
+/* ---- Site header (every page): full width, 1280px inner, 64px tall */
+.site-head { width: 100%; background: #0b0c10; border-bottom: 1px solid rgba(255, 255, 255, .06); position: sticky; top: 0; z-index: 50; }
+.head-in { max-width: 1280px; margin: 0 auto; padding: 0 24px; height: 64px; display: flex; align-items: center; justify-content: space-between; }
+.head-left { display: flex; align-items: center; gap: 32px; }
+.site-head .brand { display: flex; align-items: center; gap: 8px; color: #fff; font: 600 18px var(--body); letter-spacing: -0.02em; text-decoration: none; }
+.site-head .brand svg { width: 20px; height: 20px; color: #6366f1; }
+.head-nav { display: flex; align-items: center; gap: 24px; font: 500 14px var(--body); color: #94a3b8; }
+.head-nav > a, .dd > button { color: inherit; text-decoration: none; transition: color .15s; }
+.head-nav > a:hover, .dd > button:hover, .dd:focus-within > button { color: #fff; }
+.dd { position: relative; }
+.dd > button { display: flex; align-items: center; gap: 4px; background: none; border: 0; padding: 8px 0; font: inherit; cursor: pointer; }
+.chev { width: 12px; height: 12px; opacity: .7; }
+.dd-menu { position: absolute; top: 100%; left: -12px; min-width: 210px; padding: 6px; border-radius: 8px; background: #12131a;
+  border: 1px solid rgba(255, 255, 255, .08); box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .7); display: none; }
+.dd:hover .dd-menu, .dd:focus-within .dd-menu { display: grid; }
+.dd-menu a { padding: 8px 10px; border-radius: 6px; color: #cbd5e1; text-decoration: none; font-size: 14px; }
+.dd-menu a:hover { background: rgba(255, 255, 255, .05); color: #fff; }
+.head-right { display: flex; align-items: center; gap: 20px; font: 500 14px var(--body); }
+.signin { color: #cbd5e1; text-decoration: none; transition: color .15s; } .signin:hover { color: #fff; }
+.signup-btn { background: #5c67f2; color: #fff; padding: 6px 14px; border-radius: 6px; font-weight: 600; text-decoration: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: background .15s; }
+.signup-btn:hover { background: #4e58df; }
+.site-head a:focus-visible, .dd > button:focus-visible { outline: 2px solid #6366f1; outline-offset: 3px; border-radius: 4px; }
+@media (max-width: 767px) { .head-nav { display: none; } }

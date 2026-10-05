@@ -12,16 +12,26 @@
 </head>
 <body>
 
-<div class="wrap">
-  <nav class="top" aria-label="Main">
-    <a class="brand" href="/" aria-label="Leasyd home">Leasyd</a>
-    <div class="navlinks">
-      <a href="/docs" aria-current="page" class="hide-sm">Documentation</a>
-      <a href="/pricing" class="hide-sm">Pricing</a>
-      <a class="nav-in" href="https://app.leasyd.com/">Sign in</a>
-      <a class="btn small primary" href="https://app.leasyd.com/#/signup">Start for free</a>
+<header class="site-head">
+  <div class="head-in">
+    <div class="head-left">
+      <a class="brand" href="/" aria-label="Leasyd home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12h3L9 3l4 18 3-9h5"/></svg><span>Leasyd</span></a>
+      <nav class="head-nav" aria-label="Main">
+        <div class="dd"><button type="button" aria-haspopup="true">Product<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg></button>
+          <div class="dd-menu"><a href="/#ai">AI SRE &amp; MCP</a><a href="/#tracing">Tracing</a><a href="/#uptime">Uptime monitoring</a><a href="/#logs">Log management</a><a href="/#metrics">Metrics &amp; dashboards</a></div></div>
+        <a href="/docs">Documentation</a>
+        <a href="/pricing">Pricing</a>
+        <div class="dd"><button type="button" aria-haspopup="true">Company<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg></button>
+          <div class="dd-menu"><a href="mailto:support@leasyd.com">Contact us</a><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a></div></div>
+      </nav>
     </div>
-  </nav>
+    <div class="head-right">
+      <a class="signin" href="https://app.leasyd.com/">Sign in</a>
+      <a class="signup-btn" href="https://app.leasyd.com/#/signup">Sign up</a>
+    </div>
+  </div>
+</header>
+<div class="wrap">
 
   <div class="doc">
     <nav class="doc-toc" aria-label="Contents">
