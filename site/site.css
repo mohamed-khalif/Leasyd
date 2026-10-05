@@ -15,16 +15,18 @@ h2 { font-weight: 700; }
 a { color: inherit; }
 html { overflow-x: clip; }
 .wrap { max-width: 1280px; margin: 0 auto; padding-inline: 32px; }
-nav.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 14px;
+nav.top { display: flex; align-items: center; justify-content: flex-start; gap: 40px; padding-block: 12px;
   position: sticky; top: 0; z-index: 50; margin-inline: calc(50% - 50vw); padding-inline: max(32px, calc(50vw - 608px));
   background: rgba(11, 11, 20, .78); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
   border-bottom: 1px solid rgba(255, 255, 255, .07); }
-.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; text-decoration: none; letter-spacing: -0.02em; }
+.brand { display: inline-flex; align-items: center; font: 600 18px var(--body); letter-spacing: -0.02em; text-decoration: none; color: #fff; }
 .brand svg { width: 28px; height: 28px; }
 .navlinks a { white-space: nowrap; }
-.navlinks { display: flex; align-items: center; gap: 26px; font: 500 14.5px var(--body); color: var(--muted); }
+.navlinks { display: flex; align-items: center; gap: 34px; flex: 1; font: 500 15px var(--body); color: #c9c9d8; }
+.navlinks .nav-in { margin-left: auto; }
+.navlinks .nav-in + .btn { margin-left: -12px; }
 .navlinks a { text-decoration: none; }
-.navlinks a:hover, .navlinks a[aria-current] { color: var(--fg); }
+.navlinks a:hover, .navlinks a[aria-current] { color: #fff; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding-inline: 20px; border-radius: 8px;
   font: 600 15px var(--body); text-decoration: none; border: 1px solid var(--line); background: var(--raised); color: var(--fg); cursor: pointer; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
@@ -96,7 +98,7 @@ table.prices { width: 100%; border-collapse: collapse; min-width: 640px; }
 .faq .ans p { margin: 0; }
 footer { border-top: 1px solid var(--line); margin-top: 40px; padding-block: 28px 40px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; color: var(--faint); font-size: 14px; }
 @media (max-width: 760px) {
-  .navlinks { gap: 14px; }
+  .navlinks { gap: 14px; } nav.top { gap: 16px; } .navlinks .nav-in + .btn { margin-left: 0; }
   .wrap { padding-inline: 20px; } nav.top { padding-inline: 20px; }
   .navlinks .hide-sm { display: none; }
   .estimator { grid-template-columns: 1fr; }
