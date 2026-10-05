@@ -1069,14 +1069,14 @@ def tick(event, context):
     now = datetime.fromtimestamp(minute * 60, timezone.utc)
     items, open_windows, ended = [], {}, set()
     kw = dict(FilterExpression=(Attr("pk").begins_with("check#") & Attr("enabled").eq(True)) | Attr("pk").begins_with("window#")
-              | (Attr("pk").begins_with("tenant#") & Attr("trial_ends_at").exists()))
+              | (Attr("pk").begins_with("tenant#") & (Attr("trial_ends_at").exists() | Attr("billing_status").is_in(["canceled", "unpaid"]))))
     now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     while True:
         page = table().scan(**kw)
         for i in page["Items"]:
             if i["pk"].startswith("tenant#"):
-                if i["trial_ends_at"] <= now_iso:      # an ended free trial: its checks stop
-                    ended.add(i["tenant"])
+                if i.get("billing_status") in ("canceled", "unpaid") or i.get("trial_ends_at", "~") <= now_iso:
+                    ended.add(i["tenant"])          # an ended free trial or subscription: its checks stop
             elif i["pk"].startswith("window#"):
                 open_windows.setdefault(i["tenant"], []).append(_plain(i))
             elif due(i["pk"].rsplit("#", 1)[1], i["frequency"], minute):
@@ -1119,8 +1119,30 @@ def run(event, context):
         return {"tenant": tenant, "check": check_id, "ok": result["ok"], "ms": result["total_ms"]}
     with ThreadPoolExecutor(max(1, len(checks))) as pool:
         out = list(pool.map(one, checks))
+    meter_runs(checks)
     print(json.dumps({"ran": len(out), "failed": sum(1 for o in out if not o["ok"])}))
     return {"ran": out}
+
+
+def meter_runs(checks):
+    """Scheduled runs are billed: add them to each tenant's meter#<tenant>#<day> (checks_http,
+    checks_browser), which the daily billing report reads. Never fails the batch."""
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    counts = {}
+    for item in checks:
+        kind = "checks_browser" if item.get("type") == "browser" else "checks_http"
+        c = counts.setdefault(item["tenant"], {})
+        c[kind] = c.get(kind, 0) + 1
+    for tenant, c in counts.items():
+        names = sorted(c)
+        try:
+            table().update_item(Key={"pk": f"meter#{tenant}#{day}"},
+                                UpdateExpression="ADD " + ", ".join(f"#c{i} :c{i}" for i in range(len(names)))
+                                                 + " SET tenant = :t, #d = :d",
+                                ExpressionAttributeNames={"#d": "day", **{f"#c{i}": n for i, n in enumerate(names)}},
+                                ExpressionAttributeValues={":t": tenant, ":d": day, **{f":c{i}": c[n] for i, n in enumerate(names)}})
+        except Exception as e:   # noqa: BLE001
+            print(json.dumps({"meter": "check runs not counted", "tenant": tenant, "runs": c, "error": str(e)[:200]}))
 
 
 # ------------------------------------------------------------------ helpers

@@ -139,6 +139,10 @@ Resources:
                 Effect: Allow
                 Action: [ses:SendEmail, ses:SendRawEmail]
                 Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              - Sid: StripeSettings   # billing (billing.py): the Stripe keys and price ids, SSM /obs/stripe/*
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/stripe/*"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T5" }
@@ -216,6 +220,27 @@ Resources:
           Arn: !GetAtt AdminFunction.Arn
           Input: '{"action": "retention"}'
 
+  # Daily, after the day's last compaction: each subscribed tenant's usage of yesterday to Stripe.
+  BillingSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: obs-billing-report
+      Description: Report the previous day's usage of subscribed tenants to Stripe
+      ScheduleExpression: cron(5 2 * * ? *)
+      State: ENABLED
+      Targets:
+        - Id: admin
+          Arn: !GetAtt AdminFunction.Arn
+          Input: '{"action": "report-usage"}'
+
+  BillingPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AdminFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt BillingSchedule.Arn
+
   RetentionPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -265,6 +290,10 @@ Resources:
                 Effect: Allow
                 Action: [ses:SendEmail, ses:SendRawEmail]
                 Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              - Sid: StripeSettings   # billing (billing.py): the Stripe keys and price ids, SSM /obs/stripe/*
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/stripe/*"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T5" }

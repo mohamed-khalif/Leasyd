@@ -89,6 +89,8 @@ export type Account = {
   today: { bytes: number; records: number; refused_bytes: number };
   searches?: { units_today: number; units_per_day: number | null };
   trial_ends_at?: string | null;
+  // Stripe: enabled once billing is set up; status of the subscription (active, past_due, canceled...).
+  billing?: { enabled: boolean; status: string | null; has_customer: boolean; started_at?: string | null };
   you: { email: string; role: "owner" | "member" }; users: AccountUser[]; keys: AccountKey[];
   limits: { keys: number; users: number };
 };
@@ -105,6 +107,9 @@ export const account = {
   saveDropRules: (rules: DropRule[]) =>
     call<{ rules: DropRule[] }>("/v1/app/account/drop-rules", { method: "PUT", body: JSON.stringify({ rules }) }),
   meters: (days = 2) => call<{ days: Meter[] }>(`/v1/app/account/meters?days=${days}`),
+  // Owners: a Stripe page to add payment details (Checkout), or to manage billing (customer portal).
+  checkout: () => call<{ url: string }>("/v1/app/account/billing/checkout", { method: "POST" }),
+  portal: () => call<{ url: string }>("/v1/app/account/billing/portal", { method: "POST" }),
 };
 // Drop rules: data discarded as it arrives (billed for ingest only). The first enabled rule a
 // record matches keeps keep_percent of such records (0 drops them all).

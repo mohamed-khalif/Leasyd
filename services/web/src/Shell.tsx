@@ -5,22 +5,36 @@ import { account } from "./api";
 
 export const CONTACT_EMAIL = "mkhalif@leasyd.com";
 
-/** A free trial's days left, or that it ended: shown above every page while the account is a trial. */
+/** A free trial's days left, or that it (or the subscription) ended: shown above every page. Once
+ * billing is set up the way out is adding payment details in Settings; before that, an email. */
 function TrialBanner() {
-  const [ends, setEnds] = useState<string | null>(null);
-  useEffect(() => { account.get().then((a) => setEnds(a.trial_ends_at ?? null), () => undefined); }, []);
+  const [acc, setAcc] = useState<Awaited<ReturnType<typeof account.get>> | null>(null);
+  useEffect(() => { account.get().then(setAcc, () => undefined); }, []);
+  if (!acc) return null;
+  const pay = acc.billing?.enabled;
+  const fix = pay ? <><a href="#/settings">add payment details in Settings</a></> : <>email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></>;
+  const status = acc.billing?.status;
+  if (status === "canceled" || status === "unpaid") {
+    return (
+      <div className="trial-banner ended" role="alert">
+        Your subscription has {status === "canceled" ? "ended" : "an unpaid invoice"}: new data is no longer accepted and checks have stopped.
+        To continue, {pay ? <a href="#/settings">go to Billing in Settings</a> : fix}.
+      </div>
+    );
+  }
+  const ends = acc.trial_ends_at;
   if (!ends) return null;
   const left = Date.parse(ends) - Date.now();
   const days = Math.ceil(left / 86_400_000);
   return left > 0 ? (
     <div className="trial-banner" role="status">
       Free trial: <b>{days} day{days === 1 ? "" : "s"} left</b> (ends {new Date(ends).toLocaleDateString(undefined, { day: "numeric", month: "short" })}).
-      To keep your data flowing after that, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+      To keep your data flowing after that, {fix}.
     </div>
   ) : (
     <div className="trial-banner ended" role="alert">
       Your free trial has ended: new data is no longer accepted and checks have stopped. Your data stays searchable
-      until it ages out. To continue, email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+      until it ages out. To continue, {fix}.
     </div>
   );
 }

@@ -354,6 +354,17 @@ def test_an_ended_trial_refuses_data(metered, fh):
     assert meter_item(ddb, "beta")["refused_bytes"] > 0
 
 
+def test_an_ended_subscription_refuses_data(metered, fh):
+    ddb = metered
+    ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "tenant#acme"}, "billing_status": {"S": "past_due"}})
+    ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "tenant#beta"}, "billing_status": {"S": "canceled"}})
+    body = logs_pb(n=2).SerializeToString()
+    assert ingest.handler(event(body), None)["statusCode"] == 200                  # still billed: accepted
+    out = ingest.handler(event(body, tenant="beta"), None)
+    assert out["statusCode"] == 403 and "subscription has ended (canceled)" in out["body"] and "Settings > Billing" in out["body"]
+    assert all(stream.endswith("acme-logs") for stream, _ in fh.puts)
+
+
 def test_metering_never_fails_a_request(fh, monkeypatch):
     class Broken:
         def get_item(self, **kw): raise RuntimeError("DynamoDB is down")

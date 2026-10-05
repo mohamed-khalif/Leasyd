@@ -367,6 +367,9 @@ def test_runner_records_each_check_for_its_tenant(aws, site):
     item = boto3.resource("dynamodb").Table("obs-tenants").get_item(Key={"pk": f"check#acme#{a['id']}"})["Item"]
     out = synthetics.run({"checks": [synthetics._plain(item)]}, None)
     assert out["ran"][0]["ok"] and {s for s, _ in aws} == {"obs-t-acme-traces", "obs-t-acme-metrics"}
+    day = synthetics.datetime.now(synthetics.timezone.utc).strftime("%Y-%m-%d")
+    meter = synthetics.table().get_item(Key={"pk": f"meter#acme#{day}"})["Item"]   # the run is billed
+    assert meter["checks_http"] == 1 and "checks_browser" not in meter
 
 
 def test_results_are_valid_telemetry_the_pipeline_accepts(tmp_path, site):
@@ -558,6 +561,8 @@ def test_tick_skips_tenants_whose_free_trial_ended(aws, monkeypatch):
     call("initech", "POST", "/v1/app/checks", settings(name="still trying", frequency=1))
     synthetics.table().put_item(Item={"pk": "tenant#globex", "tenant": "globex", "trial_ends_at": "2020-01-01T00:00:00Z"})
     synthetics.table().put_item(Item={"pk": "tenant#initech", "tenant": "initech", "trial_ends_at": "2099-01-01T00:00:00Z"})
+    call("hooli", "POST", "/v1/app/checks", settings(name="cancelled", frequency=1))
+    synthetics.table().put_item(Item={"pk": "tenant#hooli", "tenant": "hooli", "billing_status": "canceled"})
     invoked = []
     monkeypatch.setattr(synthetics.boto3, "client", lambda name: type("L", (), {
         "invoke": lambda self, **kw: invoked.append(json.loads(kw["Payload"]))})())

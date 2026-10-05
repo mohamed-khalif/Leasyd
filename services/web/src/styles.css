@@ -529,6 +529,9 @@ tr:hover .link { text-decoration: underline; }
 .settings .dtable tbody tr { cursor: default; }
 .linkbtn.danger { color: var(--sev-error); }
 @media (max-width: 720px) { .plan { grid-template-columns: 1fr; } }
+.billing { display: flex; gap: 24px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.billing > div:first-child { display: grid; gap: 6px; max-width: 640px; }
+.billing-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* Leasyd AI */
 .ask-ai { display: flex; align-items: center; gap: 8px; margin: 0 10px 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));

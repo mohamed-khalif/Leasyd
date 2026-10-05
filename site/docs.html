@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Leasyd documentation: send OpenTelemetry logs, traces and metrics, use dashboards, checks and drop rules, query the API, and manage billing.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23101114'/%3E%3Cpath d='M9 7v18h14' stroke='%236ea8fe' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>Documentation · Leasyd</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+
+<div class="wrap">
+  <nav class="top" aria-label="Main">
+    <a class="brand" href="/" aria-label="Leasyd home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1c1f26"/><path d="M9 7v18h14" stroke="#6ea8fe" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Leasyd
+    </a>
+    <div class="navlinks">
+      <a href="/docs" aria-current="page" class="hide-sm">Docs</a>
+      <a href="/pricing" class="hide-sm">Pricing</a>
+      <a href="https://app.leasyd.com/">Sign in</a>
+      <a class="btn small primary" href="https://app.leasyd.com/#/signup">Start free trial</a>
+    </div>
+  </nav>
+
+  <div class="doc">
+    <nav class="doc-toc" aria-label="Contents">
+      <b>Start</b>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#keys">API keys</a>
+      <b>Send data</b>
+      <a href="#otlp">OTLP endpoint</a>
+      <a href="#java">Java</a>
+      <a href="#nodejs">Node.js</a>
+      <a href="#python">Python</a>
+      <a href="#ruby">Ruby</a>
+      <a href="#other">Other languages</a>
+      <a href="#servers">Linux servers</a>
+      <a href="#lambda">AWS Lambda</a>
+      <a href="#limits">Limits and answers</a>
+      <b>Use it</b>
+      <a href="#explore">Logs, traces, metrics</a>
+      <a href="#dashboards">Dashboards and alerts</a>
+      <a href="#checks">Synthetic checks</a>
+      <a href="#drop-rules">Drop rules</a>
+      <a href="#query-api">Query API</a>
+      <b>Account</b>
+      <a href="#team">Team</a>
+      <a href="#billing">Billing</a>
+      <a href="#retention">Retention and deletion</a>
+      <a href="#security">Security</a>
+    </nav>
+
+    <article class="prose">
+      <h1>Leasyd documentation</h1>
+      <p class="meta">Last updated 5 October 2026</p>
+      <p>Leasyd stores and searches your logs, traces and metrics. You send data with <a href="https://opentelemetry.io/">OpenTelemetry</a>, the open standard most languages and tools already support, so there is no Leasyd agent or SDK to learn and nothing locks you in.</p>
+
+      <h2 id="quickstart">Quickstart</h2>
+      <ol>
+        <li><a href="https://app.leasyd.com/#/signup">Start a free trial</a>: 7 days, every feature, no card. You'll get an email with a temporary password.</li>
+        <li>Sign in and open <strong>Get started</strong>. Pick what you're running: it shows the exact commands, with a new API key filled in.</li>
+        <li>Start your app with the settings shown. Data appears under <strong>Logs</strong>, <strong>Traces</strong> and <strong>Metrics</strong> within about a minute.</li>
+      </ol>
+      <p>The settings every OpenTelemetry SDK understands:</p>
+<pre class="code"><code>export OTEL_SERVICE_NAME=my-service
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.leasyd.com
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS=x-api-key=YOUR_API_KEY</code></pre>
+
+      <h2 id="keys">API keys</h2>
+      <p>Keys are made in <strong>Settings › API keys</strong> by the account's owners. Each key has one job:</p>
+      <ul>
+        <li><strong>Send data</strong> (ingest): may only send logs, traces and metrics. Safe to put in your apps' configuration: it can't read anything back.</li>
+        <li><strong>Read data</strong> (API): may only query, through the <a href="#query-api">query API</a>.</li>
+      </ul>
+      <p>A key is shown once, when it's made: store it like a password. We keep only a hash of it. Revoke a key in Settings and it stops working within about a minute. A new key can take a minute or two before it's accepted everywhere.</p>
+
+      <h2 id="otlp">OTLP endpoint</h2>
+      <table>
+        <tr><th>What</th><th>Where</th></tr>
+        <tr><td>Logs</td><td><code>POST https://ingest.leasyd.com/v1/logs</code></td></tr>
+        <tr><td>Traces</td><td><code>POST https://ingest.leasyd.com/v1/traces</code></td></tr>
+        <tr><td>Metrics</td><td><code>POST https://ingest.leasyd.com/v1/metrics</code></td></tr>
+        <tr><td>Key</td><td>header <code>x-api-key: YOUR_API_KEY</code></td></tr>
+        <tr><td>Body</td><td>OTLP protobuf (<code>application/x-protobuf</code>) or OTLP JSON (<code>application/json</code>), optionally <code>Content-Encoding: gzip</code></td></tr>
+      </table>
+      <p>Leasyd takes OTLP over <strong>HTTP</strong>, not gRPC. For tools that only speak gRPC, run an <a href="#servers">OpenTelemetry Collector</a> next to them and let it forward over HTTP.</p>
+
+      <h3 id="java">Java</h3>
+      <p>The OpenTelemetry Java agent instruments most frameworks with no code changes:</p>
+<pre class="code"><code>curl -fsSL -o opentelemetry-javaagent.jar \
+  https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar
+export OTEL_SERVICE_NAME=my-service
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.leasyd.com
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS=x-api-key=YOUR_API_KEY
+java -javaagent:opentelemetry-javaagent.jar -jar your-app.jar</code></pre>
+      <p>JVM metrics (heap, garbage collection, threads) appear in <strong>Dashboards › Leasyd - JVM</strong>.</p>
+
+      <h3 id="nodejs">Node.js</h3>
+<pre class="code"><code>npm install @opentelemetry/api @opentelemetry/auto-instrumentations-node
+export OTEL_SERVICE_NAME=my-service
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.leasyd.com
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS=x-api-key=YOUR_API_KEY
+export OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp
+node --require @opentelemetry/auto-instrumentations-node/register app.js</code></pre>
+      <p>Runtime metrics (event loop, heap) appear in <strong>Dashboards › Leasyd - Node.js</strong>.</p>
+
+      <h3 id="python">Python</h3>
+<pre class="code"><code>pip install opentelemetry-distro opentelemetry-exporter-otlp-proto-http opentelemetry-instrumentation-system-metrics
+opentelemetry-bootstrap -a install
+export OTEL_SERVICE_NAME=my-service
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.leasyd.com
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS=x-api-key=YOUR_API_KEY
+export OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp
+export OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+opentelemetry-instrument python app.py</code></pre>
+      <p>With gunicorn or uvicorn, put <code>opentelemetry-instrument</code> in front of their command. Runtime metrics: <strong>Dashboards › Leasyd - Python</strong>.</p>
+
+      <h3 id="ruby">Ruby</h3>
+      <p>Add the OpenTelemetry gems (<code>opentelemetry-sdk</code>, <code>opentelemetry-exporter-otlp</code>, <code>opentelemetry-instrumentation-all</code>, and for metrics <code>opentelemetry-metrics-sdk ~&gt; 0.19.0</code> and <code>opentelemetry-exporter-otlp-metrics</code>), configure them at start-up with <code>OpenTelemetry::SDK.configure { |c| c.use_all }</code>, and set the same environment variables as above. <strong>Get started › Ruby</strong> in the app has a small file that adds runtime metrics (CPU, memory, garbage collection) for <strong>Dashboards › Leasyd - Ruby</strong>.</p>
+
+      <h3 id="other">Other languages</h3>
+      <p>Go, .NET, PHP, Rust, Erlang/Elixir and others have OpenTelemetry SDKs: see <a href="https://opentelemetry.io/docs/languages/">opentelemetry.io/docs/languages</a>. Configure their OTLP/HTTP exporter with the endpoint and header above.</p>
+
+      <h3 id="servers">Linux servers</h3>
+      <p>On a server (Amazon Linux 2023 or Ubuntu 22.04+, x86 or ARM), <strong>Get started › Linux server</strong> installs an OpenTelemetry Collector set up for Leasyd. It sends the server's CPU, memory, disk, network and system logs every 30 seconds (<strong>Dashboards › Leasyd - Hosts</strong>), and accepts your apps' data on <code>localhost:4318</code> (HTTP) and <code>localhost:4317</code> (gRPC), so apps on that server need no key.</p>
+
+      <h3 id="lambda">AWS Lambda</h3>
+      <ul>
+        <li><strong>Metrics for every function</strong> (invocations, errors, duration, throttles): a CloudFormation template from <strong>Get started › AWS Lambda</strong> streams them from CloudWatch to <code>https://ingest.leasyd.com/v1/aws/cloudwatch-metrics</code> through Amazon Data Firehose. AWS bills the stream and Firehose in your account.</li>
+        <li><strong>Each invocation and its logs</strong>: add the OpenTelemetry Lambda layer for your runtime and set <code>AWS_LAMBDA_EXEC_WRAPPER=/opt/otel-instrument</code> plus the settings above.</li>
+      </ul>
+      <p>Functions appear under <strong>AWS Lambda</strong> in the app.</p>
+
+      <h3 id="limits">Limits and answers</h3>
+      <table>
+        <tr><th>Answer</th><th>Meaning</th><th>What your exporter does</th></tr>
+        <tr><td>200</td><td>Stored durably</td><td>Nothing more</td></tr>
+        <tr><td>400</td><td>The body isn't valid OTLP</td><td>Drops it</td></tr>
+        <tr><td>401 / 403</td><td>Missing, wrong or revoked key; or the trial or subscription has ended</td><td>Drops it</td></tr>
+        <tr><td>429</td><td>Too many requests, or the trial's daily data limit (1 GB a day) is reached; <code>Retry-After</code> says when to come back</td><td>Retries later</td></tr>
+        <tr><td>503</td><td>A temporary problem on our side</td><td>Retries</td></tr>
+      </table>
+      <p>A request may be up to 64 MB uncompressed. Requests per second per account: 50 during the trial, 500 when subscribed (ask us for more).</p>
+
+      <h2 id="explore">Logs, traces and metrics</h2>
+      <p><strong>Logs</strong> and <strong>Traces</strong> search everything you've sent in the last 30 days: filter by service, severity, any attribute or text, and open a trace to see each span with its logs. <strong>Metrics</strong> charts any metric over time. <strong>Service map</strong> draws your services and the calls between them, from traces. <strong>Query builder</strong> and <strong>SQL</strong> answer any other question. The <strong>AI SRE</strong> can look through your data with you to explain an incident.</p>
+
+      <h2 id="dashboards">Dashboards and alerts</h2>
+      <p>Leasyd comes with dashboards for the JVM, Node.js, Python, Ruby, hosts and AWS Lambda; any chart can be added to your own dashboards. <strong>Alerts</strong> watch a query (an error rate, a latency, a check failing) and email you when it crosses a threshold. <strong>SLOs</strong> track an objective such as 99.9% of requests under 300 ms.</p>
+
+      <h2 id="checks">Synthetic checks</h2>
+      <p>Checks call your sites and APIs from AWS us-east-1 every 1, 5, 15, 30, 45 or 60 minutes:</p>
+      <ul>
+        <li><strong>HTTP checks</strong>: one request or several steps (log in, then call an API with the token), with conditions on status, time, headers and body. Secrets are encrypted and never shown again.</li>
+        <li><strong>Browser checks</strong>: a real Chromium browser opens pages, clicks and types, and records page speed and screenshots.</li>
+      </ul>
+      <p>Only check systems you own or are allowed to test. Up to 20 checks per account; maintenance windows pause alerts during planned work.</p>
+
+      <h2 id="drop-rules">Drop rules</h2>
+      <p>Drop rules discard data you don't need as it arrives (debug logs, health-check requests, noisy metrics), so you pay only the small ingest price for it and never the storage price. Set them in <strong>Account › Drop rules</strong>: each rule picks a signal, one to five conditions, and how much of the matching data to keep (0% drops it all; 10% keeps one in ten, whole traces at a time). The first rule a record matches decides. The page shows how much of the last 24 hours each rule would have matched before you save it. Changes apply within a minute.</p>
+      <table>
+        <tr><th>Signal</th><th>Fields a condition can test</th></tr>
+        <tr><td>All</td><td><code>service</code>, <code>attributes.&lt;key&gt;</code>, <code>resource.&lt;key&gt;</code></td></tr>
+        <tr><td>Logs</td><td><code>severity_number</code>, <code>severity_text</code>, <code>body</code></td></tr>
+        <tr><td>Traces</td><td><code>name</code>, <code>kind</code>, <code>status_code</code>, <code>duration_ns</code></td></tr>
+        <tr><td>Metrics</td><td><code>metric_name</code></td></tr>
+      </table>
+      <p>Operators: <code>=</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>in</code> <code>contains</code>.</p>
+
+      <h2 id="query-api">Query API</h2>
+      <p>Query your data from scripts and other tools with a <strong>Read data</strong> key:</p>
+<pre class="code"><code>curl -s https://ingest.leasyd.com/v1/query \
+  -H "x-api-key: YOUR_READ_KEY" -H "content-type: application/json" \
+  -d '{"promql": "sum by (service_name) (rate(leasyd.spans{span_kind=\"SERVER\"}[5m]))",
+       "start": "2026-10-05T00:00:00Z", "end": "2026-10-05T06:00:00Z", "step": 60}'</code></pre>
+      <p>The body is one of:</p>
+      <ul>
+        <li><strong>PromQL</strong>: <code>{"promql", "start", "end", "step"}</code> for a range, or <code>{"promql", "time"}</code> for one instant. Answers in the format of Prometheus' HTTP API. Besides your own metrics, PromQL sees <code>leasyd.spans</code>, <code>leasyd.span.duration</code> (a histogram) and <code>leasyd.logs</code>, counted from your traces and logs.</li>
+        <li><strong>SQL</strong>: <code>{"sql", "start", "end"}</code>, read-only, over the tables <code>logs</code>, <code>spans</code> and <code>metrics</code>.</li>
+        <li><strong>JSON</strong>: <code>{"signal", "start", "end", "where", "group_by", "aggs", "search"}</code>; the app's <strong>Query builder</strong> shows the JSON of any query you build.</li>
+      </ul>
+      <p>A query still running after 20 seconds (or sent with <code>"async": true</code>) answers <code>202 {"job"}</code>; ask <code>GET /v1/query/{job}</code> until it answers 200. Limits: 600 queries a minute, and a daily search allowance that grows with how much data a query reads (the app shows today's use in Settings).</p>
+
+      <h2 id="team">Team</h2>
+      <p>Invite teammates in <strong>Settings › Team</strong>; there's no charge per person. <strong>Owners</strong> manage people, API keys, drop rules and billing; <strong>members</strong> use everything else.</p>
+
+      <h2 id="billing">Billing</h2>
+      <p>After the trial you pay for what you use, billed monthly in US dollars through Stripe; see <a href="/pricing">Pricing</a>. To subscribe, an owner opens <strong>Settings › Billing › Add payment details</strong>. Nothing is charged upfront: each month's invoice counts the records received, the records stored (kept 30 days) and the check runs. <strong>Usage &amp; cost</strong> in the app shows this month so far. <strong>Manage billing</strong> changes the card, downloads invoices or cancels; a cancelled subscription stops accepting new data at the end of the period you've paid for.</p>
+
+      <h2 id="retention">Retention and deletion</h2>
+      <p>Data is kept for 30 days plus the current day (UTC), then deleted automatically. Drop rules discard data before it's stored. To close your account and delete all of its data, email <a href="mailto:mkhalif@leasyd.com">mkhalif@leasyd.com</a> from an owner's address: everything is deleted within a few days.</p>
+
+      <h2 id="security">Security</h2>
+      <ul>
+        <li>Data is sent and shown over HTTPS only, and encrypted at rest on AWS (us-east-1).</li>
+        <li>Each account's data is stored separately; every query runs with credentials that can only read that account's data.</li>
+        <li>API keys are stored as hashes; check secrets are encrypted with a dedicated key.</li>
+        <li>Leasyd stores what you send as it is: keep passwords, card numbers and other sensitive personal data out of logs and attributes (the OpenTelemetry Collector can remove or mask them before they leave your systems).</li>
+      </ul>
+      <p>Found a security problem? Email <a href="mailto:mkhalif@leasyd.com">mkhalif@leasyd.com</a>. See also our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.</p>
+    </article>
+  </div>
+
+  <footer>
+    <span>© 2026 Leasyd</span>
+    <nav aria-label="Footer"><a href="/">Home</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="https://app.leasyd.com/">Sign in</a></nav>
+    <span>Questions? <a href="mailto:mkhalif@leasyd.com">mkhalif@leasyd.com</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

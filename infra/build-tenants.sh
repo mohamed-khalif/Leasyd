@@ -4,5 +4,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/../services/tenants"
 rm -rf build && mkdir build
-cp admin.py account.py emails.py build/
+cp admin.py account.py billing.py emails.py build/
 echo "built services/tenants/build"

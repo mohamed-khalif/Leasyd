@@ -136,6 +136,11 @@ Resources:
               - Effect: Allow
                 Action: s3:PutObject
                 Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/synthetics/*"
+              - Effect: Allow     # counts scheduled runs on the tenant's daily meter (billed)
+                Action: dynamodb:UpdateItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                Condition:
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["meter#*"] }
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: S1 }]
 
   # The browser opens customers' pages: it holds nothing but its own logs. (Its credentials are

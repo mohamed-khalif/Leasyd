@@ -12,6 +12,10 @@
   PUT  /v1/app/account/drop-rules     owners: replace them {rules: [...]} (see check_drop_rules)
   GET  /v1/app/account/meters?days=N  per UTC day (today and the N-1 before, N <= 31): records
                                       received and, per signal, received (in_<s>) and dropped
+  POST /v1/app/account/billing/checkout  owners: {url} of a Stripe Checkout page to add payment
+                                      details and start the subscription (billing.py)
+  POST /v1/app/account/billing/portal    owners: {url} of the Stripe customer portal
+  POST /v1/stripe/webhook             public, signed by Stripe: subscription started, changed, ended
 
 The tenant comes only from the signed-in user's token (custom:tenant). Changes are made by
 obs-tenant-admin (invoked here), which owns keys, streams and logins; this function only checks
@@ -34,6 +38,7 @@ from urllib.parse import unquote
 import boto3
 from botocore.exceptions import ClientError
 
+import billing
 import emails
 
 TABLE = os.environ["TENANTS_TABLE"]
@@ -60,6 +65,8 @@ def handler(event, context):
     try:
         resource = event.get("resource") or ""
         method = event.get("httpMethod", "GET")
+        if resource == "/v1/stripe/webhook":
+            return _http(200, stripe_webhook(event))
         body = _body(event)
         if resource == "/v1/signup":
             if method != "POST":
@@ -72,7 +79,7 @@ def handler(event, context):
         parts = [unquote(p) for p in ((event.get("pathParameters") or {}).get("proxy") or "").split("/") if p]
         params = event.get("queryStringParameters") or {}
         return _http(*account(tenant, email, method, parts, body, params))
-    except Refused as e:
+    except (Refused, billing.BillingError) as e:
         return _http(e.status, {"error": str(e)})
 
 
@@ -175,6 +182,9 @@ def account(tenant, email, method, parts, body, params=None):
                      "daily_cap_bytes": st.get("daily_cap_bytes"), "today": st.get("today"), "searches": st.get("searches"), "trial_ends_at": st.get("trial_ends_at"),
                      "created_at": st.get("created_at"), "you": {"email": email, "role": role},
                      "users": [u for u in us["users"] if u["status"] == "active"], "keys": keys,
+                     "billing": {"enabled": bool(billing.settings()), "status": st.get("billing_status"),
+                                 "has_customer": bool(st.get("stripe_customer_id")),
+                                 "started_at": st.get("billing_started_at")},
                      "limits": {"keys": MAX_KEYS, "users": MAX_USERS}}
     if parts == ["drop-rules"] and method == "GET":
         item = table.get_item(Key={"pk": f"drop#{tenant}"}).get("Item") or {}
@@ -190,6 +200,11 @@ def account(tenant, email, method, parts, body, params=None):
                              "updated_at": _iso(_now()), "updated_by": email})
         print(json.dumps({"drop_rules_saved": len(rules), "tenant": tenant, "by": email}))
         return 200, {"rules": rules}
+    if parts[:1] == ["billing"] and method == "POST" and len(parts) == 2 and parts[1] in ("checkout", "portal"):
+        rec = table.get_item(Key={"pk": f"tenant#{tenant}"}, ConsistentRead=True).get("Item") or {}
+        out = billing.checkout(tenant, email, rec) if parts[1] == "checkout" else billing.portal(rec)
+        print(json.dumps({"billing": parts[1], "tenant": tenant, "by": email}))
+        return 200, out
     what, ident = parts[0], (parts[1] if len(parts) > 1 else None)
     if what == "users" and method == "POST" and ident is None:
         users = [u for u in _admin("users", tenant)["users"] if u["status"] == "active"]
@@ -215,6 +230,38 @@ def account(tenant, email, method, parts, body, params=None):
         print(json.dumps({"key_revoked": ident, "tenant": tenant, "by": email}))
         return 200, out
     raise Refused(404, "not found")
+
+
+# ------------------------------------------------------------------ Stripe's events
+
+def stripe_webhook(event):
+    """POST /v1/stripe/webhook: verified with the endpoint's signing secret, then handed to
+    obs-tenant-admin (set-billing). Unknown tenants are ignored (answered 200, so Stripe stops)."""
+    if event.get("httpMethod") != "POST":
+        raise Refused(405, "method not allowed")
+    raw = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        import base64
+        raw = base64.b64decode(raw)
+    else:
+        raw = raw.encode()
+    headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+
+    def subscribed(tenant, customer, subscription, email):
+        _billing(tenant, billing_status="active", customer=customer, subscription=subscription, new=True)
+
+    def changed(tenant, **fields):
+        _billing(tenant, **fields)
+
+    return billing.webhook(raw, headers.get("stripe-signature"), subscribed, changed)
+
+
+def _billing(tenant, **fields):
+    try:
+        out = _admin("set-billing", tenant, **fields)
+    except Refused as e:     # e.g. a tenant deleted since: nothing to change
+        out = {"error": str(e)}
+    print(json.dumps({"set_billing": tenant, **fields, "result": out}, default=str))
 
 
 # ------------------------------------------------------------------ drop rules and meters

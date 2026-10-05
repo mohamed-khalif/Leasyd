@@ -23,10 +23,15 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
   upgrade {tenant}               a trial (free plan) becomes a paying account: standard plan, its
                                  keys moved to the standard usage plan, no trial end, no daily cap
   extend-trial {tenant, days}    the trial ends this many days from now (data accepted again)
+  set-billing {tenant, billing_status, customer?, subscription?, new?}  from Stripe's events
+                                 (billing.py): a billed status upgrades a trial; canceled or
+                                 unpaid: ingest refuses data
+  report-usage {day?}            scheduled daily: subscribed tenants' usage of the last days to
+                                 Stripe's meters, each day once (billed#<tenant>#<day>)
   remove-user {tenant, email}    sign them out everywhere and delete the login
   users   {tenant}               the tenant's users
   revoke  {tenant, key_id?}      refuse one key, or all of the tenant's keys
-  delete  {tenant}               refuse all keys, remove the streams, then purge every
+  delete  {tenant}               refuse all keys, cancel its Stripe subscription, remove the streams, then purge every
                                  object and index entry of the tenant (see below)
   tune    {tenant, buffer_seconds}  how long the tenant's Firehose streams buffer before writing
                                  a file (default BUFFER_SECONDS). Shorter for high-volume
@@ -88,6 +93,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
+import billing
 import emails
 
 TENANTS = os.environ["TENANTS_TABLE"]
@@ -135,7 +141,7 @@ def handler(event, context):
     if fn is None:
         return {"error": f"unknown action {action!r}; one of {sorted(ACTIONS)}"}
     args = {k: v for k, v in event.items() if k != "action"}
-    if action not in ("list", "sweep", "restore", "retention"):
+    if action not in ("list", "sweep", "restore", "retention", "report-usage"):
         args["tenant"] = check_tenant(args.get("tenant"))
     try:
         out = fn(context=context, **args)
@@ -305,6 +311,75 @@ def extend_trial(tenant, days=7, context=None):
     return {"tenant": tenant, "trial_ends_at": end}
 
 
+def set_billing(tenant, billing_status, customer=None, subscription=None, new=False, context=None):
+    """From Stripe's events (obs-account-api's webhook). new: a checkout just started this subscription,
+    which becomes the tenant's; otherwise an event of an older subscription is ignored. A billed
+    status (active, trialing, past_due) upgrades a trial; canceled or unpaid makes ingest refuse data."""
+    rec = _active(tenant)
+    current = rec.get("stripe_subscription_id")
+    if subscription and current and subscription != current and not new:
+        return {"tenant": tenant, "ignored": f"not the current subscription ({current})"}
+    sets, values = ["billing_status = :s", "billing_updated_at = :n"], {":s": billing_status, ":n": _iso(_now())}
+    if customer:
+        sets.append("stripe_customer_id = :c")
+        values[":c"] = customer
+    if subscription:
+        sets.append("stripe_subscription_id = :sub")
+        values[":sub"] = subscription
+    if new or not rec.get("billing_started_at"):
+        sets.append("billing_started_at = :n")
+    tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET " + ", ".join(sets),
+                        ExpressionAttributeValues=values)
+    out = {"tenant": tenant, "billing_status": billing_status}
+    if billing_status in billing.BILLED_STATUSES and (rec.get("plan") != "standard" or rec.get("trial_ends_at")):
+        out["upgraded"] = upgrade(tenant)
+    return out
+
+
+def report_usage(day=None, days_back=3, context=None):
+    """Scheduled daily: each subscribed tenant's usage of each of the last days_back days (default:
+    yesterday and the 2 before, so a failed day is retried) not reported yet, to Stripe's meters.
+    A day is marked billed#<tenant>#<day> once Stripe has every event of it."""
+    if not billing.settings():
+        return {"skipped": "billing isn't set up (SSM /obs/stripe/*)"}
+    today = _now().date()
+    days = [day] if day else [(today - timedelta(days=i)).isoformat() for i in range(int(days_back), 0, -1)]
+    subscribed, kw = [], dict(FilterExpression=Attr("pk").begins_with("tenant#") & Attr("stripe_customer_id").exists())
+    while True:
+        page = tenants.scan(**kw)
+        subscribed += [it for it in page["Items"] if it.get("billing_status") in billing.BILLED_STATUSES]
+        if "LastEvaluatedKey" not in page:
+            break
+        kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    reported, failed = {}, {}
+    for rec in subscribed:
+        tenant = rec["tenant"]
+        for d in days:
+            if d < (rec.get("billing_started_at") or "")[:10] and not day:
+                continue    # before the subscription: those days were the free trial
+            if tenants.get_item(Key={"pk": f"billed#{tenant}#{d}"}).get("Item"):
+                continue
+            m = tenants.get_item(Key={"pk": f"meter#{tenant}#{d}"}).get("Item") or {}
+            u, ukw = [], dict(KeyConditionExpression=Key("tenant").eq(tenant) & Key("sk").between(d, d + "#~"))
+            while True:
+                page = usage_t.query(**ukw)
+                u += page["Items"]
+                if "LastEvaluatedKey" not in page:
+                    break
+                ukw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+            try:
+                sent = billing.report(tenant, rec["stripe_customer_id"], d, billing.day_usage(m, u))
+            except billing.BillingError as e:
+                failed.setdefault(tenant, {})[d] = str(e)
+                continue
+            tenants.put_item(Item={"pk": f"billed#{tenant}#{d}", "tenant": tenant, "day": d,
+                                   "reported_at": _iso(_now()), "usage": sent})
+            reported.setdefault(tenant, {})[d] = sent
+    if failed:
+        print(json.dumps({"billing": "report failed", "failed": failed}))
+    return {"days": days, "tenants": len(subscribed), "reported": reported, "failed": failed}
+
+
 def set_search(tenant, units_per_day=None, context=None):
     _active(tenant)
     if units_per_day is None:
@@ -375,6 +450,11 @@ def delete(tenant, context=None):
     revoked = [k["api_key_id"] for k in _keys(tenant) if k["status"] in ("active", "expiring")]
     for k in _keys(tenant):
         _revoke_key(k, delete_from_gateway=True)
+    if rec and rec.get("stripe_subscription_id") and rec.get("billing_status") in billing.BILLED_STATUSES:
+        try:    # stop billing now: the usage so far is invoiced
+            billing.stripe("DELETE", f"/subscriptions/{rec['stripe_subscription_id']}", {"invoice_now": True})
+        except billing.BillingError as e:
+            print(json.dumps({"billing": "subscription not cancelled; cancel it in Stripe", "tenant": tenant, "error": str(e)}))
     for sig in SIGNALS:
         try:
             firehose.delete_delivery_stream(DeliveryStreamName=f"obs-t-{tenant}-{sig}")
@@ -724,6 +804,7 @@ def purge(tenant, deleted=0, context=None):
 
 ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key, "signup": signup, "add-key": add_key,
            "set-cap": set_cap, "set-search": set_search, "upgrade": upgrade, "extend-trial": extend_trial,
+           "set-billing": set_billing, "report-usage": report_usage,
            "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
            "usage": usage, "list": list_tenants, "sweep": sweep, "restore": restore, "purge": purge,
            "retention": retention}

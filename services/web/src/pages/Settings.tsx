@@ -21,6 +21,17 @@ export function Settings({ ctx }: { ctx: Ctx }) {
 
   const load = () => account.get().then(setAcc, (e) => setError((e as Error).message));
   useEffect(() => { load(); }, [ctx.tick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Back from Stripe Checkout: the subscription starts when Stripe tells us (seconds); look again shortly.
+  const back = /[?&]billing=(done|cancelled)/.exec(window.location.hash)?.[1];
+  useEffect(() => {
+    if (back === "done") {
+      setNote("Thanks: your payment details are saved. Your subscription starts in a few seconds.");
+      const t = [3000, 8000].map((ms) => window.setTimeout(load, ms));
+      return () => t.forEach(window.clearTimeout);
+    }
+    return undefined;
+  }, [back]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const toStripe = (f: () => Promise<{ url: string }>) => act(async () => { window.location.assign((await f()).url); });
   const act = async (f: () => Promise<unknown>, done?: string) => {
     setBusy(true); setError(null); setNote(null);
     try { await f(); if (done) setNote(done); await load(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -66,6 +77,8 @@ export function Settings({ ctx }: { ctx: Ctx }) {
         {cap && share >= 1 && <div className="form-error" style={{ marginTop: 12 }}>Today's limit is reached: new data is refused until 00:00 UTC.</div>}
         {allowance && searchShare >= 1 && <div className="form-error" style={{ marginTop: 12 }}>Today's search allowance is used up: searches resume at 00:00 UTC.</div>}
       </Panel>
+
+      <Billing acc={acc} owner={owner} busy={busy} onCheckout={() => toStripe(account.checkout)} onPortal={() => toStripe(account.portal)} />
 
       <Panel title="Connect your app">
         <div className="connect">
@@ -145,5 +158,42 @@ OTEL_SERVICE_NAME=my-service`}</pre>
         ) : <div className="panel-foot faint">Only owners can invite people and manage API keys.</div>}
       </Panel>
     </div>
+  );
+}
+
+const BILLING_STATUS: Record<string, string> = {
+  past_due: "Payment overdue: please update your card",
+  unpaid: "Unpaid: data is no longer accepted", canceled: "Cancelled: data is no longer accepted",
+};
+
+/** Billing: pay as you go through Stripe. Owners add payment details (Stripe Checkout) or manage
+ * their card, invoices and subscription (Stripe's customer portal). */
+function Billing({ acc, owner, busy, onCheckout, onPortal }: {
+  acc: Account; owner: boolean; busy: boolean; onCheckout: () => void; onPortal: () => void;
+}) {
+  const b = acc.billing;
+  if (!b?.enabled) return null;
+  const subscribed = b.status === "active" || b.status === "trialing" || b.status === "past_due";
+  return (
+    <Panel title="Billing">
+      <div className="billing">
+        <div>
+          <div className="plan-name">{subscribed ? "Subscribed" : acc.trial_ends_at ? "No payment details yet" : "No subscription"}</div>
+          {b.status && b.status !== "active" && b.status !== "trialing" && <div className="form-error">{BILLING_STATUS[b.status] ?? b.status}</div>}
+          <div className="muted">
+            {subscribed
+              ? "Billed monthly for what you use: data received and kept, and check runs. Invoices and receipts are in Manage billing."
+              : "Add payment details to keep your data flowing after the trial. No upfront charge: you're billed monthly for what you use."}
+          </div>
+          <div className="faint"><a href="#/usage">See this month's usage and estimated bill</a> · <a href="https://www.leasyd.com/pricing.html" target="_blank" rel="noreferrer">Pricing</a></div>
+        </div>
+        {owner ? (
+          <div className="billing-actions">
+            {!subscribed && <button className="btn primary" disabled={busy} onClick={onCheckout}>Add payment details</button>}
+            {b.has_customer && <button className="btn" disabled={busy} onClick={onPortal}>Manage billing</button>}
+          </div>
+        ) : <div className="faint">Only the account's owners can change billing.</div>}
+      </div>
+    </Panel>
   );
 }

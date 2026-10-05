@@ -463,6 +463,28 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
         TimeoutInMillis: 29000
+  # POST /v1/stripe/webhook is public too: Stripe's billing events, each signed (billing.py verifies it).
+  StripeResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: stripe }
+  StripeWebhookResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref StripeResource, PathPart: webhook }
+  StripeWebhookMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref StripeWebhookResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
+        TimeoutInMillis: 29000
   AccountResource:
     Type: AWS::ApiGateway::Resource
     Condition: Logins
@@ -898,20 +920,20 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV13:
+  DeploymentV14:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV13
+      DeploymentId: !Ref DeploymentV14
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"
@@ -926,6 +948,11 @@ Resources:
           MetricsEnabled: true
           ThrottlingRateLimit: 1
           ThrottlingBurstLimit: 5
+        - ResourcePath: "/~1v1~1stripe~1webhook"
+          HttpMethod: POST
+          MetricsEnabled: true
+          ThrottlingRateLimit: 20
+          ThrottlingBurstLimit: 50
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T2" }

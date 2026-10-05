@@ -303,6 +303,7 @@ const ACCOUNT = {
   tenant: "acme", company: "Acme Inc.", plan: "free", daily_cap_bytes: 1e9, created_at: "2026-09-20T10:00:00Z",
   searches: { units_today: 640, units_per_day: 2000 }, trial_ends_at: new Date(Date.now() + 5 * 86_400_000).toISOString(),
   today: { bytes: 642_000_000, records: 1_284_211, refused_bytes: 0 },
+  billing: { enabled: true, status: null as string | null, has_customer: false, started_at: null as string | null },
   you: { email: "ana@acme.io", role: "owner" },
   users: [{ email: "ana@acme.io", role: "owner", created_at: "2026-09-20T10:00:00Z" },
           { email: "bo@acme.io", role: "member", created_at: "2026-09-22T08:12:00Z", invited_by: "ana@acme.io" }],
@@ -642,6 +643,11 @@ export function mockApi(): Plugin {
               const u = { email: body.email, role: body.role, created_at: new Date().toISOString(), invited_by: "ana@acme.io" };
               ACCOUNT.users.push(u); status = 201; out = u;
             } else if (what === "users" && req.method === "DELETE") { ACCOUNT.users = ACCOUNT.users.filter((u) => u.email !== id); out = { status: "removed" }; }
+            else if (what === "billing") {   // no Stripe here: pretend the checkout was completed
+              Object.assign(ACCOUNT, { plan: "standard", trial_ends_at: null, daily_cap_bytes: null });
+              ACCOUNT.billing = { enabled: true, status: "active", has_customer: true, started_at: new Date().toISOString() };
+              out = { url: "/#/settings?billing=done" };
+            }
             res.statusCode = status;
             setTimeout(() => res.end(JSON.stringify(out)), 200);
           });

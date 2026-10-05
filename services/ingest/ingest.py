@@ -41,8 +41,10 @@ import droprules
 
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
 TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "")   # empty: no metering, no caps
-METER_FLUSH_S = 10    # how often a container adds its counts to the day's meter
+METER_FLUSH_S = 1     # how often a container adds its counts to the day's meter (billing: a
+                      # container frozen or recycled loses at most this much of its counts)
 CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "mkhalif@leasyd.com")   # where an ended trial is told to write
+ENDED_BILLING = {"canceled", "unpaid"}   # a subscription's statuses (billing.py) whose data is refused
 CAP_CHECK_S = 30      # how long a container trusts what it read of a tenant's cap and usage
 RECORD_COMPRESSION = os.environ.get("RECORD_COMPRESSION", "none")   # "gzip": compress records before Firehose
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
@@ -84,14 +86,12 @@ def handler(event, context):
         headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
         ctype = (headers.get("content-type") or "application/x-protobuf").split(";")[0].strip().lower()
 
-        ended = meter.trial_ended(tenant)
-        if ended:
+        closed = meter.closed(tenant)
+        if closed:
             meter.add(tenant, 0, 0, refused=len(event.get("body") or ""))
-            print(json.dumps({"tenant": tenant, "signal": signal, "refused": "trial ended", "trial_ended_at": ended}))
+            print(json.dumps({"tenant": tenant, "signal": signal, "refused": closed}))
             # 403: not retryable, so exporters drop the data instead of retrying it forever.
-            return _response(403, "application/json",
-                             f"this Leasyd free trial ended on {ended[:10]}; data is no longer accepted. "
-                             f"To keep sending, contact {CONTACT_EMAIL}")
+            return _response(403, "application/json", closed)
         cap = meter.over_cap(tenant)
         if cap:
             meter.add(tenant, 0, 0, refused=len(event.get("body") or ""))
@@ -143,9 +143,9 @@ def firehose_handler(event, tenant):
             print(json.dumps({"status": status, "error": error, "source": "cloudwatch"}))
         return {"statusCode": status, "headers": {"Content-Type": "application/json"}, "body": json.dumps(body)}
 
-    ended = meter.trial_ended(tenant)
-    if ended:
-        return answer(403, f"this Leasyd free trial ended on {ended[:10]}; contact {CONTACT_EMAIL}")
+    closed = meter.closed(tenant)
+    if closed:
+        return answer(403, closed)
     if meter.over_cap(tenant):
         return answer(429, "daily data limit reached; accepted again from 00:00 UTC")
     try:
@@ -190,12 +190,20 @@ class Meter:
             cached = self.rules[tenant] = (now, rules if isinstance(rules, list) else [])
         return cached[1]
 
-    def trial_ended(self, tenant):
-        """-> when the tenant's free trial ended (ISO-8601), if it has; else None."""
+    def closed(self, tenant):
+        """-> why the tenant's data is refused (its free trial ended, or its subscription), else None."""
         self.over_cap(tenant)   # reads (or reuses) the tenant record
         c = self.caps.get(tenant)
-        end = c[4] if c else None
-        return end if end and end <= time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) else None
+        if not c:
+            return None
+        end, billing = c[4], c[5]
+        if billing in ENDED_BILLING:
+            return (f"this Leasyd subscription has ended ({billing}); data is no longer accepted. "
+                    f"To keep sending, add payment details in Leasyd (Settings > Billing) or contact {CONTACT_EMAIL}")
+        if end and end <= time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()):
+            return (f"this Leasyd free trial ended on {end[:10]}; data is no longer accepted. To keep "
+                    f"sending, add payment details in Leasyd (Settings > Billing) or contact {CONTACT_EMAIL}")
+        return None
 
     def over_cap(self, tenant):
         """-> the tenant's daily cap in bytes if today's usage has reached it, else None."""
@@ -206,9 +214,10 @@ class Meter:
         if not c or c[1] != day or now - c[0] > CAP_CHECK_S:
             try:
                 rec = ddb.get_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"tenant#{tenant}"}},
-                                   ProjectionExpression="daily_cap_bytes, trial_ends_at").get("Item") or {}
+                                   ProjectionExpression="daily_cap_bytes, trial_ends_at, billing_status").get("Item") or {}
                 cap = int(rec["daily_cap_bytes"]["N"]) if "daily_cap_bytes" in rec else None
                 trial_end = rec.get("trial_ends_at", {}).get("S")
+                billing = rec.get("billing_status", {}).get("S")
                 used = 0
                 if cap:
                     m = ddb.get_item(TableName=TENANTS_TABLE, Key={"pk": {"S": f"meter#{tenant}#{day}"}},
@@ -217,8 +226,8 @@ class Meter:
             except Exception as e:   # never fail ingest on metering
                 print(json.dumps({"meter": "cap check failed", "error": str(e)[:200]}))
                 return None
-            c = self.caps[tenant] = (now, day, cap, used, trial_end)
-        _, _, cap, used, _ = c
+            c = self.caps[tenant] = (now, day, cap, used, trial_end, billing)
+        _, _, cap, used, _, _ = c
         pending = self.pending.get((tenant, day), {}).get("bytes", 0)
         return cap if cap is not None and used + pending >= cap else None
 
@@ -251,7 +260,7 @@ class Meter:
             del self.pending[(tenant, day)]
             c = self.caps.get(tenant)
             if c and c[1] == day:
-                self.caps[tenant] = (c[0], day, c[2], c[3] + counts.get("bytes", 0), c[4])
+                self.caps[tenant] = (c[0], day, c[2], c[3] + counts.get("bytes", 0), *c[4:])
 
 
 def _size(n):
