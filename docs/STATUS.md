@@ -85,26 +85,20 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
 
 ## Next
 
-0. **Pre-launch QA (2026-10-06, run r1006) found three blockers; fixed in code, to deploy** (in this order):
-   1. `infra/deploy-phaseT2.sh` — authorizer passes a key's borrowed gateway key (`gateway_key`) as
-      usageIdentifierKey; INVALID_API_KEY answers 429 + Retry-After (retried) instead of 403 (dropped).
-      Must go before T5: a key issued with a borrowed gateway key needs the new authorizer.
-   2. `infra/deploy-phaseT5.sh`, then `infra/tenant.sh refill-keys` (or wait for the 15-minute sweep).
-      New keys borrow a pooled API Gateway key at least 30 minutes old, so they work at once
-      (BUG-3: new keys were refused 403 for 2-12+ minutes and exporters dropped the data).
-      Upgrades swap to an aged standard key instead of moving the key between usage plans.
-   3. `infra/deploy-phase4.sh` — query workers reuse their per-tenant S3/DynamoDB clients
-      (BUG-4: a new client per call leaked sockets; 10-20 concurrent 24 h queries exhausted file
-      descriptors and every query on those containers failed, for every tenant, ~19 min), and a
-      worker out of file descriptors exits so the retry runs on a fresh container. Also brings the
-      ms/ns epoch fix (`f683765`) that was never deployed.
-   4. `infra/deploy-phaseS1.sh` and `infra/deploy-phaseA1.sh` — bundles now include ingest.py's own
-      modules (BUG-1: Synthetics, SLOs and maintenance windows 502 for everyone since 2026-10-05
-      00:47 UTC, "No module named 'cloudwatch'"); `infra/check-bundle.py` fails a deploy that misses one.
-   Then the 15-minute smoke test in the QA report. Still open from QA: alarms on API 5XX / function
-   errors that would have caught BUG-1 and BUG-4, the fast-lane index item limit for files with
-   thousands of services (BUG-5), silent 200-drops, meter under-count under load (~0.3%).
-
+0. **Pre-launch QA (2026-10-06, run r1006): three blockers fixed, deployed and verified on AWS (22:20-23:00 UTC).**
+   - BUG-1 Synthetics: bundles include ingest.py's modules (`infra/check-bundle.py` guards it). Checks,
+     SLOs, windows, alert rules answer 200; an HTTP check against www.leasyd.com passed (test and run now);
+     SSRF still refused (metadata IP, localhost, 10.x, DNS name to 127.0.0.1).
+   - BUG-3 New API keys: borrow an aged gateway key from `keypool#<plan>` (10 per plan, sweep refills).
+     3 new keys answered 200 from the first send (79/79); upgrade swapped 5 keys to standard pool keys,
+     no failed send. With no aged key, a key answers 429 + Retry-After 30 (retried) for ~1 min, never 403.
+     After `infra/up.sh` recreates the API, `infra/tenant.sh restore` puts pool keys back in their plans.
+   - BUG-4 Query workers: clients reused per tenant; a worker out of file descriptors exits. 10/20/30
+     concurrent 24 h queries for 8.5 min: 12,482 worker runs (2.8x the run that broke it), 0 errors,
+     0 "Too many open files", results exact afterwards.
+   Still open from QA (docs: QA report r1006): alarms on API 5XX / function errors (would have caught
+   BUG-1 and BUG-4), the fast-lane index item limit for files with thousands of services (BUG-5),
+   silent 200-drops, meter under-count under load (~0.3%), email alerts need an SNS confirmation click.
 1. Freshness at 50 GB/h fixed: p99 38 s (was 74 s) with the fast parse in the fast lane and 15 s
    Firehose buffers for the 10 largest tenants (`infra/tenant.sh tune <tenant> 15`). Details and
    all benchmarks: `docs/REPORT-2026-09-28.md`. Still to do: Lambda memory above 3008 MB (ask AWS), compaction chunks capped by record count
