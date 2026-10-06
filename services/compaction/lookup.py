@@ -32,6 +32,7 @@ ending before start.
 
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -56,7 +57,8 @@ SESSION_SECONDS = 3600
 REFRESH_BEFORE_EXPIRY = 300
 
 sts = boto3.client("sts")
-_sessions = {}  # tenant -> (boto3.Session, expiry epoch); reused across warm invocations
+_sessions = {}  # tenant -> (dynamodb client, s3 client, expiry epoch); reused across warm invocations
+_sessions_lock = threading.Lock()
 
 
 def handler(event, context):
@@ -175,22 +177,29 @@ def _plans(ddb, pk, stats):
 
 
 def _clients_for(tenant):
-    """DynamoDB and S3 clients whose credentials only reach this tenant."""
-    session, expiry = _sessions.get(tenant, (None, 0))
-    if time.time() > expiry - REFRESH_BEFORE_EXPIRY:
-        creds = sts.assume_role(
-            RoleArn=TENANT_READER_ROLE, RoleSessionName=f"lookup-{tenant}"[:64],
-            DurationSeconds=SESSION_SECONDS, Tags=[{"Key": "tenant", "Value": tenant}],
-        )["Credentials"]
-        session = boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"], aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-        )
-        expiry = creds["Expiration"].timestamp()
-        _sessions[tenant] = (session, expiry)
-    # Enough connections for the parallel queries and bloom fetches (boto3's default is 10).
-    cfg = botocore.config.Config(max_pool_connections=BLOOM_THREADS + QUERY_THREADS)
-    return session.client("dynamodb", config=cfg), session.client("s3", config=cfg)
+    """DynamoDB and S3 clients whose credentials only reach this tenant. Made once per tenant and
+    credentials (an hour), then reused: a new client per call keeps its own connection pool open
+    until garbage collection, and a busy warm container ran out of file descriptors."""
+    with _sessions_lock:
+        ddb, s3, expiry = _sessions.get(tenant, (None, None, 0))
+        if time.time() > expiry - REFRESH_BEFORE_EXPIRY:
+            creds = sts.assume_role(
+                RoleArn=TENANT_READER_ROLE, RoleSessionName=f"lookup-{tenant}"[:64],
+                DurationSeconds=SESSION_SECONDS, Tags=[{"Key": "tenant", "Value": tenant}],
+            )["Credentials"]
+            session = boto3.Session(
+                aws_access_key_id=creds["AccessKeyId"], aws_secret_access_key=creds["SecretAccessKey"],
+                aws_session_token=creds["SessionToken"],
+            )
+            # Enough connections for the parallel queries and bloom fetches (boto3's default is 10).
+            cfg = botocore.config.Config(max_pool_connections=BLOOM_THREADS + QUERY_THREADS)
+            for old in (ddb, s3):
+                if old is not None:
+                    old.close()
+            ddb, s3 = session.client("dynamodb", config=cfg), session.client("s3", config=cfg)
+            expiry = creds["Expiration"].timestamp()
+            _sessions[tenant] = (ddb, s3, expiry)
+        return ddb, s3
 
 
 def _query(ddb, pk, lo, hi, start_iso, stats):

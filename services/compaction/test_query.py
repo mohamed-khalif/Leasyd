@@ -695,3 +695,24 @@ def test_daily_search_allowance(data, monkeypatch):
     t.put_item(Item={"pk": "tenant#initech", "plan": "standard"})
     assert http_user({"custom:tenant": "initech"}, sql)[0] == 200
     assert "Item" not in t.get_item(Key={"pk": f"usage#search#initech#{query._day()}"})
+
+
+def test_worker_out_of_file_descriptors_exits_for_a_fresh_container(monkeypatch):
+    import errno as _errno
+    exits = []
+    monkeypatch.setattr(query.os, "_exit", lambda code: exits.append(code))
+
+    def boom(event):
+        try:
+            raise OSError(_errno.EMFILE, "Too many open files")
+        except OSError as inner:
+            raise RuntimeError("SSLError: SSL validation failed") from inner
+    monkeypatch.setattr(query, "run_worker", boom)
+    with pytest.raises(RuntimeError):     # os._exit is patched to return here
+        query.worker({"query": {}}, None)
+    assert exits == [1]
+
+    monkeypatch.setattr(query, "run_worker", lambda event: (_ for _ in ()).throw(ValueError("bad query")))
+    with pytest.raises(ValueError):
+        query.worker({"query": {}}, None)
+    assert exits == [1]

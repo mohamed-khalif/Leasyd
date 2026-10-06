@@ -940,9 +940,24 @@ Resources:
 
   # Bump the logical ID's suffix whenever methods change, so CloudFormation
   # creates a new deployment (it doesn't redeploy an unchanged one).
-  DeploymentV15:
+  # API Gateway answers 403 "Forbidden" (INVALID_API_KEY) when the gateway key the authorizer
+  # names hasn't reached that API Gateway node yet (new keys take minutes). OpenTelemetry exporters
+  # drop a batch on 403 but retry 429, so answer that instead. Customer keys normally borrow an
+  # aged gateway key (services/tenants/admin.py KEY_POOL_SIZE), so this is the fallback.
+  InvalidApiKeyResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref Api
+      ResponseType: INVALID_API_KEY
+      StatusCode: "429"
+      ResponseParameters:
+        gatewayresponse.header.Retry-After: "'30'"
+      ResponseTemplates:
+        application/json: '{"message": "this API key is still being activated (a few minutes after it is created); retry shortly"}'
+
+  DeploymentV16:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod]
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod, InvalidApiKeyResponse]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
@@ -953,7 +968,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV15
+      DeploymentId: !Ref DeploymentV16
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

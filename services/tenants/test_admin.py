@@ -470,3 +470,55 @@ def test_more_keys_and_daily_caps(adm):
     assert call(adm, "set-search", tenant="acme", units_per_day=0)["searches"]["units_per_day"] is None
     assert call(adm, "set-search", tenant="acme")["searches"]["units_per_day"] == 20_000
     assert "whole number" in call(adm, "set-search", tenant="acme", units_per_day=-1)["error"]
+
+
+def plan_keys(adm, plan):
+    return {k["id"] for k in boto3.client("apigateway").get_usage_plan_keys(usagePlanId=adm.PLANS[plan])["items"]}
+
+
+def test_new_keys_borrow_an_aged_gateway_key_so_they_work_at_once(adm, monkeypatch):
+    # A new API Gateway key is refused (403) by some requests for minutes; exporters drop those
+    # batches. Customer keys borrow a gateway key made at least KEY_POOL_MIN_AGE earlier.
+    monkeypatch.setattr(adm, "KEY_POOL_SIZE", 2)
+    assert call(adm, "refill-keys")["added"] == {"free": 2, "standard": 2}
+    assert call(adm, "refill-keys")["added"] == {}                     # already full
+    pool = adm._pool("standard")["keys"]
+    assert {k["id"] for k in pool} <= plan_keys(adm, "standard")
+
+    # Too young to lend: the key gets its own gateway key, as before.
+    out = call(adm, "create", tenant="acme")
+    assert gateway_key(out["key_id"]) is True and out["key_id"] not in {k["id"] for k in pool}
+
+    later = adm._now() + adm.KEY_POOL_MIN_AGE
+    monkeypatch.setattr(adm, "_now", lambda: later)
+    adm.invoked.clear()
+    out = call(adm, "add-key", tenant="acme", scope="ingest")
+    assert out["key_id"] == pool[0]["id"]                                # the oldest one
+    item = boto3.resource("dynamodb").Table("obs-tenants").get_item(Key={"pk": f"key#{adm.key_hash(out['api_key'])}"})["Item"]
+    assert item["gateway_key"] == pool[0]["value"] and item["api_key_id"] == pool[0]["id"]
+    assert len(adm._pool("standard")["keys"]) == 1 and adm.invoked == [{"action": "refill-keys"}]
+    st = call(adm, "status", tenant="acme")
+    assert all("gateway_key" not in k for k in st["keys"])              # never shown
+
+    # Revoking the customer key disables the gateway key it borrowed.
+    call(adm, "revoke", tenant="acme", key_id=out["key_id"])
+    assert boto3.client("apigateway").get_api_key(apiKey=out["key_id"])["enabled"] is False
+
+
+def test_upgrade_swaps_to_an_aged_standard_gateway_key_and_retires_the_old_one(adm, monkeypatch):
+    monkeypatch.setattr(adm, "KEY_POOL_SIZE", 1)
+    call(adm, "create", tenant="acme", plan="free")
+    old_id = call(adm, "status", tenant="acme")["keys"][0]["api_key_id"]
+    call(adm, "refill-keys")
+    standard = adm._pool("standard")["keys"][0]
+    t = [adm._now() + adm.KEY_POOL_MIN_AGE]
+    monkeypatch.setattr(adm, "_now", lambda: t[0])
+    out = call(adm, "upgrade", tenant="acme")
+    assert out["keys_moved"] == [standard["id"]]
+    k = call(adm, "status", tenant="acme")["keys"][0]
+    assert k["plan"] == "standard" and k["api_key_id"] == standard["id"]
+    assert old_id in plan_keys(adm, "free")                              # still works for cached answers
+    t[0] += adm.RETIRE_AFTER
+    sw = call(adm, "sweep")
+    assert sw["key_pools"]["retired"] == [old_id] and sw["key_pools"]["added"] == {"standard": 1}
+    assert gateway_key(old_id) is None                                   # deleted from API Gateway

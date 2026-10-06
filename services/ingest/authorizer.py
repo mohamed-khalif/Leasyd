@@ -4,9 +4,11 @@ Customers' OpenTelemetry SDKs send `x-api-key: <key>`; a customer's Firehose (Cl
 metric streams, POST /v1/aws/cloudwatch-metrics) sends it as X-Amz-Firehose-Access-Key. The key's SHA-256 is
 looked up in the obs-tenants table (keys themselves are never stored). On a
 match the request is allowed, the tenant is passed to the ingest Lambda in
-requestContext.authorizer (which only the authorizer can set), and the key is
-returned as usageIdentifierKey so API Gateway applies the tenant's usage plan
-(rate limits and quotas).
+requestContext.authorizer (which only the authorizer can set), and the key's
+API Gateway key is returned as usageIdentifierKey so API Gateway applies the
+tenant's usage plan (rate limits and quotas). That is the gateway key the
+customer's key borrowed from a pool of aged keys (gateway_key, see
+services/tenants/admin.py KEY_POOL_SIZE), or for older keys the key itself.
 
 A key is accepted while its status is "active", or "expiring" (replaced by a
 rotation) until its expires_at.
@@ -19,9 +21,11 @@ so a key embedded in an application can send data but never read it back.
 
 API Gateway caches the answer per key for 60 s, so a revoked key is refused
 within that; disabling the key in API Gateway (infra/tenant.sh revoke does
-both) usually refuses it sooner. New keys take up to ~10 minutes to reach every
-API Gateway node (measured 2026-09-28) and are refused (403) by some requests
-until then.
+both) usually refuses it sooner. A new API Gateway key takes minutes (up to 12+
+measured 2026-10-06) to reach every API Gateway node and is refused by some
+requests until then: hence the pool of aged gateway keys. Should a request still
+meet an unknown gateway key, API Gateway answers 429 with Retry-After
+(infra/phaseT2-ingest.yaml InvalidApiKeyResponse), which exporters retry.
 """
 
 import hashlib
@@ -79,5 +83,5 @@ def handler(event, context):
                            "Resource": [f"{base}/{route}" for route in ROUTES[scope]]}],
         },
         "context": {"tenant": tenant, "scope": scope},
-        "usageIdentifierKey": key,
+        "usageIdentifierKey": item.get("gateway_key", {}).get("S") or key,
     }

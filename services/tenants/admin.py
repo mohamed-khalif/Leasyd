@@ -38,6 +38,8 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
                                  tenants: smaller files are parsed sooner and faster
                                  (fresher data), at the cost of more files
   status  {tenant}               tenant record and keys (never the keys themselves)
+  refill-keys {}                 top up the pools of aged API Gateway keys that new keys borrow
+                                 (scheduled through sweep; see KEY_POOL_SIZE)
   usage   {tenant, start, end}   records and bytes compacted per day and signal
   list    {}                     every tenant
   sweep   {}                     scheduled: expire rotated keys, advance deletions
@@ -118,6 +120,15 @@ USER_POOL = os.environ.get("USER_POOL_ID", "")   # Cognito user pool of obs-stat
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
 SCOPES = {"ingest", "read"}   # see the authorizer: ingest sends, read queries
 _KEY_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+# A new API Gateway key takes minutes (measured up to 12+) to reach every API Gateway node, and is
+# refused (403, which OpenTelemetry exporters drop) by some requests until then. So customer keys
+# borrow a gateway key made earlier: keypool#<plan> holds keys made at least KEY_POOL_MIN_AGE ago,
+# the authorizer passes the borrowed one as usageIdentifierKey, and the customer's own key works at
+# once. The sweep (every 15 minutes) tops each pool up to KEY_POOL_SIZE.
+KEY_POOL_SIZE = int(os.environ.get("KEY_POOL_SIZE", "10"))
+KEY_POOL_MIN_AGE = timedelta(minutes=int(os.environ.get("KEY_POOL_MIN_AGE_MINUTES", "30")))
+KEY_POOL_PLANS = ("free", "standard")
+RETIRE_AFTER = timedelta(minutes=10)   # a replaced gateway key outlives the authorizer's 60 s cache
 
 ddb = boto3.resource("dynamodb")
 tenants = ddb.Table(TENANTS)
@@ -141,7 +152,7 @@ def handler(event, context):
     if fn is None:
         return {"error": f"unknown action {action!r}; one of {sorted(ACTIONS)}"}
     args = {k: v for k, v in event.items() if k != "action"}
-    if action not in ("list", "sweep", "restore", "retention", "report-usage"):
+    if action not in ("list", "sweep", "restore", "retention", "report-usage", "refill-keys"):
         args["tenant"] = check_tenant(args.get("tenant"))
     try:
         out = fn(context=context, **args)
@@ -278,6 +289,16 @@ def upgrade(tenant, context=None):
     moved = []
     for k in _keys(tenant):
         if k["status"] in ("active", "expiring") and k.get("plan", "standard") != "standard":
+            # An aged gateway key of the standard plan takes over at once; moving the key's own
+            # gateway key between usage plans would be refused by some requests for minutes.
+            pooled = _pool_take("standard")
+            if pooled:
+                tenants.update_item(Key={"pk": k["pk"]}, UpdateExpression="SET #p = :s, api_key_id = :i, gateway_key = :g",
+                                    ExpressionAttributeNames={"#p": "plan"},
+                                    ExpressionAttributeValues={":s": "standard", ":i": pooled["id"], ":g": pooled["value"]})
+                _retire_later(k["api_key_id"])
+                moved.append(pooled["id"])
+                continue
             # A key may be in only one usage plan of the stage: out of the old one, then into the new
             # (put back if that fails, so the key keeps working).
             try:
@@ -294,6 +315,8 @@ def upgrade(tenant, context=None):
             moved.append(k["api_key_id"])
     tenants.update_item(Key={"pk": f"tenant#{tenant}"}, UpdateExpression="SET #p = :s, upgraded_at = :n REMOVE trial_ends_at, daily_cap_bytes",
                         ExpressionAttributeNames={"#p": "plan"}, ExpressionAttributeValues={":s": "standard", ":n": _iso(_now())})
+    if moved:
+        _invoke_self({"action": "refill-keys"})
     return {"tenant": tenant, "plan": "standard", "was": rec.get("plan"), "keys_moved": moved}
 
 
@@ -588,7 +611,7 @@ def _buffer_seconds(v):
 
 def status(tenant, context=None):
     rec = _record(tenant) or {"status": "unknown (no tenant record)"}
-    keys = [{k: v for k, v in key.items() if k != "pk"} for key in _keys(tenant)]
+    keys = [{k: v for k, v in key.items() if k not in ("pk", "gateway_key")} for key in _keys(tenant)]
     meter = tenants.get_item(Key={"pk": f"meter#{tenant}#{_now():%Y-%m-%d}"}).get("Item") or {}
     return {"tenant": tenant, **{k: v for k, v in rec.items() if k not in ("pk", "tenant")},
             "today": {"bytes": int(meter.get("bytes", 0)), "records": int(meter.get("records", 0)),
@@ -662,7 +685,12 @@ def sweep(context=None):
         if "LastEvaluatedKey" not in page:
             break
         kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
-    return {"expired_keys": expired, "purging": advanced, "deleted": finished}
+    try:
+        pools = refill_keys()
+    except Exception as e:  # noqa: BLE001  a failed top-up mustn't stop the sweep
+        pools = {"error": str(e)[:300]}
+        print(json.dumps({"key_pool_refill_failed": pools["error"]}))
+    return {"expired_keys": expired, "purging": advanced, "deleted": finished, "key_pools": pools}
 
 
 def retention_cutoff(now=None, days=None):
@@ -770,6 +798,16 @@ def restore(context=None):
                 in_plan[plan_id].add(k["api_key_id"])
                 keys_added.append(k["api_key_id"])
         tenants_done.append(t["tenant"])
+    for plan in KEY_POOL_PLANS:
+        if plan not in PLANS:
+            continue
+        for k in _pool(plan).get("keys", []):
+            if k["id"] not in in_plan[PLANS[plan]]:
+                try:
+                    apigw.create_usage_plan_key(usagePlanId=PLANS[plan], keyId=k["id"], keyType="API_KEY")
+                    keys_added.append(k["id"])
+                except apigw.exceptions.NotFoundException:
+                    pass
     return {"tenants": tenants_done, "keys_added_to_plans": keys_added}
 
 
@@ -802,7 +840,46 @@ def purge(tenant, deleted=0, context=None):
     return {"tenant": tenant, "deleted": deleted, "pass_complete": True}
 
 
-ACTIONS = {"create": create, "rotate": rotate, "read-key": read_key, "signup": signup, "add-key": add_key,
+def refill_keys(context=None):
+    """Tops each plan's pool of gateway keys up to KEY_POOL_SIZE (they are usable once
+    KEY_POOL_MIN_AGE old), and deletes replaced gateway keys whose time has come."""
+    added = {}
+    for plan in KEY_POOL_PLANS:
+        if plan not in PLANS:
+            continue
+        missing = KEY_POOL_SIZE - len(_pool(plan).get("keys", []))
+        for _ in range(max(0, missing)):
+            value = "pool_" + "".join(secrets.choice(_KEY_CHARS) for _ in range(40))
+            key_id = _gateway_key(f"pool-{plan}-{_now():%Y%m%dT%H%M%S}-{secrets.token_hex(2)}", value, plan, {"pool": plan})
+            tenants.update_item(Key={"pk": f"keypool#{plan}"}, UpdateExpression="SET #k = list_append(if_not_exists(#k, :e), :n)",
+                                ExpressionAttributeNames={"#k": "keys"},
+                                ExpressionAttributeValues={":e": [], ":n": [{"id": key_id, "value": value, "created_at": _iso(_now())}]})
+            added[plan] = added.get(plan, 0) + 1
+    retired = []
+    now = _iso(_now())
+    for i, r in reversed(list(enumerate(_pool("retired").get("keys", [])))):
+        if r["after"] <= now:
+            try:
+                apigw.delete_api_key(apiKey=r["id"])
+            except apigw.exceptions.NotFoundException:
+                pass
+            try:
+                tenants.update_item(Key={"pk": "keypool#retired"}, UpdateExpression=f"REMOVE #k[{i}]",
+                                    ConditionExpression=f"#k[{i}].id = :id", ExpressionAttributeNames={"#k": "keys"},
+                                    ExpressionAttributeValues={":id": r["id"]})
+            except tenants.meta.client.exceptions.ConditionalCheckFailedException:
+                pass
+            retired.append(r["id"])
+    return {"added": added, "retired": retired}
+
+
+def _retire_later(key_id):
+    tenants.update_item(Key={"pk": "keypool#retired"}, UpdateExpression="SET #k = list_append(if_not_exists(#k, :e), :n)",
+                        ExpressionAttributeNames={"#k": "keys"},
+                        ExpressionAttributeValues={":e": [], ":n": [{"id": key_id, "after": _iso(_now() + RETIRE_AFTER)}]})
+
+
+ACTIONS = {"refill-keys": refill_keys, "create": create, "rotate": rotate, "read-key": read_key, "signup": signup, "add-key": add_key,
            "set-cap": set_cap, "set-search": set_search, "upgrade": upgrade, "extend-trial": extend_trial,
            "set-billing": set_billing, "report-usage": report_usage,
            "invite-user": invite_user, "remove-user": remove_user, "users": users, "revoke": revoke, "delete": delete, "tune": tune, "status": status,
@@ -823,13 +900,55 @@ def _active(tenant):
 
 def _issue_key(tenant, plan, scope="ingest"):
     key = "obs_" + "".join(secrets.choice(_KEY_CHARS) for _ in range(40))
-    key_id = apigw.create_api_key(name=f"{tenant}-{_now():%Y%m%dT%H%M%S}-{secrets.token_hex(2)}", value=key,
-                                  enabled=True, tags={"tenant": tenant, "project": "obs"})["id"]
-    apigw.create_usage_plan_key(usagePlanId=PLANS[plan], keyId=key_id, keyType="API_KEY")
-    tenants.put_item(Item={"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active", "scope": scope,
-                           "api_key_id": key_id, "plan": plan, "created_at": _iso(_now())},
-                     ConditionExpression="attribute_not_exists(pk)")
-    return key, key_id
+    item = {"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active", "scope": scope,
+            "plan": plan, "created_at": _iso(_now())}
+    pooled = _pool_take(plan)
+    if pooled:
+        item.update(api_key_id=pooled["id"], gateway_key=pooled["value"])
+        _invoke_self({"action": "refill-keys"})
+    else:   # no aged gateway key: the key itself, refused by some requests for a few minutes
+        print(json.dumps({"key_pool_empty": plan, "tenant": tenant}))
+        item["api_key_id"] = _gateway_key(f"{tenant}-{_now():%Y%m%dT%H%M%S}-{secrets.token_hex(2)}", key, plan,
+                                          {"tenant": tenant})
+    tenants.put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
+    return key, item["api_key_id"]
+
+
+def _gateway_key(name, value, plan, tags=None):
+    """An API Gateway key in the plan's usage plan -> its id."""
+    key_id = apigw.create_api_key(name=name, value=value, enabled=True, tags={"project": "obs", **(tags or {})})["id"]
+    try:
+        apigw.create_usage_plan_key(usagePlanId=PLANS[plan], keyId=key_id, keyType="API_KEY")
+    except Exception:
+        apigw.delete_api_key(apiKey=key_id)
+        raise
+    return key_id
+
+
+def _pool(plan):
+    return tenants.get_item(Key={"pk": f"keypool#{plan}"}, ConsistentRead=True).get("Item") or {}
+
+
+def _pool_take(plan):
+    """The oldest gateway key of the plan's pool that is at least KEY_POOL_MIN_AGE old, removed from
+    the pool ({id, value}), or None."""
+    if plan not in KEY_POOL_PLANS or plan not in PLANS:
+        return None
+    cutoff = _iso(_now() - KEY_POOL_MIN_AGE)
+    for _ in range(5):
+        keys = _pool(plan).get("keys", [])
+        ready = [(i, k) for i, k in enumerate(keys) if k["created_at"] <= cutoff]
+        if not ready:
+            return None
+        i, k = min(ready, key=lambda ik: ik[1]["created_at"])
+        try:   # taken by someone else in between: the condition fails, look again
+            tenants.update_item(Key={"pk": f"keypool#{plan}"}, UpdateExpression=f"REMOVE #k[{i}]",
+                                ConditionExpression=f"#k[{i}].id = :id", ExpressionAttributeNames={"#k": "keys"},
+                                ExpressionAttributeValues={":id": k["id"]})
+            return {"id": k["id"], "value": k["value"]}
+        except tenants.meta.client.exceptions.ConditionalCheckFailedException:
+            continue
+    return None
 
 
 def _revoke_key(k, delete_from_gateway=False):

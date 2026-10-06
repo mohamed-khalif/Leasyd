@@ -41,6 +41,7 @@ query and returns partial aggregates or rows.
 """
 
 import base64
+import errno
 import json
 import math
 import os
@@ -396,11 +397,30 @@ def _naive(ts):
 # -------------------------------------------------------------- worker
 
 def worker(event, context):
-    if "job" in event:
-        return run_job(event)
-    if "sql" in event:
-        return run_sql_worker(event)
-    return run_worker(event)
+    try:
+        if "job" in event:
+            return run_job(event)
+        if "sql" in event:
+            return run_sql_worker(event)
+        return run_worker(event)
+    except Exception as e:
+        if _out_of_fds(e):
+            # This container can't open files any more, so every query sent to it would fail (for
+            # every tenant). Exit: Lambda replaces the container, and the coordinator retries the
+            # chunk ("Runtime.ExitError" is retried) on a fresh one.
+            print(json.dumps({"worker_exit": "out of file descriptors", "error": str(e)[:300]}), flush=True)
+            os._exit(1)
+        raise
+
+
+def _out_of_fds(e):
+    seen = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if getattr(e, "errno", None) == errno.EMFILE or "Too many open files" in str(e):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
 
 
 # ------------------------------------------------------------ SQL (read-only, one tenant)
@@ -899,7 +919,7 @@ def over_limit(tenant, kind):
 
 
 def _run_in_background(payload):
-    boto3.client("lambda").invoke(FunctionName=WORKER_FUNCTION, InvocationType="Event", Payload=json.dumps(payload))
+    _client("lambda").invoke(FunctionName=WORKER_FUNCTION, InvocationType="Event", Payload=json.dumps(payload))
 
 
 def run_job(event):
@@ -940,8 +960,17 @@ def job_status(tenant, job):
     return _http(202, {"job": job, "status": "running", "started": state["started"]})
 
 
+_clients = {}   # made once per container: a client per call keeps its connections open until GC
+
+
+def _client(name):
+    if name not in _clients:
+        _clients[name] = boto3.client(name)
+    return _clients[name]
+
+
 def _s3():
-    return boto3.client("s3")
+    return _client("s3")
 
 
 def _epoch_of(v, name):

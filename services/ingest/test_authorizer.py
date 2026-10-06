@@ -26,7 +26,8 @@ def auth():
                 ("bad-tenant-key", "Acme#x", "active", None),
                 ("rotated-key", "acme", "expiring", "2999-01-01T00:00:00Z"),
                 ("expired-key", "acme", "expiring", "2020-01-01T00:00:00Z"),
-                ("read-key", "acme", "active", None), ("odd-scope-key", "acme", "active", None)]:
+                ("read-key", "acme", "active", None), ("odd-scope-key", "acme", "active", None),
+                ("pooled-key", "acme", "active", None)]:
             item = {"pk": {"S": f"key#{authorizer.key_hash(key)}"}, "tenant": {"S": tenant}, "status": {"S": status}}
             if expires:
                 item["expires_at"] = {"S": expires}
@@ -34,6 +35,8 @@ def auth():
                 item["scope"] = {"S": "read"}
             if key == "odd-scope-key":
                 item["scope"] = {"S": "admin"}
+            if key == "pooled-key":
+                item["gateway_key"] = {"S": "pool_aged-gateway-key"}
             ddb.put_item(TableName="obs-tenants", Item=item)
         yield authorizer
 
@@ -82,3 +85,10 @@ def test_keys_are_stored_hashed(auth):
 
 def test_rotated_key_works_until_it_expires(auth):
     assert call(auth, {"x-api-key": "rotated-key"})["context"] == {"tenant": "acme", "scope": "ingest"}
+
+
+def test_a_key_with_a_borrowed_gateway_key_is_metered_on_that_one(auth):
+    # New keys borrow an aged API Gateway key (new gateway keys are refused for minutes).
+    out = call(auth, {"X-Api-Key": "pooled-key"})
+    assert out["context"] == {"tenant": "acme", "scope": "ingest"}
+    assert out["usageIdentifierKey"] == "pool_aged-gateway-key"

@@ -1,7 +1,7 @@
 # Status
 
 Where the project stands, what is running on AWS, and how to pick it up.
-Last updated: 2026-10-05. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+Last updated: 2026-10-06. Detail: `docs/observability-plan.md` (the plan, with results per phase)
 and `infra/README.md` (deploy and test commands per phase).
 
 ## What exists
@@ -85,6 +85,26 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
 
 ## Next
 
+0. **Pre-launch QA (2026-10-06, run r1006) found three blockers; fixed in code, to deploy** (in this order):
+   1. `infra/deploy-phaseT2.sh` — authorizer passes a key's borrowed gateway key (`gateway_key`) as
+      usageIdentifierKey; INVALID_API_KEY answers 429 + Retry-After (retried) instead of 403 (dropped).
+      Must go before T5: a key issued with a borrowed gateway key needs the new authorizer.
+   2. `infra/deploy-phaseT5.sh`, then `infra/tenant.sh` → `refill-keys` (or wait for the 15-minute sweep).
+      New keys borrow a pooled API Gateway key at least 30 minutes old, so they work at once
+      (BUG-3: new keys were refused 403 for 2-12+ minutes and exporters dropped the data).
+      Upgrades swap to an aged standard key instead of moving the key between usage plans.
+   3. `infra/deploy-phase4.sh` — query workers reuse their per-tenant S3/DynamoDB clients
+      (BUG-4: a new client per call leaked sockets; 10-20 concurrent 24 h queries exhausted file
+      descriptors and every query on those containers failed, for every tenant, ~19 min), and a
+      worker out of file descriptors exits so the retry runs on a fresh container. Also brings the
+      ms/ns epoch fix (`f683765`) that was never deployed.
+   4. `infra/deploy-phaseS1.sh` and `infra/deploy-phaseA1.sh` — bundles now include ingest.py's own
+      modules (BUG-1: Synthetics, SLOs and maintenance windows 502 for everyone since 2026-10-05
+      00:47 UTC, "No module named 'cloudwatch'"); `infra/check-bundle.py` fails a deploy that misses one.
+   Then the 15-minute smoke test in the QA report. Still open from QA: alarms on API 5XX / function
+   errors that would have caught BUG-1 and BUG-4, the fast-lane index item limit for files with
+   thousands of services (BUG-5), silent 200-drops, meter under-count under load (~0.3%).
+
 1. Freshness at 50 GB/h fixed: p99 38 s (was 74 s) with the fast parse in the fast lane and 15 s
    Firehose buffers for the 10 largest tenants (`infra/tenant.sh tune <tenant> 15`). Details and
    all benchmarks: `docs/REPORT-2026-09-28.md`. Still to do: Lambda memory above 3008 MB (ask AWS), compaction chunks capped by record count
@@ -94,9 +114,10 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
 
 ## Known limits (customer-facing)
 
-- A new API key is accepted by some API Gateway nodes and refused (403) by others for up to ~10
-  minutes (measured 2026-09-28; ~1 min earlier the same day). Existing keys are unaffected. Fix if it
-  matters: enforce per-tenant rate limits in the authorizer instead of API Gateway usage plans.
+- A new API key borrows an aged API Gateway key from a pool (`keypool#<plan>`, 10 per plan, refilled
+  by the sweep), so it works at once. If the pool is empty (more than 10 new keys within 30 minutes),
+  a key gets its own gateway key and some requests get 429 "still being activated" for a few minutes
+  (exporters retry 429; measured before the pool: 403 for 2 to 12+ minutes).
 - Ingest is OTLP over HTTP only. gRPC senders and other agents' formats (Prometheus, Fluent Bit, ...)
   go through an OpenTelemetry Collector (`docs/QUICKSTART.md`).
 - Invitations and sign-up emails go through SES (once obs-phaseE1 is deployed and SES production access granted). Password-reset codes still come from Cognito's own sender (~50/day): moving those needs the user pool's email settings changed (in obs-state when the account moves there).

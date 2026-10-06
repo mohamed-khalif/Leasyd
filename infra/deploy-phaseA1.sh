@@ -15,7 +15,9 @@ APP_ARGS=()
 rm -rf services/alerts/build && mkdir -p services/alerts/build
 pip install -q --target services/alerts/build --only-binary=:all: --implementation cp --python-version 3.12 \
   --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 -r services/ingest/requirements.txt
-cp services/alerts/alerts.py services/alerts/dashboards.py services/synthetics/safety.py services/ingest/ingest.py services/alerts/build/
+cp services/alerts/alerts.py services/alerts/dashboards.py services/synthetics/safety.py \
+  services/ingest/ingest.py services/ingest/cloudwatch.py services/ingest/droprules.py services/alerts/build/
+python3 infra/check-bundle.py services/alerts/build
 aws cloudformation package \
   --template-file infra/phaseA1-alerts.yaml \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phaseA1 \

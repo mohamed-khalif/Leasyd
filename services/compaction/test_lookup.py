@@ -173,3 +173,13 @@ def test_lookup_uses_tenant_tagged_session(aws, monkeypatch):
     lookup.lookup(tenant="globex", start="2026-09-26T10:00:00Z", end="2026-09-26T11:00:00Z")
     assert [c["Tags"] for c in calls] == [[{"Key": "tenant", "Value": "acme"}],
                                           [{"Key": "tenant", "Value": "globex"}]]  # cached per tenant
+
+
+def test_tenant_clients_are_reused_not_rebuilt(aws, monkeypatch):
+    # A new client per call kept its connection pool open, and a busy warm container ran out of
+    # file descriptors ("Too many open files"): every query on it failed, for every tenant.
+    _, lookup = aws
+    lookup._sessions.clear()
+    first = lookup._clients_for("acme")
+    assert lookup._clients_for("acme") == first
+    assert lookup._clients_for("globex")[1] is not first[1]
