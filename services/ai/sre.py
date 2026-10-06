@@ -13,7 +13,9 @@ signed-in user's tenant, which comes only from the token. The model never choose
 has no tool that changes anything.
 
 Claude: Claude (CLAUDE_MODEL, Opus 5.5 by default) on Amazon Bedrock (the Messages API endpoint,
-"Mantle"; this function's IAM role, SigV4; BEDROCK_REGION); adaptive thinking with progress updates
+"Mantle"; this function's IAM role, SigV4; BEDROCK_REGION), or, when an Anthropic API key is stored in
+SSM (ANTHROPIC_KEY_PARAM, a SecureString; for testing while Bedrock isn't available), the Claude API
+directly with the same model (without the "anthropic." prefix) and server-side refusal fallback; adaptive thinking with progress updates
 (shown while it works; plain summarized thinking where the model or endpoint lacks them). The
 conversation is replayed exactly as returned (append-only), so thinking
 stays valid across turns.
@@ -48,6 +50,9 @@ RESULT_CHARS = 12_000          # a tool result is cut to this (the model is told
 MAX_MESSAGE = 4_000
 _ID = re.compile(r"^[0-9a-f]{16}$")
 UPDATES_BETA = "thinking-display-updates-2026-08-18"
+FALLBACK_BETA = "server-side-fallback-2026-07-01"      # Claude API only: a refused request is retried on a fitting model
+ANTHROPIC_KEY_PARAM = os.environ.get("ANTHROPIC_KEY_PARAM", "/obs/anthropic/api_key")
+_direct = {}   # {"key": ...} once read: the Claude API instead of Bedrock
 _progress = {"updates": True}   # turned off for good if the endpoint refuses progress updates
 
 _clients = {}
@@ -56,13 +61,34 @@ _clients = {}
 def client(name):
     if name not in _clients:
         if name == "claude":
-            from anthropic import AnthropicBedrockMantle
-            _clients[name] = AnthropicBedrockMantle(aws_region=BEDROCK_REGION, max_retries=3)
+            key = anthropic_key()
+            if key:
+                from anthropic import Anthropic
+                _clients[name] = Anthropic(api_key=key, max_retries=3)
+            else:
+                from anthropic import AnthropicBedrockMantle
+                _clients[name] = AnthropicBedrockMantle(aws_region=BEDROCK_REGION, max_retries=3)
         elif name == "table":
             _clients[name] = boto3.resource("dynamodb").Table(TABLE)
         else:
             _clients[name] = boto3.client(name)
     return _clients[name]
+
+
+def anthropic_key():
+    """The Anthropic API key in SSM, if one is stored (else None: Bedrock). Read once per container."""
+    if "key" not in _direct:
+        try:
+            _direct["key"] = boto3.client("ssm").get_parameter(Name=ANTHROPIC_KEY_PARAM, WithDecryption=True)["Parameter"]["Value"].strip() or None
+        except ClientError:
+            _direct["key"] = None
+        print(json.dumps({"claude_endpoint": "claude-api" if _direct["key"] else "bedrock"}))
+    return _direct["key"]
+
+
+def model_id():
+    """CLAUDE_MODEL as the endpoint in use names it: Bedrock's "anthropic.<id>", the Claude API's "<id>"."""
+    return MODEL.removeprefix("anthropic.") if anthropic_key() else MODEL
 
 
 class Refused(Exception):
@@ -507,16 +533,21 @@ STOP = "Stop investigating now: answer with what you have found so far, and say 
 def _create(claude, messages):
     """One model call: the system prompt cached, adaptive thinking with progress updates when the
     endpoint has them (else summarized thinking, from then on)."""
-    kw = dict(model=MODEL, max_tokens=16000, tools=TOOLS, messages=messages, output_config={"effort": "high"},
+    kw = dict(model=model_id(), max_tokens=16000, tools=TOOLS, messages=messages, output_config={"effort": "high"},
               system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}])
+    betas = []
+    if anthropic_key():   # the Claude API: a refused request falls back to a model that can answer it
+        betas, kw["extra_body"] = [FALLBACK_BETA], {"fallbacks": "default"}
     if _progress["updates"]:
         try:
-            return claude.beta.messages.create(**kw, thinking={"type": "adaptive", "display": "updates"}, betas=[UPDATES_BETA])
+            return claude.beta.messages.create(**kw, thinking={"type": "adaptive", "display": "updates"}, betas=[UPDATES_BETA, *betas])
         except Exception as e:
             if getattr(e, "status_code", None) != 400 or not re.search(r"display|beta|updates", str(e), re.I):
                 raise
             _progress["updates"] = False
             print(json.dumps({"ai_progress_updates": "unavailable", "error": str(e)[:300]}))
+    if betas:
+        kw["betas"] = betas
     return claude.beta.messages.create(**kw, thinking={"type": "adaptive", "display": "summarized"})
 
 

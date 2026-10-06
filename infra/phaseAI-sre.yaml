@@ -55,6 +55,10 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-ai"
+              - Sid: AnthropicKey    # optional: an Anthropic API key in SSM switches the AI SRE to the Claude API (testing)
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/anthropic/*"
               - Sid: Claude          # Bedrock's Messages API endpoint (Mantle), this account's projects
                 Effect: Allow
                 Action: bedrock-mantle:CreateInference

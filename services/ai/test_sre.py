@@ -213,3 +213,28 @@ def test_tools_always_query_the_tenant_and_shape_results(sre):
         t.run("get_trace", {"trace_id": "not-hex"})
     with pytest.raises(ValueError):
         t.run("drop_tables", {})
+
+
+def test_with_an_anthropic_key_it_uses_the_claude_api(sre, monkeypatch):
+    """A key in SSM switches the AI SRE from Bedrock to the Claude API: the first-party model id, and
+    server-side refusal fallback."""
+    import anthropic
+    assert sre.anthropic_key() is None and sre.model_id() == "anthropic.claude-opus-5-5"   # no key: Bedrock
+    sre._direct.clear()
+    boto3.client("ssm").put_parameter(Name="/obs/anthropic/api_key", Value="sk-ant-test", Type="SecureString")
+    sre._clients.pop("claude", None)
+    assert sre.anthropic_key() == "sk-ant-test" and sre.model_id() == "claude-opus-5-5"
+    assert isinstance(sre.client("claude"), anthropic.Anthropic)
+    sent = []
+
+    class Beta:
+        def create(self, **kw):
+            sent.append(kw)
+            return Resp([{"type": "text", "text": "ok"}], "end_turn")
+    claude = types.SimpleNamespace(beta=types.SimpleNamespace(messages=Beta()))
+    sre._create(claude, [{"role": "user", "content": "hi"}])
+    kw = sent[-1]
+    assert kw["model"] == "claude-opus-5-5" and kw["extra_body"] == {"fallbacks": "default"}
+    assert kw["betas"] == [sre.UPDATES_BETA, sre.FALLBACK_BETA] and kw["thinking"]["type"] == "adaptive"
+    sre._direct.clear()
+    sre._clients.pop("claude", None)
