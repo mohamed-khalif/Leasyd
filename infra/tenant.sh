@@ -20,6 +20,8 @@
 #   infra/tenant.sh list                                  all tenants
 #   infra/tenant.sh restore                               after infra/up.sh recreates the API: live keys back in
 #                                                         their usage plans, streams for every active tenant
+#   infra/tenant.sh refill-keys                           top up the pools of aged API Gateway keys new keys
+#                                                         borrow (the sweep does it every 15 min; usable at 30 min)
 #
 # See services/tenants/admin.py for what each does.
 set -euo pipefail
@@ -116,5 +118,8 @@ for t in json.loads(sys.argv[1])["tenants"]:
     python3 -c 'import json,sys; r=json.loads(sys.argv[1])
 print("restored %d tenants; %d keys put back in their usage plans" % (len(r["tenants"]), len(r["keys_added_to_plans"])))' "$RESULT" >&2
     ;;
-  *) sed -n '2,22p' "$0"; exit 2 ;;
+  refill-keys)
+    admin '{"action":"refill-keys"}'; pretty
+    ;;
+  *) sed -n '2,24p' "$0"; exit 2 ;;
 esac

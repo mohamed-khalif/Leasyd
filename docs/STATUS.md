@@ -89,7 +89,7 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
    1. `infra/deploy-phaseT2.sh` — authorizer passes a key's borrowed gateway key (`gateway_key`) as
       usageIdentifierKey; INVALID_API_KEY answers 429 + Retry-After (retried) instead of 403 (dropped).
       Must go before T5: a key issued with a borrowed gateway key needs the new authorizer.
-   2. `infra/deploy-phaseT5.sh`, then `infra/tenant.sh` → `refill-keys` (or wait for the 15-minute sweep).
+   2. `infra/deploy-phaseT5.sh`, then `infra/tenant.sh refill-keys` (or wait for the 15-minute sweep).
       New keys borrow a pooled API Gateway key at least 30 minutes old, so they work at once
       (BUG-3: new keys were refused 403 for 2-12+ minutes and exporters dropped the data).
       Upgrades swap to an aged standard key instead of moving the key between usage plans.
