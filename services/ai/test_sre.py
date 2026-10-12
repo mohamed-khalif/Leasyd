@@ -1,3 +1,4 @@
+import base64
 """The AI SRE's loop, storage and API, against moto, with a scripted Claude and fake query results."""
 import json
 import os
@@ -55,7 +56,9 @@ def tool_use(i, name, **inp):
 
 
 def api(mod, method, body=None, cid=None, tenant="acme", user="ana@acme.io"):
-    out = mod.handler({"httpMethod": method, "pathParameters": {"proxy": cid} if cid else None, "body": json.dumps(body) if body else None,
+    # As API Gateway delivers them: the API passes every body through as binary (base64).
+    raw = base64.b64encode(json.dumps(body).encode()).decode() if body else None
+    out = mod.handler({"httpMethod": method, "pathParameters": {"proxy": cid} if cid else None, "body": raw, "isBase64Encoded": bool(body),
                        "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant, "email": user}}}}, None)
     return out["statusCode"], json.loads(out["body"])
 

@@ -26,6 +26,7 @@ _ai/tenant=<T>/<id>.json, expiring with the tenant's data; an index item ai#<T>#
 TURN_SECONDS a turn.
 """
 
+import base64
 import json
 import os
 import re
@@ -642,7 +643,10 @@ def handler(event, context):
         cid = ((event.get("pathParameters") or {}).get("proxy") or "").strip("/")
         if method == "POST" and not cid:
             rec = client("table").get_item(Key={"pk": f"tenant#{tenant}"}).get("Item") or {}
-            body = json.loads(event.get("body") or "{}")
+            raw = event.get("body") or "{}"
+            if event.get("isBase64Encoded"):   # the API passes every body through as binary (OTLP ingest)
+                raw = base64.b64decode(raw).decode("utf-8")
+            body = json.loads(raw)
             if not isinstance(body, dict):
                 raise Refused(400, "body: a JSON object")
             return _http(202, start_turn(tenant, user, body, rec.get("plan")))
