@@ -13,7 +13,8 @@ import pytest
 from moto import mock_aws
 
 HERE = os.path.dirname(__file__)
-sys.path[:0] = [HERE, os.path.join(HERE, "..", "synthetics"), os.path.join(HERE, "..", "ingest")]
+sys.path[:0] = [HERE, os.path.join(HERE, "..", "synthetics"), os.path.join(HERE, "..", "ingest"),
+                os.path.join(HERE, "..", "tenants")]
 os.environ.update(AWS_DEFAULT_REGION="us-east-1", AWS_ACCESS_KEY_ID="testing", AWS_SECRET_ACCESS_KEY="testing")
 os.environ.pop("AWS_SESSION_TOKEN", None)
 
@@ -356,3 +357,24 @@ def test_builtin_dashboards_can_be_cloned():
     assert len(panel_ids) > 20 and all(dashboards._PANEL_ID.match(i) for i in panel_ids), panel_ids
     assert set(re.findall(r'type: "(\w+)"', src)) <= dashboards.PANEL_TYPES
     assert set(re.findall(r'unit: "([^"]*)"', src)) <= dashboards.UNITS
+
+
+def test_an_account_users_address_gets_alerts_at_once_by_ses(aws, monkeypatch):
+    # The SNS confirmation link held every alert email back until clicked (QA 2026-10-06). An
+    # address that signs in to the account is already proven theirs: Leasyd sends it directly.
+    sent = []
+    monkeypatch.setattr(alerts.emails, "EMAIL_FROM", "Leasyd <no-reply@app.leasyd.com>")
+    monkeypatch.setattr(alerts.emails, "send", lambda to, subject, paragraphs, button=None, **kw: sent.append((to, subject, paragraphs, button)))
+    table = boto3.resource("dynamodb").Table("obs-tenants")
+    table.put_item(Item={"pk": "user#ana@acme.io", "tenant": "acme", "status": "active", "email": "ana@acme.io"})
+    table.put_item(Item={"pk": "user#bo@globex.io", "tenant": "globex", "status": "active", "email": "bo@globex.io"})
+    s, ch = call("acme", "POST", "channels", {"type": "email", "name": "Ana", "email": "Ana@acme.io"})
+    assert s == 201 and ch["status"] == "confirmed" and ch["delivery"] == "ses"
+    assert not boto3.client("sns").list_topics()["Topics"]                       # no SNS topic, no AWS email
+    s, other = call("acme", "POST", "channels", {"type": "email", "name": "Bo", "email": "bo@globex.io"})
+    assert s == 201 and "delivery" not in other                                # another account's user: SNS, confirms
+    assert len(boto3.client("sns").list_topics()["Topics"]) == 1
+    s, out = call("acme", "POST", f"channels/{ch['id']}/test", {})
+    assert s == 200 and out["sent"] is True
+    [(to, subject, paragraphs, button)] = sent
+    assert to == "ana@acme.io" and "Test alert" in subject and button[0] == "Open in Leasyd"

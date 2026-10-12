@@ -13,6 +13,10 @@ Parameters:
     Type: String
     Default: https://app.leasyd.com
     Description: The portal's address, for links in alerts.
+  EmailFrom:
+    Type: String
+    Default: ""
+    Description: SES sender (obs-phaseE1 output EmailFrom). Set, alerts to the account's own users go by SES at once; else every email channel confirms through SNS.
 
 Resources:
   Role:
@@ -36,6 +40,12 @@ Resources:
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
                 Condition:
                   ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["channel#*", "alert#*", "astate#*", "slo#*", "dash#*"] }
+              - Sid: AccountUsers  # whether an alert email address is one of the account's own users
+                Effect: Allow
+                Action: dynamodb:GetItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                Condition:
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["user#*"] }
               - Sid: ListPerTenant
                 Effect: Allow
                 Action: dynamodb:Query
@@ -54,6 +64,9 @@ Resources:
                 Effect: Allow
                 Action: [sns:CreateTopic, sns:TagResource, sns:Subscribe, sns:Publish, sns:DeleteTopic, sns:ListSubscriptionsByTopic]
                 Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alert-*"
+              - Effect: Allow   # alert emails to the account's own users
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
               - Sid: History       # alert events as the tenant's own logs
                 Effect: Allow
                 Action: firehose:PutRecordBatch
@@ -87,6 +100,7 @@ Resources:
           KMS_KEY: alias/obs-checks
           QUERY_FUNCTION: obs-query
           APP_URL: !Ref AppUrl
+          EMAIL_FROM: !Ref EmailFrom
           RECORD_COMPRESSION: gzip
           STREAM_PREFIX: obs-t-
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: A1 }]

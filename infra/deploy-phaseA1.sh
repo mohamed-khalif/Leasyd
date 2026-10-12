@@ -11,12 +11,17 @@ ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 DOMAIN="$(aws cloudformation describe-stacks --stack-name obs-dns --query "Stacks[0].Outputs[?OutputKey=='DomainName'].OutputValue" --output text 2>/dev/null || true)"
 APP_ARGS=()
 [[ -n "$DOMAIN" && "$DOMAIN" != None ]] && APP_ARGS=("AppUrl=https://app.${DOMAIN}")
+# Alert emails to the account's own users go by SES from the obs-phaseE1 sender, once it exists.
+EMAIL_FROM="$(aws cloudformation describe-stacks --stack-name obs-phaseE1 \
+  --query "Stacks[0].Outputs[?OutputKey=='EmailFrom'].OutputValue" --output text 2>/dev/null || true)"
+[[ -n "$EMAIL_FROM" && "$EMAIL_FROM" != None ]] && APP_ARGS+=("EmailFrom=${EMAIL_FROM}")
 
 rm -rf services/alerts/build && mkdir -p services/alerts/build
 pip install -q --target services/alerts/build --only-binary=:all: --implementation cp --python-version 3.12 \
   --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 -r services/ingest/requirements.txt
 cp services/alerts/alerts.py services/alerts/dashboards.py services/synthetics/safety.py \
-  services/ingest/ingest.py services/ingest/cloudwatch.py services/ingest/droprules.py services/alerts/build/
+  services/ingest/ingest.py services/ingest/cloudwatch.py services/ingest/droprules.py services/tenants/emails.py \
+  services/alerts/build/
 python3 infra/check-bundle.py services/alerts/build
 aws cloudformation package \
   --template-file infra/phaseA1-alerts.yaml \

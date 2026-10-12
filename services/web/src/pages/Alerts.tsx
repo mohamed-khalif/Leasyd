@@ -241,7 +241,9 @@ function Channels({ ctx }: { ctx: Ctx }) {
           <pre className="body-sample">{created.signing_secret}</pre>
         </div>
       )}
-      {created?.type === "email" && <div className="result-box pass" role="status"><b>Check {created.email}.</b> AWS sends a confirmation email; alerts arrive after its link is clicked.</div>}
+      {created?.type === "email" && (created.status === "confirmed"
+        ? <div className="result-box pass" role="status"><b>Ready.</b> {created.email} signs in to this account, so alerts go there straight away.</div>
+        : <div className="result-box pass" role="status"><b>Check {created.email}.</b> It isn't a user of this account, so AWS sends it a confirmation email; alerts arrive after its link is clicked. (Your team's own addresses need no confirmation.)</div>)}
       <Panel title="Add a channel">
         <form onSubmit={add}>
           <div className="form-grid">

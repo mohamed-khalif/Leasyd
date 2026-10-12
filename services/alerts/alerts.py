@@ -3,8 +3,11 @@ error budget, by email, Slack or webhook.
 
 Settings (obs-tenants items, attribute tenant; managed in the portal through /v1/app/alerts/...):
   channel#<tenant>#<id>   where alerts go:
-                            email    an SNS topic obs-alert-<tenant>-<id> with that address
-                                     subscribed (the person confirms once, by the link AWS sends)
+                            email    the address of one of the account's own users (they signed in,
+                                     so it's theirs): sent by Leasyd with SES, at once (delivery
+                                     "ses"). Any other address: an SNS topic obs-alert-<tenant>-<id>
+                                     with it subscribed (the person confirms once, by the link AWS
+                                     sends), so no one can have alerts mailed to a stranger
                             slack    an incoming-webhook URL (https://hooks.slack.com/...)
                             webhook  any public https URL; POSTed JSON, signed with the channel's
                                      own secret (X-Leasyd-Signature: sha256=<HMAC of the body>)
@@ -52,6 +55,7 @@ from urllib.parse import quote
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
+import emails
 import ingest
 import safety
 from safety import Refused
@@ -233,6 +237,8 @@ def _public_channel(item):
 
 
 def _email_status(item):
+    if item.get("delivery") == "ses":
+        return "confirmed"
     try:
         subs = client("sns").list_subscriptions_by_topic(TopicArn=item["topic_arn"])["Subscriptions"]
     except Exception:  # noqa: BLE001
@@ -241,13 +247,21 @@ def _email_status(item):
     return "confirmed" if arn and arn.startswith("arn:") else "waiting for confirmation"
 
 
+def _is_user(tenant, email):
+    """Whether email signs in to this tenant (an active or invited user of it)."""
+    rec = client("table").get_item(Key={"pk": f"user#{email}"}).get("Item") or {}
+    return rec.get("tenant") == tenant and rec.get("status") in ("active", "invited")
+
+
 def create_channel(tenant, user, body):
     settings, plain = validate_channel(body)
     if len(_items(tenant, f"channel#{tenant}#")) >= MAX_CHANNELS:
         raise Refused(f"at most {MAX_CHANNELS} channels")
     cid = _secrets.token_hex(6)
     item = {"pk": f"channel#{tenant}#{cid}", "tenant": tenant, **settings, "created_by": user, "created_at": _now()}
-    if settings["type"] == "email":
+    if settings["type"] == "email" and emails.enabled() and _is_user(tenant, settings["email"]):
+        item["delivery"] = "ses"        # the account's own user: no confirmation needed
+    elif settings["type"] == "email":
         sns = client("sns")
         topic = sns.create_topic(Name=_topic_name(tenant, cid), Attributes={"DisplayName": "Leasyd alerts"},
                                  Tags=[{"Key": "project", "Value": "obs"}, {"Key": "tenant", "Value": tenant}])["TopicArn"]
@@ -273,6 +287,13 @@ def delete_channel(tenant, item):
 def notify(tenant, channel, message):
     """Send one alert message to one channel. -> None, or why it failed (never raises)."""
     try:
+        if channel["type"] == "email" and channel.get("delivery") == "ses":
+            p = message.get("payload") or {}
+            emails.send(channel["email"], message["title"][:200],
+                        [line for line in str(p.get("detail") or message["text"]).split("\n") if line]
+                        + [f"Rule: {(p.get('rule') or {}).get('name', '')}"],
+                        button=("Open in Leasyd", p["url"]) if p.get("url") else None)
+            return None
         if channel["type"] == "email":
             client("sns").publish(TopicArn=channel["topic_arn"], Subject=message["title"][:99], Message=message["text"])
             return None
