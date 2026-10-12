@@ -34,15 +34,21 @@ from google.protobuf import json_format
 from google.protobuf.message import DecodeError
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
-from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceResponse
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceResponse
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest, ExportTraceServiceResponse
 
 import cloudwatch
 import droprules
 
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
 TENANTS_TABLE = os.environ.get("TENANTS_TABLE", "")   # empty: no metering, no caps
-METER_FLUSH_S = 1     # how often a container adds its counts to the day's meter (billing: a
-                      # container frozen or recycled loses at most this much of its counts)
+# How often a container adds its counts to the day's meter. 0: with every request (one DynamoDB
+# update, ~5 ms). Counts still pending when a container is recycled are lost: with 1 s, 0.27% of
+# records went unmetered under load (QA 2026-10-06), and a quiet tenant's last request each time.
+METER_FLUSH_S = float(os.environ.get("METER_FLUSH_S", "0"))
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))   # older items are refused (never kept)
+MAX_FUTURE_S = int(os.environ.get("MAX_FUTURE_SECONDS", "3600"))  # and items this far ahead
 CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "support@leasyd.com")   # where an ended trial is told to write
 ENDED_BILLING = {"canceled", "unpaid"}   # a subscription's statuses (billing.py) whose data is refused
 CAP_CHECK_S = 30      # how long a container trusts what it read of a tenant's cap and usage
@@ -55,6 +61,11 @@ SIGNALS = {
     "traces": (ExportTraceServiceRequest, "resourceSpans", "scopeSpans", "spans"),
     "metrics": (ExportMetricsServiceRequest, "resourceMetrics", "scopeMetrics", "metrics"),
 }
+# signal -> (OTLP response type, its partial_success field counting refused items)
+RESPONSES = {"logs": (ExportLogsServiceResponse, "rejected_log_records"),
+             "traces": (ExportTraceServiceResponse, "rejected_spans"),
+             "metrics": (ExportMetricsServiceResponse, "rejected_data_points")}
+_METRIC_KINDS = ("gauge", "sum", "histogram", "exponentialHistogram", "summary")
 # Firehose records max out at 1,000 KiB; keep headroom for the JSON wrapping.
 MAX_RECORD_BYTES = 1000 * 1024 - 4096
 MAX_BATCH_RECORDS = 500
@@ -103,17 +114,19 @@ def handler(event, context):
             out["headers"]["Retry-After"] = str(wait)
             return out
         doc = parse(signal, _body(event, headers), ctype)
-        out = accept(tenant, signal, doc, drop=True)
-        print(json.dumps({"tenant": tenant, "signal": signal, **out}))
-        return _response(200, ctype, None)
+        rejected, why = reject_out_of_range(signal, doc)
+        out = accept(tenant, signal, doc, drop=True, rejected=rejected)
+        print(json.dumps({"tenant": tenant, "signal": signal, **out, **({"rejected": rejected} if rejected else {})}))
+        return _response(200, ctype, None, partial=(signal, rejected, why) if rejected else None)
     except HttpError as e:
         print(json.dumps({"status": e.status, "error": str(e)}))
         return _response(e.status, "application/json", str(e))
 
 
-def accept(tenant, signal, doc, drop=False):
+def accept(tenant, signal, doc, drop=False, rejected=0):
     """Applies the tenant's drop rules (drop=True), puts what is left of an OTLP JSON document on the
-    tenant's stream and meters it: items received (billed for ingest) and dropped (never stored)."""
+    tenant's stream and meters it: items received (billed for ingest), dropped (never stored) and
+    rejected (refused before it, see reject_out_of_range: not billed)."""
     received, dropped = droprules.apply(signal, doc, meter.drop_rules(tenant)) if drop else (_count(signal, doc), 0)
     records = list(to_records(signal, doc))
     raw_bytes = sum(len(r) for r in records)
@@ -124,7 +137,7 @@ def accept(tenant, signal, doc, drop=False):
         records = [gzip.compress(r, compresslevel=6) for r in records]
     if records:
         put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
-    meter.add(tenant, raw_bytes, received, signal=signal, dropped=dropped)
+    meter.add(tenant, raw_bytes, received, signal=signal, dropped=dropped, rejected=rejected)
     return {"records": len(records), "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records),
             "items": received, "dropped": dropped}
 
@@ -231,13 +244,15 @@ class Meter:
         pending = self.pending.get((tenant, day), {}).get("bytes", 0)
         return cap if cap is not None and used + pending >= cap else None
 
-    def add(self, tenant, nbytes, records, refused=0, signal=None, dropped=0):
+    def add(self, tenant, nbytes, records, refused=0, signal=None, dropped=0, rejected=0):
         if not TENANTS_TABLE:
             return
         p = self.pending.setdefault((tenant, _day()), {})
         counts = {"bytes": nbytes, "records": records, "refused_bytes": refused}
         if signal:
             counts.update({f"in_{signal}": records, f"dropped_{signal}": dropped})
+            if rejected:
+                counts[f"rejected_{signal}"] = rejected
         for k, v in counts.items():
             p[k] = p.get(k, 0) + v
         if time.time() - self.flushed_at >= METER_FLUSH_S:
@@ -261,6 +276,66 @@ class Meter:
             c = self.caps.get(tenant)
             if c and c[1] == day:
                 self.caps[tenant] = (c[0], day, c[2], c[3] + counts.get("bytes", 0), *c[4:])
+
+
+def _ns(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def reject_out_of_range(signal, doc, now=None):
+    """Removes the items Leasyd could never show: timestamps older than RETENTION_DAYS (or in the
+    wrong unit, such as milliseconds, which read as 1970) or more than MAX_FUTURE_S ahead.
+    -> (how many, why) for the response's partial_success. An item without a time (0) is kept:
+    it is stored at its arrival time."""
+    now = time.time() if now is None else now
+    lo, hi = int((now - RETENTION_DAYS * 86400) * 1e9), int((now + MAX_FUTURE_S) * 1e9)
+    why = {"old": 0, "unit": 0, "future": 0}
+
+    def refused(t):
+        if not t:
+            return False
+        if t < lo:
+            why["unit" if t < 10**17 else "old"] += 1      # 10**17 ns is 1973: a smaller unit
+            return True
+        if t > hi:
+            why["future"] += 1
+            return True
+        return False
+
+    _, top, scope_key, item_key = SIGNALS[signal]
+    n = 0
+    for res in doc.get(top) or []:
+        for scope in res.get(scope_key) or []:
+            items = scope.get(item_key) or []
+            if signal == "metrics":
+                for m in items:
+                    for kind in _METRIC_KINDS:
+                        points = (m.get(kind) or {}).get("dataPoints")
+                        if points:
+                            keep = [p for p in points if not refused(_ns(p.get("timeUnixNano")))]
+                            n += len(points) - len(keep)
+                            m[kind]["dataPoints"] = keep
+            else:
+                field = "timeUnixNano" if signal == "logs" else "startTimeUnixNano"
+                keep = [it for it in items
+                        if not refused(_ns(it.get(field)) or (_ns(it.get("observedTimeUnixNano")) if signal == "logs" else None))]
+                n += len(items) - len(keep)
+                scope[item_key] = keep
+    if not n:
+        return 0, None
+    noun = {"logs": "log records", "traces": "spans", "metrics": "data points"}[signal]
+    parts = []
+    if why["unit"]:
+        parts.append(f"{why['unit']} with timestamps before 1973: timestamps must be nanoseconds since 1970 "
+                     "(these look like milliseconds or seconds)")
+    if why["old"]:
+        parts.append(f"{why['old']} older than {RETENTION_DAYS} days (Leasyd keeps {RETENTION_DAYS} days)")
+    if why["future"]:
+        parts.append(f"{why['future']} more than {MAX_FUTURE_S // 60} minutes in the future (check the sender's clock)")
+    return n, f"{n} {noun} not accepted: " + "; ".join(parts)
 
 
 def _size(n):
@@ -328,6 +403,10 @@ def parse(signal, body, ctype):
             raise HttpError(400, f"bad JSON body: {e}")
         if not isinstance(doc, dict):
             raise HttpError(400, "JSON body must be an object")
+        if not doc.get(top):
+            other = next((sig for sig, (_, t, _, _) in SIGNALS.items() if sig != signal and doc.get(t)), None)
+            if other:
+                raise HttpError(400, f"this is OTLP {other} ({SIGNALS[other][1]}); send it to /v1/{other}, not /v1/{signal}")
     else:
         raise HttpError(415, f"unsupported content type {ctype!r}")
     resources = doc.get(top) or []
@@ -449,7 +528,19 @@ def _chunks(records):
         yield batch
 
 
-def _response(status, ctype, error):
+def _response(status, ctype, error, partial=None):
+    """partial: (signal, rejected, message) -> OTLP partial_success, so SDKs log what was refused."""
+    if status == 200 and partial:
+        signal, rejected, message = partial
+        cls, field = RESPONSES[signal]
+        msg = cls()
+        setattr(msg.partial_success, field, rejected)
+        msg.partial_success.error_message = message
+        if ctype == "application/x-protobuf":
+            return {"statusCode": 200, "headers": {"Content-Type": ctype},
+                    "body": base64.b64encode(msg.SerializeToString()).decode(), "isBase64Encoded": True}
+        return {"statusCode": 200, "headers": {"Content-Type": "application/json"},
+                "body": json_format.MessageToJson(msg, indent=None)}
     if status == 200 and ctype == "application/x-protobuf":
         # An empty Export*ServiceResponse serialises to zero bytes.
         return {"statusCode": 200, "headers": {"Content-Type": ctype}, "body": "", "isBase64Encoded": True}

@@ -46,6 +46,12 @@ class FakeFirehose:
         return {"FailedPutCount": sum(1 for o in out if "ErrorCode" in o), "RequestResponses": out}
 
 
+@pytest.fixture(autouse=True)
+def fixed_dates_stay_in_range(monkeypatch):
+    # The fixtures use fixed dates (H20); the retention window is tested on its own below.
+    monkeypatch.setattr(ingest, "RETENTION_DAYS", 100_000)
+
+
 @pytest.fixture
 def fh(monkeypatch):
     f = FakeFirehose()
@@ -488,3 +494,69 @@ def test_unreadable_drop_rules_keep_everything(metered, fh):
     ddb.put_item(TableName="obs-tenants", Item={"pk": {"S": "drop#acme"}, "rules_json": {"S": "not json"}})
     assert ingest.handler(event(logs_pb(n=2).SerializeToString()), None)["statusCode"] == 200
     assert len(lines(fh)) == 1
+
+
+def _log_doc(*times):
+    return {"resourceLogs": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "a"}}]},
+                              "scopeLogs": [{"logRecords": [{"timeUnixNano": str(t), "body": {"stringValue": "x"}}
+                                                            for t in times]}]}]}
+
+
+def test_records_leasyd_could_never_show_are_refused_and_reported(fh, monkeypatch):
+    # They used to be accepted with 200, billed, and never shown (QA 2026-10-06).
+    monkeypatch.setattr(ingest, "RETENTION_DAYS", 30)
+    now = ingest.time.time()
+    ok, unknown = int(now * 1e9), 0
+    old, millis, future = int((now - 40 * 86400) * 1e9), int(now * 1000), int((now + 86400) * 1e9)
+    out = ingest.handler(event(json.dumps(_log_doc(ok, unknown, old, millis, future)).encode(), "application/json"), None)
+    assert out["statusCode"] == 200
+    p = json.loads(out["body"])["partialSuccess"]
+    assert p["rejectedLogRecords"] == "3"
+    assert "nanoseconds" in p["errorMessage"] and "older than 30 days" in p["errorMessage"] and "future" in p["errorMessage"]
+    [doc] = lines(fh)
+    assert len(doc["resourceLogs"][0]["scopeLogs"][0]["logRecords"]) == 2          # the good one and the one with no time
+    # protobuf senders get the same, as an ExportLogsServiceResponse
+    pb = logs_pb()
+    pb.resource_logs[0].scope_logs[0].log_records[0].time_unix_nano = millis
+    out = ingest.handler(event(pb.SerializeToString()), None)
+    resp = ingest.ExportLogsServiceResponse()
+    resp.ParseFromString(base64.b64decode(out["body"]))
+    assert resp.partial_success.rejected_log_records == 1
+
+
+def test_metric_points_and_spans_out_of_range_are_refused(monkeypatch):
+    monkeypatch.setattr(ingest, "RETENTION_DAYS", 30)
+    now = 1_800_000_000
+    good, old = (now - 60) * 10**9, (now - 31 * 86400) * 10**9
+    doc = {"resourceMetrics": [{"scopeMetrics": [{"metrics": [{"name": "m", "gauge": {"dataPoints": [
+        {"timeUnixNano": str(good), "asDouble": 1}, {"timeUnixNano": str(old), "asDouble": 2}]}}]}]}]}
+    assert ingest.reject_out_of_range("metrics", doc, now)[0] == 1
+    assert len(doc["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"]) == 1
+    doc = {"resourceSpans": [{"scopeSpans": [{"spans": [{"startTimeUnixNano": str(old)}, {"startTimeUnixNano": str(good)}]}]}]}
+    n, why = ingest.reject_out_of_range("traces", doc, now)
+    assert n == 1 and why.startswith("1 spans not accepted: 1 older than 30 days")
+
+
+def test_a_payload_sent_to_the_wrong_signal_path_is_refused_with_the_right_one(fh):
+    spans = {"resourceSpans": [{"scopeSpans": [{"spans": [{"name": "x"}]}]}]}
+    out = ingest.handler(event(json.dumps(spans).encode(), "application/json", path="/v1/logs"), None)
+    assert out["statusCode"] == 400 and "/v1/traces" in json.loads(out["body"])["message"]
+    assert fh.puts == []
+
+
+def test_every_request_is_metered_at_once(fh, monkeypatch):
+    # Counts left pending in a container that is then recycled were lost (0.27% under load).
+    writes = []
+
+    class Ddb:
+        def update_item(self, **kw):
+            writes.append(kw)
+
+        def get_item(self, **kw):
+            return {}
+    monkeypatch.setattr(ingest, "ddb", Ddb())
+    monkeypatch.setattr(ingest, "TENANTS_TABLE", "obs-tenants")
+    monkeypatch.setattr(ingest, "meter", ingest.Meter())
+    for _ in range(3):
+        assert ingest.handler(event(logs_pb().SerializeToString()), None)["statusCode"] == 200
+    assert len(writes) == 3 and not ingest.meter.pending
