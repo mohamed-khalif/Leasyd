@@ -263,3 +263,27 @@ def test_entries_indexed_before_the_fast_lane_wrote_parquet_still_work(aws, monk
     assert sorted(query.run(q, invoke_worker=query.run_worker)["rows"]) == [["api", 50], ["web", 50]]
     objs = boto3.client("s3").list_objects_v2(Bucket="obs-data-test").get("Contents", [])
     assert not [o["Key"] for o in objs if "/_fast/" in o["Key"]]
+
+
+def test_a_raw_file_with_many_services_is_indexed_and_retired_in_parts(aws, monkeypatch):
+    # A file of 2,000 services made a raw-file record over DynamoDB's 400 KB: the fast lane failed
+    # and its data was invisible until compaction. The record is now written in parts.
+    handler, lookup = aws
+    monkeypatch.setattr(handler, "RAW_RECORD_PART", 2)
+    services = [f"svc{i}" for i in range(5)]
+    put_raw(services=services, n=4)
+    assert handler.recent_indexer(event(), None)["entries"] == 5
+    out, rows, kinds = visible(lookup)
+    assert rows == 20 and kinds == ["raw"] and {f["service"] for f in out["files"]} == set(services)
+    recs = [i for i in boto3.client("dynamodb").scan(TableName="obs-index")["Items"] if "#_raw#" in i["pk"]["S"]]
+    assert sorted(i["sk"]["S"][len(RAW):] for i in recs) == ["", "#part1", "#part2"]
+    assert sum(len(i["entries"]["L"]) for i in recs) == 5
+
+    [b] = handler.dispatcher({"plan_only": HOUR}, ctx(0))["planned"]
+    handler.worker({**HOUR, "batch_id": b}, ctx(1))
+    out, rows, kinds = visible(lookup)
+    assert rows == 20 and kinds == ["parquet"]
+    items = boto3.client("dynamodb").scan(TableName="obs-index")["Items"]
+    assert not [i for i in items if "#_raw#" in i["pk"]["S"] or i.get("kind", {}).get("S") == "raw"]
+    objs = boto3.client("s3").list_objects_v2(Bucket="obs-data-test").get("Contents", [])
+    assert not [o["Key"] for o in objs if "/_fast/" in o["Key"]]

@@ -370,13 +370,11 @@ def recent_indexer(event, context):
         # invocation's start, and parsed (now); lookups return them.
         timing = {"delivered_at": event.get("time"), "received_at": received_at}
         items = [_index_item(tenant, signal, fid, w, now, plan_pk, raw_key=key, timing=timing) for w in written]
-        ddb.put_item(TableName=TABLE, Item={
-            "pk": {"S": layout.raw_files_pk(tenant, signal, dt, hour)}, "sk": {"S": key},
-            "entries": {"L": [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items]},
-            # S3 objects of those entries (Parquet and blooms), deleted with them
-            "objects": {"L": [{"S": k} for k in dict.fromkeys(
-                k for w in written for k in (w["key"], w.get("bloom_key")) if k)]},
-        })
+        _put_raw_record(layout.raw_files_pk(tenant, signal, dt, hour), key,
+                        [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items],
+                        # S3 objects of those entries (Parquet and blooms), deleted with them
+                        [{"S": k} for k in dict.fromkeys(
+                            k for w in written for k in (w["key"], w.get("bloom_key")) if k)])
         _upload(written)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -543,6 +541,24 @@ def _seal_day(tenant, signal, day, now, context, force=False):
     return _seal("day", tenant, signal, day, None, now, context, force)
 
 
+RAW_RECORD_PART = 300   # entries (and objects) per raw-file record item: a file with thousands of
+                        # services needs more than DynamoDB's 400 KB item (2026-10-06: 2,000 services)
+
+
+def _put_raw_record(pk, key, entries, objects):
+    """The raw-file record: entries and objects in parts of RAW_RECORD_PART, the first in the
+    record itself (with "parts": how many more), the rest in <key>#part<i> items."""
+    n = max(len(entries), len(objects))
+    chunks = [(entries[i:i + RAW_RECORD_PART], objects[i:i + RAW_RECORD_PART])
+              for i in range(0, n, RAW_RECORD_PART)] or [([], [])]
+    for i, (e, o) in reversed(list(enumerate(chunks))):   # the parts before the record that names them
+        item = {"pk": {"S": pk}, "sk": {"S": key if i == 0 else f"{key}#part{i}"},
+                "entries": {"L": e}, "objects": {"L": o}}
+        if i == 0 and len(chunks) > 1:
+            item["parts"] = {"N": str(len(chunks) - 1)}
+        ddb.put_item(TableName=TABLE, Item=item)
+
+
 def _retire_raw_entries(tenant, signal, dt, hour, keys):
     """Delete the fast-lane entries, their S3 objects and the raw-file records
     of these raw files."""
@@ -553,6 +569,9 @@ def _retire_raw_entries(tenant, signal, dt, hour, keys):
         while req:
             resp = ddb.batch_get_item(RequestItems=req)
             for rec in resp.get("Responses", {}).get(TABLE, []):
+                parts = int(rec.get("parts", {}).get("N", "0"))
+                if parts:
+                    _retire_raw_entries(tenant, signal, dt, hour, [f"{rec['sk']['S']}#part{i}" for i in range(1, parts + 1)])
                 entries = [e["M"] for e in rec.get("entries", {}).get("L", [])]
                 _batch_delete([{"pk": e["pk"], "sk": e["sk"]} for e in entries])
                 # "blooms": records written before the fast lane wrote Parquet
