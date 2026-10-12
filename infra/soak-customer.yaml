@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Soak test customer (obs-soak): one EC2 instance running the OpenTelemetry Demo shop (about 15
+  Soak test customer (obs-soak): one EC2 instance running the OpenTelemetry Demo shop (about 30 containers: 15
   microservices in Go, Java, .NET, Node.js, Python, Ruby, Rust, PHP, C++, with its Locust load
   generator) whose OpenTelemetry Collector sends everything to https://ingest.leasyd.com, the way a
   real customer does, to tenant qa-soak-2. Next to it, infra/t6/soak.py send writes an exact ledger to
@@ -143,7 +143,7 @@ Resources:
           umask 022
           sed -i "s/^LOCUST_USERS=.*/LOCUST_USERS=${LocustUsers}/" .env
           ENVS=(--env-file .env); [ -f .env.override ] && ENVS+=(--env-file .env.override)
-          docker compose "${!ENVS[@]}" -f docker-compose.minimal.yml up --detach
+          docker compose "${!ENVS[@]}" -f docker-compose.yml up --detach   # the full demo: 2.2.0's minimal file misses postgresql
           date -u +%FT%TZ > /opt/demo-started
           echo "$(date -u +%T) demo started"
 
