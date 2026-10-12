@@ -1,7 +1,7 @@
 # Status
 
 Where the project stands, what is running on AWS, and how to pick it up.
-Last updated: 2026-10-06. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+Last updated: 2026-10-12. Detail: `docs/observability-plan.md` (the plan, with results per phase)
 and `infra/README.md` (deploy and test commands per phase).
 
 ## What exists
@@ -96,9 +96,21 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
    - BUG-4 Query workers: clients reused per tenant; a worker out of file descriptors exits. 10/20/30
      concurrent 24 h queries for 8.5 min: 12,482 worker runs (2.8x the run that broke it), 0 errors,
      0 "Too many open files", results exact afterwards.
-   Still open from QA (docs: QA report r1006): alarms on API 5XX / function errors (would have caught
-   BUG-1 and BUG-4), the fast-lane index item limit for files with thousands of services (BUG-5),
-   silent 200-drops, meter under-count under load (~0.3%), email alerts need an SNS confirmation click.
+   Follow-ups (2026-10-12), in code, to deploy: `infra/deploy-phaseT7.sh` (route check),
+   `infra/deploy-phase4.sh` (fast lane), `infra/deploy-phaseT2.sh` (ingest), `infra/deploy-phaseA1.sh` (alerts),
+   `infra/deploy-phaseW1.sh` (alert email wording):
+   - Monitoring: the alarms did fire on 2026-10-06 (synthetics-api, query-worker, query-api, recent-indexer
+     all went to ALARM and emailed obs-alerts); the gap was a function nobody calls: Synthetics was
+     broken 41 h with no traffic, so no errors. New: obs-canary {"check":"routes"} every 5 min signs in
+     as the canary tenant's login and reads every app backend; alarm obs-app-routes (also if it stops).
+   - Fast lane: raw-file records in parts of 300, so a file with thousands of services is searchable at
+     once (was > 400 KB, failed, ~45 min until compaction). obs-fastlane-failed still holds 2 messages
+     from the QA run: redrive or purge them (their files are compacted and the tenant deleted).
+   - Ingest: items older than 30 days, in the wrong time unit or > 1 h ahead are refused with OTLP
+     partial_success (count + reason), not billed, counted as rejected_<signal>; a JSON payload of
+     another signal gets 400 naming the right path. Every request is metered at once (was 0.27% lost).
+   - Alert emails to the account's own users go by SES at once; other addresses still confirm via SNS.
+
 1. Freshness at 50 GB/h fixed: p99 38 s (was 74 s) with the fast parse in the fast lane and 15 s
    Firehose buffers for the 10 largest tenants (`infra/tenant.sh tune <tenant> 15`). Details and
    all benchmarks: `docs/REPORT-2026-09-28.md`. Still to do: Lambda memory above 3008 MB (ask AWS), compaction chunks capped by record count
