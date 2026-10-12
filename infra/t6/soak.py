@@ -28,8 +28,6 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-import boto3
-import botocore.config
 
 REGION = "us-east-1"
 TENANT = "qa-soak-1"
@@ -43,10 +41,17 @@ INTERVAL_S = 15
 FUNCTIONS = ["obs-ingest", "obs-ingest-authorizer", "obs-recent-indexer", "obs-compaction-worker",
              "obs-compaction-dispatcher", "obs-index-lookup", "obs-query", "obs-query-worker", "obs-query-api"]
 
-lam = boto3.client("lambda", region_name=REGION, config=botocore.config.Config(read_timeout=900, retries={"max_attempts": 0}))
-cw = boto3.client("cloudwatch", region_name=REGION)
-sqs = boto3.client("sqs", region_name=REGION)
-logs = boto3.client("logs", region_name=REGION)
+lam = cw = sqs = logs = None   # AWS clients, made on first use: `send` runs on the soak customer without boto3
+
+
+def _aws():
+    global lam, cw, sqs, logs
+    if lam is None:
+        import boto3
+        import botocore.config
+        lam = boto3.client("lambda", region_name=REGION,
+                           config=botocore.config.Config(read_timeout=900, retries={"max_attempts": 0}))
+        cw, sqs, logs = (boto3.client(n, region_name=REGION) for n in ("cloudwatch", "sqs", "logs"))
 
 
 def now_utc():
@@ -58,6 +63,7 @@ def iso(d):
 
 
 def invoke(fn, payload):
+    _aws()
     return json.loads(lam.invoke(FunctionName=fn, Payload=json.dumps(payload).encode())["Payload"].read())
 
 
@@ -172,6 +178,7 @@ def _timed_sql(hours):
 
 
 def watch(a):
+    _aws()
     end = time.time() + a.hours * 3600
     dlq = sqs.get_queue_url(QueueName="obs-fastlane-failed")["QueueUrl"]
     while time.time() < end:

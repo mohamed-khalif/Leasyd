@@ -100,18 +100,21 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          set -euo pipefail   # no -x: the log goes to S3 and must not show the keys
+          set -Eeuo pipefail   # no -x: the log goes to S3 and must not show the keys
           exec > /var/log/soak-setup.log 2>&1
           shutdown -h +$(( ${Hours} * 60 + 30 ))
           export AWS_DEFAULT_REGION=${AWS::Region}
           B=${Bucket}
-          dnf install -y docker git python3-pip
+          # The log reaches S3 every 30 s from the start, and at once on a failure.
+          nohup bash -c "while true; do aws s3 cp /var/log/soak-setup.log s3://$B/setup.log --quiet; sleep 30; done" >/dev/null 2>&1 &
+          trap 'echo "FAILED at line $LINENO"; aws s3 cp /var/log/soak-setup.log "s3://$B/setup.log" --quiet' ERR
+          echo "$(date -u +%T) installing docker"
+          dnf install -y docker git
           systemctl enable --now docker
           mkdir -p /usr/local/lib/docker/cli-plugins
           curl -fsSL https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 \
             -o /usr/local/lib/docker/cli-plugins/docker-compose
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-          pip3 install boto3
           param() { aws ssm get-parameter --name "/obs/soak/$1" --with-decryption --query Parameter.Value --output text; }
           CUSTOMER_KEY="$(param customer-key)"
           LEDGER_KEY="$(param ledger-key)"
@@ -152,7 +155,6 @@ Resources:
           # Every 5 minutes: ledger, setup log, containers and the Collector's own export counts to S3.
           nohup bash -c "while true; do
             aws s3 cp /opt/ledger.jsonl s3://$B/ledger.jsonl --quiet || true
-            aws s3 cp /var/log/soak-setup.log s3://$B/setup.log --quiet || true
             aws s3 cp /opt/demo-started s3://$B/demo-started --quiet || true
             docker ps --format '{{.Names}} {{.Status}}' > /opt/ps.txt; aws s3 cp /opt/ps.txt s3://$B/ps.txt --quiet || true
             docker logs --since 6m otel-collector 2>&1 | grep -iE 'error|fail|drop|refus' | tail -200 > /opt/collector-errors.txt
