@@ -64,6 +64,21 @@
       "Effect": "Allow",
       "Action": "sns:ListSubscriptionsByTopic",
       "Resource": "arn:aws:sns:*:*:obs-alerts"
+    },
+    {
+      "Sid": "CanaryLogin",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminSetUserPassword"
+      ],
+      "Resource": "arn:aws:cognito-idp:*:*:userpool/*"
+    },
+    {
+      "Sid": "CanaryLoginInvite",
+      "Effect": "Allow",
+      "Action": "lambda:InvokeFunction",
+      "Resource": "arn:aws:lambda:*:*:function:obs-tenant-admin"
     }
   ]
 }

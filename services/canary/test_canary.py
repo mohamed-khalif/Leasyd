@@ -83,3 +83,41 @@ def test_metrics_are_accepted_by_ingest_and_compact_to_every_kind(tmp_path):
                     ("canary.ingest.duration", "gauge", None, None, 130.0, None, None),
                     ("canary.ingest.latency", "histogram", 1, None, None, 2, 172.5),
                     ("canary.runs", "sum", 2, True, 20_000.0, None, None)]
+
+
+def test_route_checks_sign_in_and_call_every_backend(monkeypatch):
+    # A function that can't start fails only when called: the route check calls each one.
+    monkeypatch.setattr(canary, "ENDPOINT", "https://api.example")
+    calls = []
+
+    class Ssm:
+        def get_parameter(self, Name, WithDecryption):
+            return {"Parameter": {"Value": "pw"}}
+
+    class Cognito:
+        def initiate_auth(self, **kw):
+            assert kw["AuthParameters"]["PASSWORD"] == "pw"
+            return {"AuthenticationResult": {"IdToken": "tok"}}
+
+    class Cw:
+        def put_metric_data(self, Namespace, MetricData):
+            calls.append(MetricData)
+    monkeypatch.setattr(canary.boto3, "client", lambda name: {"ssm": Ssm(), "cognito-idp": Cognito(), "cloudwatch": Cw()}[name])
+    status = {"/v1/app/checks": 502}
+    monkeypatch.setattr(canary, "_request", lambda method, url, token, body=None:
+                        (assert_token(token), status.get(url[len("https://api.example"):], 200))[1])
+    out = canary.handler({"check": "routes"}, None)
+    assert out["routes"]["checks"] == 1 and sum(out["routes"].values()) == 1
+    assert set(out["routes"]) == {"account", "checks", "slos", "windows", "alert-rules", "dashboards", "query"}
+    total = [m for m in calls[0] if m["MetricName"] == "AppRoutesDown"]
+    assert total == [{"MetricName": "AppRoutesDown", "Value": 1}]
+
+    class BadCognito:
+        def initiate_auth(self, **kw):
+            raise RuntimeError("NotAuthorizedException")
+    monkeypatch.setattr(canary.boto3, "client", lambda name: {"ssm": Ssm(), "cognito-idp": BadCognito(), "cloudwatch": Cw()}[name])
+    assert set(canary.route_checks().values()) == {1}                    # can't sign in: all down
+
+
+def assert_token(token):
+    assert token == "tok"

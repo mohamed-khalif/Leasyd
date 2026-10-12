@@ -18,10 +18,24 @@ Parameters:
     Type: String
     Default: ""
     Description: The web app's address (obs-phaseW1 output WebUrl); empty = not checked.
+  AppClientId:
+    Type: String
+    Default: ""
+    Description: The user pool's app client (obs-state output AppClientId); empty = no route check.
+  CanaryAppUser:
+    Type: String
+    Default: canary-app@leasyd.com
+    Description: The canary tenant's own login, used by the route check (never emailed).
+  CanaryAppPasswordParameter:
+    Type: String
+    Default: /obs/canary/app-password
   CanaryRate:
     Type: String
     Default: rate(1 minute)
     AllowedValues: [rate(1 minute), rate(5 minutes)]
+
+Conditions:
+  RouteCheck: !Not [!Equals [!Ref AppClientId, ""]]
 
 Resources:
   CanaryRole:
@@ -44,7 +58,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CanaryKeyParameter}"
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CanaryKeyParameter}"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CanaryAppPasswordParameter}"
               - Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-index-lookup"
@@ -79,6 +95,9 @@ Resources:
           INGEST_ENDPOINT: !Ref IngestEndpoint
           KEY_PARAM: !Ref CanaryKeyParameter
           WEB_URL: !Ref WebUrl
+          APP_CLIENT_ID: !Ref AppClientId
+          APP_USER: !Ref CanaryAppUser
+          APP_PASSWORD_PARAM: !Ref CanaryAppPasswordParameter
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T7" }
@@ -100,6 +119,48 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt CanarySchedule.Arn
+
+  # Every backend behind the app API, called signed in every 5 minutes (canary.py ROUTES), on its
+  # own schedule so it runs while the data canary is paused.
+  RoutesSchedule:
+    Type: AWS::Events::Rule
+    Condition: RouteCheck
+    Properties:
+      Name: obs-app-routes-schedule
+      Description: Signed-in reads on every app API backend (obs-canary {"check":"routes"})
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Id: routes
+          Arn: !GetAtt CanaryFunction.Arn
+          Input: '{"check": "routes"}'
+
+  RoutesSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: RouteCheck
+    Properties:
+      FunctionName: !Ref CanaryFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RoutesSchedule.Arn
+
+  AppRoutesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: RouteCheck
+    Properties:
+      AlarmName: obs-app-routes
+      AlarmDescription: "A part of the app failed 2 checks in a row (checked every 5 minutes, signed in): account, synthetic checks, SLOs, maintenance windows, alert rules, dashboards or queries. The obs-canary log says which (route_down); the metric obs/AppRouteDown has one series per route. Also fires if the check stops running."
+      Namespace: obs
+      MetricName: AppRoutesDown
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
 
   CanaryLogsAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -537,4 +598,4 @@ Resources:
     Properties:
       DashboardName: Leasyd-health
       DashboardBody: !Sub |
-        {"widgets": [{"type": "alarm", "x": 0, "y": 0, "width": 24, "height": 4, "properties": {"title": "Key alarms", "alarms": ["arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-canary-logs", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-canary-traces", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-web-down", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-app-api-down", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-ingest-5xx", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-ingest-errors", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-query-errors", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-compaction-stuck", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-fastlane-failed", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-synthetics-tick-stopped", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-alerts-stopped", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-lambda-throttles"]}}, {"type": "metric", "x": 0, "y": 4, "width": 8, "height": 6, "properties": {"title": "Customers can use it (1 = down)", "region": "${AWS::Region}", "metrics": [["obs", "CanaryMissing", "signal", "logs"], ["...", "traces"], ["obs", "AppDown", "part", "web"], ["...", "api"]], "stat": "Maximum", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 8, "y": 4, "width": 8, "height": 6, "properties": {"title": "API requests and errors", "region": "${AWS::Region}", "metrics": [["AWS/ApiGateway", "Count", "ApiName", "obs-ingest"], [".", "4XXError", ".", "."], [".", "5XXError", ".", "."]], "stat": "Sum", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 16, "y": 4, "width": 8, "height": 6, "properties": {"title": "API latency p95 (ms)", "region": "${AWS::Region}", "metrics": [["AWS/ApiGateway", "Latency", "ApiName", "obs-ingest"]], "stat": "p95", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 0, "y": 10, "width": 12, "height": 7, "properties": {"title": "Function errors", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Errors", "FunctionName", "obs-ingest"], ["AWS/Lambda", "Errors", "FunctionName", "obs-ingest-authorizer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query-worker"], ["AWS/Lambda", "Errors", "FunctionName", "obs-index-lookup"], ["AWS/Lambda", "Errors", "FunctionName", "obs-compaction-worker"], ["AWS/Lambda", "Errors", "FunctionName", "obs-compaction-dispatcher"], ["AWS/Lambda", "Errors", "FunctionName", "obs-recent-indexer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-day-sealer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-alerts"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-tick"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-run"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-browser"], ["AWS/Lambda", "Errors", "FunctionName", "obs-tenant-admin"], ["AWS/Lambda", "Errors", "FunctionName", "obs-account-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-demo"], ["AWS/Lambda", "Errors", "FunctionName", "obs-ai"], ["AWS/Lambda", "Errors", "FunctionName", "obs-canary"]], "stat": "Sum", "period": 300, "view": "timeSeries", "stacked": true}}, {"type": "metric", "x": 12, "y": 10, "width": 12, "height": 7, "properties": {"title": "Function duration p95 (ms)", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Duration", "FunctionName", "obs-ingest"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query-api"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query-worker"], ["AWS/Lambda", "Duration", "FunctionName", "obs-compaction-worker"]], "stat": "p95", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 0, "y": 17, "width": 8, "height": 6, "properties": {"title": "Concurrency and throttles", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "ConcurrentExecutions"], [".", "Throttles"]], "stat": "Maximum", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 8, "y": 17, "width": 8, "height": 6, "properties": {"title": "Canary send time (ms)", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Duration", "FunctionName", "obs-canary"]], "stat": "Average", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 16, "y": 17, "width": 8, "height": 6, "properties": {"title": "Email reputation", "region": "${AWS::Region}", "metrics": [["AWS/SES", "Reputation.BounceRate"], [".", "Reputation.ComplaintRate"]], "stat": "Maximum", "period": 3600, "view": "timeSeries", "stacked": false}}]}
+        {"widgets": [{"type": "alarm", "x": 0, "y": 0, "width": 24, "height": 4, "properties": {"title": "Key alarms", "alarms": ["arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-canary-logs", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-canary-traces", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-web-down", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-app-api-down", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-app-routes", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-ingest-5xx", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-ingest-errors", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-query-errors", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-compaction-stuck", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-fastlane-failed", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-synthetics-tick-stopped", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-alerts-stopped", "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:obs-lambda-throttles"]}}, {"type": "metric", "x": 0, "y": 4, "width": 8, "height": 6, "properties": {"title": "Customers can use it (1 = down)", "region": "${AWS::Region}", "metrics": [["obs", "CanaryMissing", "signal", "logs"], ["...", "traces"], ["obs", "AppDown", "part", "web"], ["...", "api"]], "stat": "Maximum", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 8, "y": 4, "width": 8, "height": 6, "properties": {"title": "API requests and errors", "region": "${AWS::Region}", "metrics": [["AWS/ApiGateway", "Count", "ApiName", "obs-ingest"], [".", "4XXError", ".", "."], [".", "5XXError", ".", "."]], "stat": "Sum", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 16, "y": 4, "width": 8, "height": 6, "properties": {"title": "API latency p95 (ms)", "region": "${AWS::Region}", "metrics": [["AWS/ApiGateway", "Latency", "ApiName", "obs-ingest"]], "stat": "p95", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 0, "y": 10, "width": 12, "height": 7, "properties": {"title": "Function errors", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Errors", "FunctionName", "obs-ingest"], ["AWS/Lambda", "Errors", "FunctionName", "obs-ingest-authorizer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-query-worker"], ["AWS/Lambda", "Errors", "FunctionName", "obs-index-lookup"], ["AWS/Lambda", "Errors", "FunctionName", "obs-compaction-worker"], ["AWS/Lambda", "Errors", "FunctionName", "obs-compaction-dispatcher"], ["AWS/Lambda", "Errors", "FunctionName", "obs-recent-indexer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-day-sealer"], ["AWS/Lambda", "Errors", "FunctionName", "obs-alerts"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-tick"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-run"], ["AWS/Lambda", "Errors", "FunctionName", "obs-synthetics-browser"], ["AWS/Lambda", "Errors", "FunctionName", "obs-tenant-admin"], ["AWS/Lambda", "Errors", "FunctionName", "obs-account-api"], ["AWS/Lambda", "Errors", "FunctionName", "obs-demo"], ["AWS/Lambda", "Errors", "FunctionName", "obs-ai"], ["AWS/Lambda", "Errors", "FunctionName", "obs-canary"]], "stat": "Sum", "period": 300, "view": "timeSeries", "stacked": true}}, {"type": "metric", "x": 12, "y": 10, "width": 12, "height": 7, "properties": {"title": "Function duration p95 (ms)", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Duration", "FunctionName", "obs-ingest"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query-api"], ["AWS/Lambda", "Duration", "FunctionName", "obs-query-worker"], ["AWS/Lambda", "Duration", "FunctionName", "obs-compaction-worker"]], "stat": "p95", "period": 300, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 0, "y": 17, "width": 8, "height": 6, "properties": {"title": "Concurrency and throttles", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "ConcurrentExecutions"], [".", "Throttles"]], "stat": "Maximum", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 8, "y": 17, "width": 8, "height": 6, "properties": {"title": "Canary send time (ms)", "region": "${AWS::Region}", "metrics": [["AWS/Lambda", "Duration", "FunctionName", "obs-canary"]], "stat": "Average", "period": 60, "view": "timeSeries", "stacked": false}}, {"type": "metric", "x": 16, "y": 17, "width": 8, "height": 6, "properties": {"title": "Email reputation", "region": "${AWS::Region}", "metrics": [["AWS/SES", "Reputation.BounceRate"], [".", "Reputation.ComplaintRate"]], "stat": "Maximum", "period": 3600, "view": "timeSeries", "stacked": false}}]}
