@@ -8,6 +8,9 @@
                                       alarms, errors and memory of every obs-* function (~/.obs-soak-watch.jsonl)
   soak.py verify [--since ISO]        per hour: records the ledger says were accepted vs records stored,
                                       and distinct soak.seq (duplicates), per signal
+  On the soak customer (infra/soak-customer.yaml) send runs there, with SOAK_KEY, SOAK_LEDGER and
+  SOAK_ENDPOINT set, and its ledger is copied to S3 every 5 minutes.
+
   soak.py teardown                    delete the ledger tenant
 
 Run next to `loadtest.py run --step soak1`, which supplies the volume across the 100 t6 tenants.
@@ -31,7 +34,7 @@ import botocore.config
 REGION = "us-east-1"
 TENANT = "qa-soak-1"
 CREDS = os.path.expanduser("~/.obs-soak.json")
-LEDGER = os.path.expanduser("~/.obs-soak-ledger.jsonl")
+LEDGER = os.environ.get("SOAK_LEDGER") or os.path.expanduser("~/.obs-soak-ledger.jsonl")
 WATCH = os.path.expanduser("~/.obs-soak-watch.jsonl")
 ENDPOINT = os.environ.get("SOAK_ENDPOINT", "https://2jiyjrkjv7.execute-api.us-east-1.amazonaws.com/ingest")   # = ingest.leasyd.com
 SERVICE = "soak-ledger"
@@ -117,7 +120,7 @@ def _post(key, signal, body):
 
 
 def send(a):
-    key = json.load(open(CREDS))["key"]
+    key = os.environ.get("SOAK_KEY") or json.load(open(CREDS))["key"]
     end = time.time() + a.hours * 3600
     seq = int(time.time() * 1000) * 1000   # unique across restarts
     while time.time() < end:
@@ -203,7 +206,7 @@ SQL = {"logs": "select count(*) as n, count(distinct attributes['soak.seq']) as 
 
 
 def verify(a):
-    rows = [json.loads(x) for x in open(LEDGER)]
+    rows = [json.loads(x) for x in open(a.ledger or LEDGER)]
     since = a.since or rows[0]["ts"]
     rows = [r for r in rows if r["ts"] >= since]
     hours = {}
@@ -247,6 +250,7 @@ def main():
     w.add_argument("--memory", action="store_true", help="also read peak memory from the functions' logs")
     v = sub.add_parser("verify")
     v.add_argument("--since")
+    v.add_argument("--ledger", help="a ledger file, e.g. the soak customer's, copied from S3")
     a = p.parse_args()
     {"setup": setup, "teardown": teardown, "send": send, "watch": watch, "verify": verify}[a.cmd](a)
 

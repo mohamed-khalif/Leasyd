@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PauseAndResumeObsFunctionsForFaultTests",
+      "Effect": "Allow",
+      "Action": ["lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:GetFunctionConcurrency"],
+      "Resource": "arn:aws:lambda:us-east-1:199301651524:function:obs-*"
+    }
+  ]
+}

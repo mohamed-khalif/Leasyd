@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Soak test customer (obs-soak): one EC2 instance running the OpenTelemetry Demo shop (about 15
+  microservices in Go, Java, .NET, Node.js, Python, Ruby, Rust, PHP, C++, with its Locust load
+  generator) whose OpenTelemetry Collector sends everything to https://ingest.leasyd.com, the way a
+  real customer does, to tenant qa-soak-2. Next to it, infra/t6/soak.py send writes an exact ledger to
+  tenant qa-soak-1. Keys come from SSM /obs/soak/*. The instance stops itself after Hours; delete the
+  stack with infra/deploy-soak.sh down. No inbound ports (Session Manager for a shell).
+
+Parameters:
+  Hours:
+    Type: Number
+    Default: 12
+  LocustUsers:
+    Type: Number
+    Default: 25
+    Description: simulated shoppers (the demo's default is 5)
+  DemoVersion:
+    Type: String
+    Default: 2.2.0
+  InstanceType:
+    Type: String
+    Default: t3.xlarge
+  Ami:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire
+            Status: Enabled
+            ExpirationInDays: 30
+
+  BucketPolicy:   # obs-deployer reads the ledger and logs for the report
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Sub "arn:aws:iam::${AWS::AccountId}:user/obs-deployer" }
+            Action: [s3:GetObject, s3:PutObject, s3:ListBucket]
+            Resource: [!GetAtt Bucket.Arn, !Sub "${Bucket.Arn}/*"]
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: soak
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/soak/*"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${Bucket.Arn}/*"
+
+  Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref Role]
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: obs-soak customer, outbound only
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Ami
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref Profile
+      SecurityGroupIds: [!GetAtt SecurityGroup.GroupId]
+      InstanceInitiatedShutdownBehavior: stop
+      MetadataOptions: { HttpTokens: required }
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 50, VolumeType: gp3, Encrypted: true }
+      Tags:
+        - { Key: Name, Value: obs-soak-customer }
+        - { Key: project, Value: obs }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail   # no -x: the log goes to S3 and must not show the keys
+          exec > /var/log/soak-setup.log 2>&1
+          shutdown -h +$(( ${Hours} * 60 + 30 ))
+          export AWS_DEFAULT_REGION=${AWS::Region}
+          B=${Bucket}
+          dnf install -y docker git python3-pip
+          systemctl enable --now docker
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fsSL https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          pip3 install boto3
+          param() { aws ssm get-parameter --name "/obs/soak/$1" --with-decryption --query Parameter.Value --output text; }
+          CUSTOMER_KEY="$(param customer-key)"
+          LEDGER_KEY="$(param ledger-key)"
+
+          echo "$(date -u +%T) cloning the demo"
+          git clone --depth 1 --branch ${DemoVersion} https://github.com/open-telemetry/opentelemetry-demo /opt/demo
+          cd /opt/demo
+          # The Collector keeps the demo's own backends and also exports everything to Leasyd.
+          umask 077
+          cat > src/otel-collector/otelcol-config-extras.yml <<EOF
+          exporters:
+            otlphttp/leasyd:
+              endpoint: https://ingest.leasyd.com
+              headers:
+                x-api-key: "$CUSTOMER_KEY"
+          service:
+            pipelines:
+              traces:
+                exporters: [otlp, debug, spanmetrics, otlphttp/leasyd]
+              metrics:
+                exporters: [otlphttp/prometheus, debug, otlphttp/leasyd]
+              logs:
+                exporters: [opensearch, debug, otlphttp/leasyd]
+          EOF
+          chmod 644 src/otel-collector/otelcol-config-extras.yml   # read by the collector container
+          umask 022
+          sed -i "s/^LOCUST_USERS=.*/LOCUST_USERS=${LocustUsers}/" .env
+          ENVS=(--env-file .env); [ -f .env.override ] && ENVS+=(--env-file .env.override)
+          docker compose "${!ENVS[@]}" -f docker-compose.minimal.yml up --detach
+          date -u +%FT%TZ > /opt/demo-started
+          echo "$(date -u +%T) demo started"
+
+          # The exact ledger (tenant qa-soak-1), from this customer too.
+          until aws s3 cp "s3://$B/soak.py" /opt/soak.py; do sleep 10; done
+          SOAK_KEY="$LEDGER_KEY" SOAK_LEDGER=/opt/ledger.jsonl SOAK_ENDPOINT=https://ingest.leasyd.com \
+            nohup python3 /opt/soak.py send --hours ${Hours} > /opt/ledger.log 2>&1 &
+
+          # Every 5 minutes: ledger, setup log, containers and the Collector's own export counts to S3.
+          nohup bash -c "while true; do
+            aws s3 cp /opt/ledger.jsonl s3://$B/ledger.jsonl --quiet || true
+            aws s3 cp /var/log/soak-setup.log s3://$B/setup.log --quiet || true
+            aws s3 cp /opt/demo-started s3://$B/demo-started --quiet || true
+            docker ps --format '{{.Names}} {{.Status}}' > /opt/ps.txt; aws s3 cp /opt/ps.txt s3://$B/ps.txt --quiet || true
+            docker logs --since 6m otel-collector 2>&1 | grep -iE 'error|fail|drop|refus' | tail -200 > /opt/collector-errors.txt
+            aws s3 cp /opt/collector-errors.txt s3://$B/collector-errors/\$(date -u +%Y%m%dT%H%M).txt --quiet || true
+            sleep 300
+          done" > /dev/null 2>&1 &
+
+Outputs:
+  Bucket:
+    Value: !Ref Bucket
+  InstanceId:
+    Value: !Ref Instance
