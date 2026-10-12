@@ -533,13 +533,16 @@ STOP = "Stop investigating now: answer with what you have found so far, and say 
 
 
 def _create(claude, messages):
-    """One model call: the system prompt cached, adaptive thinking with progress updates when the
-    endpoint has them (else summarized thinking, from then on)."""
+    """One model call: the system prompt cached, and the investigation so far too (automatic caching:
+    each round resends every earlier query and result, which is then read from the cache instead of
+    billed again in full); adaptive thinking with progress updates when the endpoint has them (else
+    summarized thinking, from then on)."""
     kw = dict(model=model_id(), max_tokens=16000, tools=TOOLS, messages=messages, output_config={"effort": "high"},
               system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}])
     betas = []
     if anthropic_key():   # the Claude API: a refused request falls back to a model that can answer it
         betas, kw["extra_body"] = [FALLBACK_BETA], {"fallbacks": "default"}
+        kw["cache_control"] = {"type": "ephemeral"}   # automatic caching (Bedrock: system prompt only, unverified there)
     if _progress["updates"]:
         try:
             return claude.beta.messages.create(**kw, thinking={"type": "adaptive", "display": "updates"}, betas=[UPDATES_BETA, *betas])
@@ -551,6 +554,17 @@ def _create(claude, messages):
     if betas:
         kw["betas"] = betas
     return claude.beta.messages.create(**kw, thinking={"type": "adaptive", "display": "summarized"})
+
+
+def _log_usage(tenant, cid, step, resp):
+    """Tokens per model call (cost, and whether the cache works: reads should dominate after round 1)."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return
+    get = (lambda k: u.get(k)) if isinstance(u, dict) else (lambda k: getattr(u, k, None))
+    print(json.dumps({"ai_usage": cid, "tenant": tenant, "step": step, "model": getattr(resp, "model", None),
+                      **{k: get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                                   "cache_creation_input_tokens", "output_tokens")}}))
 
 
 def run_turn(tenant, cid, claude=None, tools=None, clock=time.monotonic):
@@ -570,6 +584,7 @@ def run_turn(tenant, cid, claude=None, tools=None, clock=time.monotonic):
                 conv["messages"][-1]["content"].append({"type": "text", "text": STOP})
                 wrapped = True
             resp = _create(claude, conv["messages"])
+            _log_usage(tenant, cid, step, resp)
             content = resp.to_dict()["content"] if hasattr(resp, "to_dict") else resp["content"]
             conv["messages"].append({"role": "assistant", "content": content})
             for b in content:

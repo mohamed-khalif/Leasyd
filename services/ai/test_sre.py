@@ -239,5 +239,7 @@ def test_with_an_anthropic_key_it_uses_the_claude_api(sre, monkeypatch):
     kw = sent[-1]
     assert kw["model"] == "claude-opus-5-5" and kw["extra_body"] == {"fallbacks": "default"}
     assert kw["betas"] == [sre.UPDATES_BETA, sre.FALLBACK_BETA] and kw["thinking"]["type"] == "adaptive"
+    # The investigation so far is cached too (each round resends every earlier query and result).
+    assert kw["cache_control"] == {"type": "ephemeral"} and kw["system"][0]["cache_control"] == {"type": "ephemeral"}
     sre._direct.clear()
     sre._clients.pop("claude", None)
