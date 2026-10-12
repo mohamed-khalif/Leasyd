@@ -243,3 +243,8 @@ def test_with_an_anthropic_key_it_uses_the_claude_api(sre, monkeypatch):
     assert kw["cache_control"] == {"type": "ephemeral"} and kw["system"][0]["cache_control"] == {"type": "ephemeral"}
     sre._direct.clear()
     sre._clients.pop("claude", None)
+
+
+def test_sql_tool_says_span_kind_and_status_are_integers(sre):
+    sql = next(t for t in sre.TOOLS if t["name"] == "run_sql")["description"]
+    assert "kind INTEGER (1 internal, 2 server, 3 client" in sql and "status_code INTEGER (0 unset, 1 ok, 2 error" in sql
