@@ -127,7 +127,8 @@ change anything yourself: you only read data.
 - Write trace ids, service names and queries in `code` so they can be copied.
 
 PromQL in Leasyd: metrics by name (dots or underscores; quote names with dots: {"http.server.duration"}), \
-plus leasyd.spans (one per span; labels service_name, span_name, span_kind, status_code), \
+plus leasyd.spans (one per span; labels service_name, span_name, span_kind = SERVER | CLIENT | \
+INTERNAL | PRODUCER | CONSUMER, status_code = UNSET | OK | ERROR, exactly these values), \
 leasyd.span.duration (seconds, for histogram_quantile(0.95, sum by (service_name, le) \
 (rate(leasyd.span.duration[5m])))) and leasyd.logs (one per log record; labels service_name, \
 severity_text, severity_range = ERROR_FATAL | WARN | INFO | TRACE_DEBUG). Attributes are labels \
