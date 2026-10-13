@@ -955,9 +955,37 @@ Resources:
       ResponseTemplates:
         application/json: '{"message": "this API key is still being activated (a few minutes after it is created); retry shortly"}'
 
-  DeploymentV16:
+  # When API Gateway can't run a function at all (throttled, out of capacity, crashed, an
+  # authorizer failure) it answers 500 itself. OpenTelemetry exporters don't retry 500 (only 429,
+  # 502, 503, 504), so a customer's data from those minutes would be dropped on their side; answer
+  # 503 + Retry-After, which they retry. Found by the fault tests (2026-10-13). Errors our own code
+  # returns are not gateway responses and keep their status (ingest already uses 503 for retry).
+  Default5xxResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref Api
+      ResponseType: DEFAULT_5XX
+      StatusCode: "503"
+      ResponseParameters:
+        gatewayresponse.header.Retry-After: "'10'"
+      ResponseTemplates:
+        application/json: '{"message": "Leasyd is temporarily unavailable; retry shortly"}'
+
+  IntegrationFailureResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref Api
+      ResponseType: INTEGRATION_FAILURE
+      StatusCode: "503"
+      ResponseParameters:
+        gatewayresponse.header.Retry-After: "'10'"
+      ResponseTemplates:
+        application/json: '{"message": "Leasyd is temporarily unavailable; retry shortly"}'
+
+  DeploymentV17:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod, InvalidApiKeyResponse]
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod, InvalidApiKeyResponse,
+                Default5xxResponse, IntegrationFailureResponse]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
@@ -968,7 +996,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV16
+      DeploymentId: !Ref DeploymentV17
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

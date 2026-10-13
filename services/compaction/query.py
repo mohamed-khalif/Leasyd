@@ -734,6 +734,8 @@ def handler(event, context):
         return {"error": str(e)}
     except ValueError as e:
         return {"error": f"bad query: {e}"}
+    except Unavailable as e:
+        return {"error": str(e), "retryable": True}
 
 
 # ------------------------------------------------------------ HTTP API
@@ -792,6 +794,8 @@ def api(event, context):
         return running.result(timeout=SYNC_DEADLINE_S)
     except FutureTimeout:
         return start_job(tenant, q)
+    except Unavailable as e:
+        return _unavailable(e)
     finally:
         charge_units(tenant)
 
@@ -930,6 +934,8 @@ def run_job(event):
         raise ValueError("bad job id")
     try:
         out = answer(tenant, job["query"])
+    except Unavailable as e:
+        out = _unavailable(e)
     except Exception:
         out = _http(500, {"error": "the query failed; try a shorter time range"})
         _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job["id"]), ContentType="application/json",
@@ -1049,6 +1055,12 @@ def _http(status, body):
             "body": body if isinstance(body, str) else json.dumps(body), "isBase64Encoded": False}
 
 
+def _unavailable(e):
+    out = _http(503, {"error": str(e)})
+    out["headers"]["Retry-After"] = "30"
+    return out
+
+
 def run(q, invoke_worker=None):
     t0 = time.perf_counter()
     compile_query(q)  # reject bad queries before any work
@@ -1110,11 +1122,28 @@ def plan_chunks(files, max_workers, contiguous=False):
     return [b[1] for b in bins if b[1]]
 
 
+class Unavailable(Exception):
+    """The query workers can't run right now (throttled, out of capacity, Lambda trouble): retryable."""
+
+
+UNAVAILABLE = "search is temporarily unavailable; retry in a minute"
+_UNAVAILABLE_CODES = {"TooManyRequestsException", "ServiceException", "EC2ThrottledException",
+                      "ResourceNotReadyException", "ENILimitReachedException"}
+
+
 def _invoke_worker(payload, attempts=2):
     """Run one worker. Workers only read, so a worker whose process died (DuckDB has crashed, rarely,
-    in a fresh container: about 1 in 3,000 runs) is run once more instead of failing the query."""
+    in a fresh container: about 1 in 3,000 runs) is run once more instead of failing the query.
+    Workers that can't be run at all raise Unavailable: the caller gets a clear, retryable answer
+    (503) instead of Lambda's own error text."""
     for attempt in range(attempts):
-        r = lam.invoke(FunctionName=WORKER_FUNCTION, Payload=json.dumps(payload).encode())
+        try:
+            r = lam.invoke(FunctionName=WORKER_FUNCTION, Payload=json.dumps(payload).encode())
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in _UNAVAILABLE_CODES:
+                print(json.dumps({"worker_unavailable": e.response["Error"]["Code"]}))
+                raise Unavailable(UNAVAILABLE) from e
+            raise
         out = json.loads(r["Payload"].read())
         if not r.get("FunctionError"):
             return out

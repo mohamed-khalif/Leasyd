@@ -564,6 +564,32 @@ def test_a_crashed_worker_is_run_once_more(monkeypatch):
     assert len(calls) == 1          # a real error in the query is not retried
 
 
+def test_unavailable_workers_give_a_clear_retryable_answer(data, monkeypatch):
+    """Found by the fault tests: with the workers throttled, callers saw Lambda's raw
+    'TooManyRequestsException ... Rate Exceeded'. Now: 503 + Retry-After, a plain message."""
+    from botocore.exceptions import ClientError
+
+    class Throttled:
+        def invoke(self, **kw):
+            raise ClientError({"Error": {"Code": "TooManyRequestsException", "Message": "Rate Exceeded."}}, "Invoke")
+    monkeypatch.setattr(query, "lam", Throttled())
+    monkeypatch.setattr(query, "TARGET_BYTES_PER_WORKER", 1)          # fan out, so workers are invoked
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    event = {"requestContext": {"authorizer": {"tenant": "acme", "scope": "read"}}, "body": json.dumps(q)}
+    out = query.api(event, None)
+    assert out["statusCode"] == 503 and out["headers"]["Retry-After"] == "30"
+    assert json.loads(out["body"]) == {"error": query.UNAVAILABLE}
+    direct = query.handler({**q, "tenant": "acme"}, None)                 # alerts, the AI SRE
+    assert direct == {"error": query.UNAVAILABLE, "retryable": True}
+
+    class Denied:
+        def invoke(self, **kw):
+            raise ClientError({"Error": {"Code": "AccessDeniedException", "Message": "no"}}, "Invoke")
+    monkeypatch.setattr(query, "lam", Denied())
+    with pytest.raises(ClientError):                                       # a real fault still raises (alarmed)
+        query._invoke_worker({})
+
+
 def test_histogram_buckets_per_minute_any_number_of_workers(counters, monkeypatch):
     """buckets: measurements per histogram bucket, the rise of each cumulative bucket (a restart
     counts whole), stitched across workers like increase."""
