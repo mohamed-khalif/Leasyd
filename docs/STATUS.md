@@ -115,7 +115,16 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
    Firehose buffers for the 10 largest tenants (`infra/tenant.sh tune <tenant> 15`). Details and
    all benchmarks: `docs/REPORT-2026-09-28.md`. Still to do: Lambda memory above 3008 MB (ask AWS), compaction chunks capped by record count
    before testing 100 GB/h.
-2. T6 fault tests and a soak run; then delete the 100 `t6-*` tenants
+2. Soak run 2026-10-12 21:28 -> 2026-10-13 09:58 UTC (`infra/deploy-soak.sh`, `infra/t6/soak.py`): a real
+   customer (OpenTelemetry Demo 2.2.0 on EC2, its Collector exporting to ingest.leasyd.com as qa-soak-2) and an
+   exact ledger (qa-soak-1) for 12 h across midnight UTC. Ledger: 359,700 records in 13 hours, every hour
+   sent = stored = distinct (no loss, no duplicates). Customer: 1.37 M spans, 0.58 M logs, 4.4 M metric
+   points, steady per hour; the Collector reports 0 failed exports to Leasyd (its 877 'Dropping data' errors
+   were to the demo's own Prometheus/OpenSearch). Leasyd: 0 errors in ingest (174,784 calls), fast lane,
+   compaction, day sealer, alerts; 14 authorizer 'Unauthorized' (bad keys, by design); 1 index-lookup
+   Runtime.ExitError during the stopped 100-tenant run (21:35). Caveat: the demo's frontend-proxy crash-looped,
+   so the shop's own traffic was mostly load-generator errors. Still to do: fault tests (attach
+   `infra/iam/deployer-faults.json`). Then delete the 100 `t6-*` tenants then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 
 ## Known limits (customer-facing)
