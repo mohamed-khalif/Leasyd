@@ -102,7 +102,8 @@ def test_route_checks_sign_in_and_call_every_backend(monkeypatch):
     class Cw:
         def put_metric_data(self, Namespace, MetricData):
             calls.append(MetricData)
-    monkeypatch.setattr(canary.boto3, "client", lambda name: {"ssm": Ssm(), "cognito-idp": Cognito(), "cloudwatch": Cw()}[name])
+    monkeypatch.setattr(canary.boto3, "client", lambda name: {"ssm": Ssm(), "cognito-idp": Cognito(), "cloudwatch": Cw(),
+                                                              "events": Events([])}[name])
     status = {"/v1/app/checks": 502}
     monkeypatch.setattr(canary, "_request", lambda method, url, token, body=None:
                         (assert_token(token), status.get(url[len("https://api.example"):], 200))[1])
@@ -111,12 +112,48 @@ def test_route_checks_sign_in_and_call_every_backend(monkeypatch):
     assert set(out["routes"]) == {"account", "checks", "slos", "windows", "alert-rules", "dashboards", "query"}
     total = [m for m in calls[0] if m["MetricName"] == "AppRoutesDown"]
     assert total == [{"MetricName": "AppRoutesDown", "Value": 1}]
+    assert {"MetricName": "SchedulesOff", "Value": 0} in calls[0]
 
     class BadCognito:
         def initiate_auth(self, **kw):
             raise RuntimeError("NotAuthorizedException")
     monkeypatch.setattr(canary.boto3, "client", lambda name: {"ssm": Ssm(), "cognito-idp": BadCognito(), "cloudwatch": Cw()}[name])
     assert set(canary.route_checks().values()) == {1}                    # can't sign in: all down
+
+
+class Events:
+    def __init__(self, rules, fail=False):
+        self.rules, self.fail = rules, fail
+
+    def list_rules(self, NamePrefix, NextToken=None):
+        if self.fail:
+            raise RuntimeError("AccessDeniedException")
+        assert NamePrefix == "obs-"
+        page = 0 if NextToken is None else int(NextToken)
+        out = {"Rules": self.rules[page * 2:page * 2 + 2]}
+        if page * 2 + 2 < len(self.rules):
+            out["NextToken"] = str(page + 1)
+        return out
+
+
+def test_switched_off_schedules_are_counted(monkeypatch):
+    """Found 2026-10-13: the canary and synthetics schedules had been off for 9 days unnoticed."""
+    rules = [{"Name": "obs-canary-schedule", "State": "DISABLED", "ScheduleExpression": "rate(1 minute)"},
+             {"Name": "obs-synthetics-schedule", "State": "ENABLED", "ScheduleExpression": "rate(1 minute)"},
+             {"Name": "obs-demo-schedule", "State": "DISABLED", "ScheduleExpression": "rate(1 minute)"},  # may be off
+             {"Name": "obs-fastlane-rule", "State": "DISABLED", "EventPattern": "{}"},                   # not a schedule
+             {"Name": "obs-alerts-schedule", "State": "DISABLED", "ScheduleExpression": "rate(1 minute)"}]
+    assert canary.schedules_off(Events(rules)) == ["obs-alerts-schedule", "obs-canary-schedule"]   # across pages
+    assert canary.schedules_off(Events([])) == []
+    assert canary.schedules_off(Events([], fail=True)) is None
+    calls = []
+
+    class Cw:
+        def put_metric_data(self, Namespace, MetricData):
+            calls.append(MetricData)
+    monkeypatch.setattr(canary, "route_checks", lambda: {"account": 0})
+    canary.routes_handler(Cw(), Events([], fail=True))
+    assert {"MetricName": "SchedulesOff", "Value": 1} in calls[0]          # unreadable counts as off: alarm
 
 
 def assert_token(token):

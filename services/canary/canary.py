@@ -47,6 +47,7 @@ SERVICE = "canary"
 APP_CLIENT_ID = os.environ.get("APP_CLIENT_ID", "")
 APP_USER = os.environ.get("APP_USER", "")
 APP_PASSWORD_PARAM = os.environ.get("APP_PASSWORD_PARAM", "/obs/canary/app-password")
+SCHEDULES_MAY_BE_OFF = set(filter(None, os.environ.get("SCHEDULES_MAY_BE_OFF", "obs-demo-schedule").split(",")))
 # (name, method, path, body): one read per backend function behind /v1/app.
 ROUTES = [("account", "GET", "/v1/app/account", None),                  # obs-account-api
           ("checks", "GET", "/v1/app/checks", None),                    # obs-synthetics-api
@@ -183,10 +184,32 @@ def route_checks(now=None):
     return out
 
 
-def routes_handler(cw):
+def schedules_off(events):
+    """Names of obs-* schedules (EventBridge rules with a schedule) that are switched off, apart from
+    SCHEDULES_MAY_BE_OFF (the demo). None if they can't be read (counted as one off: alarm)."""
+    try:
+        rules, kw = [], {"NamePrefix": "obs-"}
+        while True:
+            page = events.list_rules(**kw)
+            rules += page.get("Rules", [])
+            if not page.get("NextToken"):
+                break
+            kw["NextToken"] = page["NextToken"]
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"schedules_unreadable": str(e)[:300]}))
+        return None
+    return sorted(r["Name"] for r in rules if r.get("ScheduleExpression") and r.get("State") != "ENABLED"
+                  and r["Name"] not in SCHEDULES_MAY_BE_OFF)
+
+
+def routes_handler(cw, events=None):
     down = route_checks()
     data = [{"MetricName": "AppRouteDown", "Dimensions": [{"Name": "route", "Value": r}], "Value": v} for r, v in down.items()]
     data.append({"MetricName": "AppRoutesDown", "Value": sum(down.values())})
+    off = schedules_off(events or boto3.client("events"))
+    data.append({"MetricName": "SchedulesOff", "Value": 1 if off is None else len(off)})
+    if off:
+        print(json.dumps({"schedules_off": off}))
     cw.put_metric_data(Namespace="obs", MetricData=data)
     print(json.dumps({"routes_down": [r for r, v in down.items() if v]}))
     return {"routes": down}

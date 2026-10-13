@@ -201,6 +201,10 @@ Resources:
             Effect: Allow
             Action: ssm:GetParameter
             Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/*"
+          - Sid: ScheduleHealth        # the canary checks no obs-* schedule has been switched off (read only)
+            Effect: Allow
+            Action: events:ListRules
+            Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/*"
           - Sid: Telemetry
             Effect: Allow
             Action:

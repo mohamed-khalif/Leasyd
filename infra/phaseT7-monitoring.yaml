@@ -67,6 +67,9 @@ Resources:
               - Effect: Allow
                 Action: cloudwatch:PutMetricData
                 Resource: "*"
+              - Effect: Allow
+                Action: events:ListRules
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/*"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T7" }
@@ -152,6 +155,24 @@ Resources:
       AlarmDescription: "A part of the app failed 2 checks in a row (checked every 5 minutes, signed in): account, synthetic checks, SLOs, maintenance windows, alert rules, dashboards or queries. The obs-canary log says which (route_down); the metric obs/AppRouteDown has one series per route. Also fires if the check stops running."
       Namespace: obs
       MetricName: AppRoutesDown
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  SchedulesOffAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: RouteCheck
+    Properties:
+      AlarmName: obs-schedule-disabled
+      AlarmDescription: "An obs-* schedule (EventBridge rule) is switched off, so that part of Leasyd has stopped running (e.g. the canary or customers' synthetic checks; on 2026-10-03 two were off for 9 days unnoticed). The obs-canary log says which (schedules_off). Re-enable with: aws events enable-rule --name <rule>. obs-demo-schedule may be off. Also fires if the check stops running."
+      Namespace: obs
+      MetricName: SchedulesOff
       Statistic: Maximum
       Period: 300
       EvaluationPeriods: 2
