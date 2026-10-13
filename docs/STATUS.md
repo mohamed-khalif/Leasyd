@@ -123,8 +123,15 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
    were to the demo's own Prometheus/OpenSearch). Leasyd: 0 errors in ingest (174,784 calls), fast lane,
    compaction, day sealer, alerts; 14 authorizer 'Unauthorized' (bad keys, by design); 1 index-lookup
    Runtime.ExitError during the stopped 100-tenant run (21:35). Caveat: the demo's frontend-proxy crash-looped,
-   so the shop's own traffic was mostly load-generator errors. Still to do: fault tests (attach
-   `infra/iam/deployer-faults.json`). Then delete the 100 `t6-*` tenants then delete the 100 `t6-*` tenants
+   so the shop's own traffic was mostly load-generator errors. Fault tests 2026-10-13 (`infra/t6/faults.py`, each
+   function paused with concurrency 0, ledger sending throughout; every accepted record stored exactly once):
+   ingest 3 min: alarms obs-ingest-5xx + obs-lambda-throttles in ~2 min; clients got HTTP 500, which OTLP
+   exporters do NOT retry (they retry 429/502/503/504) -> fix: gateway 5xx as 503 + Retry-After.
+   Fast lane 10 min: obs-fastlane-failed in 3 min, canary alarms in 4-5 min, cleared 3 min after resume;
+   events past the 5-minute retry window went to the queue (by design; replayed, all already compacted).
+   Compaction 20 min: data stayed searchable, queries normal; obs-compaction-stuck fires at 95 min (not reached).
+   Query workers 5 min: queries failed fast (0.1 s), obs-query-errors in 2.5 min; the error shown is AWS's
+   raw 'TooManyRequestsException: Rate Exceeded' -> should be a clear 'temporarily unavailable, retry'. Then delete the 100 `t6-*` tenants then delete the 100 `t6-*` tenants
    (`python3 infra/t6/loadtest.py tenants delete`) and the `obs-phaseT6` stack.
 
 ## Known limits (customer-facing)
