@@ -142,6 +142,11 @@ need admin credentials; `obs-deployer` runs tests. Lambda concurrency limit: 100
 
 ## Loose ends
 
+- 2026-10-13: found `obs-canary-schedule` and `obs-synthetics-schedule` DISABLED since about 2026-10-03/04
+  (cause unknown): no canary and no customer synthetic checks ran for 9 days; the canary alarms sat in
+  ALARM all that time. The route check (obs-app-routes) had not been deployed. All three enabled /
+  deployed 2026-10-13 22:20 UTC. Worth an alarm on "an obs-* schedule is disabled" (the "stopped"
+  alarms only exist for some schedules, and one long ALARM is easy to stop noticing).
 - Old test tenants from before tenant records (`probe-*`, `t2a/t2b/t2tiny-*`, `t3-110448`, `t3-110957`,
   `t3dbg`, `t4-120402`, `t4-120927`) are being deleted (2026-09-28; purge passes finish on their own).
   Kept on purpose: `t6-000`..`t6-099` and the `obs-phaseT6` stack (load tests; idle cost ~0),
