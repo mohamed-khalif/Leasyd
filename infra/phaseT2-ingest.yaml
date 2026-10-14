@@ -1061,7 +1061,7 @@ Resources:
           ThrottlingRateLimit: 1
           ThrottlingBurstLimit: 5
         - ResourcePath: "/~1v1~1rum"
-          HttpMethod: "*"
+          HttpMethod: POST     # a path's own setting must name one method ("*" only for "/*")
           MetricsEnabled: true
           ThrottlingRateLimit: 500
           ThrottlingBurstLimit: 1000
