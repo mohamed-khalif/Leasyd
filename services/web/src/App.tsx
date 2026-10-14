@@ -101,10 +101,10 @@ export function App() {
     crumb = ["Dashboards", path.endsWith("/edit") ? "Edit dashboard" : "All dashboards"];
   } else if (path.startsWith("/query")) {
     page = <QueryBuilder ctx={ctx} params={params} />;
-    crumb = ["Query data", "Query Builder"];
+    crumb = ["Analyze", "Query Builder"];
   } else if (path.startsWith("/sql")) {
     page = <Sql ctx={ctx} />;
-    crumb = ["Query data", "SQL"];
+    crumb = ["Analyze", "SQL"];
   } else if (path.startsWith("/metrics")) {
     page = <Metrics ctx={ctx} params={params} />;
     crumb = ["Metrics", params.get("m") ?? "Explorer"];
@@ -125,10 +125,10 @@ export function App() {
     crumb = ["Settings", "Account"];
   } else if (path.startsWith("/usage")) {
     page = <Usage ctx={ctx} />;
-    crumb = ["Dashboards", "Usage & Cost"];
+    crumb = ["Account", "Usage & Cost"];
   } else {
     page = <Insights ctx={ctx} />;
-    crumb = ["Dashboards", "Home"];
+    crumb = ["Leasyd", "Home"];
   }
 
   return (

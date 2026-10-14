@@ -74,25 +74,25 @@ export function Shell(p: Props) {
         <div className="brand"><IconLogo />Leasyd</div>
         <a href="#/ai" className={`ask-ai${p.path.startsWith("/ai") ? " active" : ""}`}><IconSpark />Ask Leasyd AI</a>
         {link("/start", "Get started", <IconStart />, p.path.startsWith("/start"))}
-        <div className="nav-section">Dashboards</div>
         {link("/", "Home", <IconDash />, p.path === "/" || p.path === "")}
-        {link("/dashboards", "Dashboards", <IconDash />, p.path.startsWith("/dashboards"))}
-        {link("/usage", "Usage & Cost", <IconCost />, p.path.startsWith("/usage"))}
-        <div className="nav-section">Explore</div>
+        <div className="nav-section">Telemetry</div>
         {link("/logs", "Logs", <IconLogs />, p.path.startsWith("/logs"))}
         {link("/traces", "Traces", <IconTraces />, p.path.startsWith("/traces"))}
-        {link("/services", "Service Map", <IconMap />, p.path.startsWith("/services"))}
         {link("/metrics", "Metrics", <IconMetrics />, p.path.startsWith("/metrics"))}
+        <div className="nav-section">Applications</div>
+        {link("/services", "Service Map", <IconMap />, p.path.startsWith("/services"))}
         {link("/web", "Web (real users)", <IconGlobe />, p.path.startsWith("/web"))}
         {link("/lambda", "AWS Lambda", <IconLambda />, p.path.startsWith("/lambda"))}
-        <div className="nav-section">Query data</div>
+        <div className="nav-section">Analyze</div>
+        {link("/dashboards", "Dashboards", <IconDash />, p.path.startsWith("/dashboards"))}
         {link("/query", "Query Builder", <IconFlask />, p.path.startsWith("/query"))}
         {link("/sql", "SQL", <IconDb />, p.path.startsWith("/sql"))}
-        <div className="nav-section">Monitoring</div>
-        {link("/synthetics", "Synthetics", <IconPulse />, p.path.startsWith("/synthetics"))}
-        {link("/slos", "SLOs", <IconTarget />, p.path.startsWith("/slos"))}
+        <div className="nav-section">Alerting & uptime</div>
         {link("/alerts", "Alerts", <IconBell />, p.path.startsWith("/alerts"))}
+        {link("/synthetics", "Synthetic checks", <IconPulse />, p.path.startsWith("/synthetics"))}
+        {link("/slos", "SLOs", <IconTarget />, p.path.startsWith("/slos"))}
         <div className="nav-section">Account</div>
+        {link("/usage", "Usage & Cost", <IconCost />, p.path.startsWith("/usage"))}
         {link("/drop-rules", "Drop rules", <IconFilter />, p.path.startsWith("/drop-rules"))}
         {link("/settings", "Settings", <IconGear />, p.path.startsWith("/settings"))}
         <div className="nav-foot">
