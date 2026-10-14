@@ -217,7 +217,8 @@ def account(tenant, email, method, parts, body, params=None):
                          "limits": {"keys": MAX_KEYS, "users": MAX_USERS}}
         st, us = _admin("status", tenant), _admin("users", tenant)
         keys = [{"key_id": k["api_key_id"], "scope": k.get("scope", "ingest"), "status": k["status"],
-                 "created_at": k.get("created_at"), "expires_at": k.get("expires_at")}
+                 "created_at": k.get("created_at"), "expires_at": k.get("expires_at"),
+                 **({"origins": k.get("origins")} if k.get("scope") == "browser" else {})}
                 for k in st["keys"] if k["status"] in ("active", "expiring")]
         return 200, {"tenant": tenant, "company": st.get("company") or tenant, "plan": st.get("plan"),
                      "daily_cap_bytes": st.get("daily_cap_bytes"), "today": st.get("today"), "searches": st.get("searches"), "trial_ends_at": st.get("trial_ends_at"),
@@ -265,9 +266,11 @@ def account(tenant, email, method, parts, body, params=None):
         if len(live) >= MAX_KEYS:
             raise Refused(400, f"at most {MAX_KEYS} keys; revoke one first")
         scope = body.get("scope", "ingest")
-        out = _admin("add-key", tenant, scope=scope)
+        extra = {"origins": body.get("origins")} if scope == "browser" else {}
+        out = _admin("add-key", tenant, scope=scope, **extra)
         print(json.dumps({"key_created": out["key_id"], "tenant": tenant, "by": email, "scope": scope}))
-        return 201, {"key_id": out["key_id"], "scope": out["scope"], "api_key": out["api_key"]}
+        return 201, {"key_id": out["key_id"], "scope": out["scope"], "api_key": out["api_key"],
+                     **({"origins": out["origins"]} if "origins" in out else {})}
     if what == "keys" and method == "DELETE" and ident and _KEY_ID.match(ident):
         out = _admin("revoke", tenant, key_id=ident)
         print(json.dumps({"key_revoked": ident, "tenant": tenant, "by": email}))

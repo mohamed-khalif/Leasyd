@@ -522,3 +522,19 @@ def test_upgrade_swaps_to_an_aged_standard_gateway_key_and_retires_the_old_one(a
     sw = call(adm, "sweep")
     assert sw["key_pools"]["retired"] == [old_id] and sw["key_pools"]["added"] == {"standard": 1}
     assert gateway_key(old_id) is None                                   # deleted from API Gateway
+
+
+def test_browser_keys_are_public_web_monitoring_keys(adm):
+    """A browser key sits in a web page: no API Gateway key, only the origins it may send from."""
+    call(adm, "create", tenant="acme")
+    out = call(adm, "add-key", tenant="acme", scope="browser", origins="https://Shop.example.com/, http://localhost:3000")
+    assert out["api_key"].startswith("pub_") and out["origins"] == ["https://shop.example.com", "http://localhost:3000"]
+    item = boto3.resource("dynamodb").Table("obs-tenants").get_item(Key={"pk": f"key#{adm.key_hash(out['api_key'])}"})["Item"]
+    assert item["scope"] == "browser" and "gateway_key" not in item
+    listed = {k["api_key_id"]: k for k in call(adm, "status", tenant="acme")["keys"]}
+    assert listed[out["key_id"]]["origins"] == out["origins"]
+    for bad in (None, [], "ftp://x.com", "https://x.com/path", ["https://a.com"] * 0 + [f"https://{i}.com" for i in range(11)]):
+        assert "origins" in call(adm, "add-key", tenant="acme", scope="browser", origins=bad)["error"]
+    assert "browser keys aren't rotated" in call(adm, "rotate", tenant="acme", scope="browser")["error"]
+    assert call(adm, "revoke", tenant="acme", key_id=out["key_id"])["revoked"] == [out["key_id"]]
+    assert key_status(adm, "acme")[out["key_id"]] == "revoked"

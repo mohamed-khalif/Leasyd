@@ -190,6 +190,15 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/POST/v1/*"
 
+  # Web monitoring: browsers POST (and may preflight with OPTIONS) /v1/rum, a public route.
+  RumPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/v1/rum"
+
   # Assumed by each tenant's Firehose streams to write into _incoming/.
   FirehoseRole:
     Type: AWS::IAM::Role
@@ -282,6 +291,23 @@ Resources:
   CloudWatchMetricsResource:
     Type: AWS::ApiGateway::Resource
     Properties: { RestApiId: !Ref Api, ParentId: !Ref AwsResource, PathPart: cloudwatch-metrics }
+  # Web monitoring (real users): the browser script's events, with a public browser key (services/ingest/rum.py
+  # checks it and the page's origin); no API key, so browsers can send it from any customer site.
+  RumResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: rum }
+  RumMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref RumResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
+        TimeoutInMillis: 29000
 
   LogsMethod:
     Type: AWS::ApiGateway::Method
@@ -1005,9 +1031,9 @@ Resources:
       ResponseTemplates:
         application/json: '{"message": "Leasyd is temporarily unavailable; retry shortly"}'
 
-  DeploymentV18:
+  DeploymentV19:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod, InvalidApiKeyResponse,
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod, RumMethod, InvalidApiKeyResponse,
                 Default5xxResponse, IntegrationFailureResponse]
     Properties:
       RestApiId: !Ref Api
@@ -1019,7 +1045,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV18
+      DeploymentId: !Ref DeploymentV19
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"
@@ -1034,6 +1060,11 @@ Resources:
           MetricsEnabled: true
           ThrottlingRateLimit: 1
           ThrottlingBurstLimit: 5
+        - ResourcePath: "/~1v1~1rum"
+          HttpMethod: "*"
+          MetricsEnabled: true
+          ThrottlingRateLimit: 500
+          ThrottlingBurstLimit: 1000
         - ResourcePath: "/~1v1~1demo~1session"
           HttpMethod: POST
           MetricsEnabled: true

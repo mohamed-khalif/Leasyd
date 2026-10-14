@@ -768,3 +768,12 @@ tr:hover .link { text-decoration: underline; }
 .switch.on::after { left: 14px; background: #fff; }
 .switch:disabled { opacity: .5; cursor: default; }
 @media (max-width: 900px) { .drop-cards { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- Web monitoring (pages/Web.tsx) */
+.web { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; }
+.web .panel { grid-column: auto; min-width: 0; }
+.web .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.dtable td.ok, .dtable div.ok { color: var(--ok, #3fb68b); }
+.dtable td.warn, .dtable div.warn { color: var(--sev-warn); }
+.dtable div.bad { color: var(--sev-error); }
+@media (max-width: 1100px) { .web .grid2 { grid-template-columns: minmax(0, 1fr); } .web .cards { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }

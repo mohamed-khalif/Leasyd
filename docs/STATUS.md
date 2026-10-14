@@ -85,6 +85,23 @@ phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enab
 Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
 unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
 
+### Web monitoring (real users) (2026-10-14, in code, to deploy)
+
+Browser script `examples/web/leasyd-rum.js` (served at app.leasyd.com/install/leasyd-rum.js, 3.8 KB
+gzipped, no cookies, query strings stripped): page views and load timing, Core Web Vitals (LCP, INP,
+CLS, FCP, TTFB), JavaScript errors, failed or slow fetch/XHR calls; calls to the page's own origin and
+`data-trace-origins` carry `traceparent`, so they link to backend traces. Public **browser keys**
+(scope `browser`, `pub_...`, 1-10 allowed origins; Settings and Get started create them; no API Gateway
+key) send to `POST /v1/rum` (public route, throttled 500/s; services/ingest/rum.py checks key and
+Origin, CORS) which stores events as the tenant's logs (service = the site, telemetry.sdk.name =
+leasyd-rum, rum.type page_view | web_vital | js_error | api_call), so drop rules, metering, caps,
+search, PromQL, alerts and the AI SRE apply. App: **Explore › Web** (visits, vitals p75 with % good,
+pages, JS errors with a visit replay, failing API calls linked to traces, browsers). Demo shop sends a
+website too (shop-web; failed checkouts link to the backend traces). Tested: unit tests (ingest 74,
+tenants 50, demo 6, AI 14) and the script in Chromium against a local server (beacons, traceparent,
+SPA route change, query strings stripped). Deploy: phaseT2 (route), phaseT5 (browser keys), phaseW1
+(page + script), phaseAI (prompt), phaseD1 (demo); then check on AWS.
+
 ## Stacks on AWS
 
 Everything is CloudFormation, brought up and taken down by one command each (`infra/up.sh`,

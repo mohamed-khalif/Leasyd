@@ -54,6 +54,7 @@
       <a href="#checks">Synthetic checks</a>
       <a href="#drop-rules">Drop rules</a>
       <a href="#query-api">Query API</a>
+      <a href="#web">Web monitoring</a>
       <a href="#mcp">AI agents (MCP)</a>
       <b>Account</b>
       <a href="#team">Team</a>
@@ -196,6 +197,21 @@ opentelemetry-instrument python app.py</code></pre>
         <li><strong>JSON</strong>: <code>{"signal", "start", "end", "where", "group_by", "aggs", "search"}</code>; the app's <strong>Query builder</strong> shows the JSON of any query you build.</li>
       </ul>
       <p>A query still running after 20 seconds (or sent with <code>"async": true</code>) answers <code>202 {"job"}</code>; ask <code>GET /v1/query/{job}</code> until it answers 200. Limits: 600 queries a minute, and a daily search allowance that grows with how much data a query reads (the app shows today's use in Settings).</p>
+
+      <h2 id="web">Web monitoring (real users)</h2>
+      <p>See what your visitors experience: page loads, Core Web Vitals (LCP, INP, CLS, FCP, TTFB, rated as Google does), JavaScript errors and API calls from the page that fail or are slow. It's a small script (about 4 KB gzipped) with no cookies; URLs are sent without query strings or fragments, so form data and tokens in URLs stay in the browser.</p>
+      <ol>
+        <li>In the app, <strong>Settings › API keys</strong>, create a <strong>Web monitoring</strong> key and list the sites it runs on (for example <code>https://shop.example.com</code>). It's public by design: it can only send web events, and only from those sites.</li>
+        <li>Add the script to every page, before <code>&lt;/head&gt;</code>:</li>
+      </ol>
+<pre class="code"><code>&lt;script src="https://app.leasyd.com/install/leasyd-rum.js" defer
+  data-key="pub_..." data-app="shop-web" data-env="prod"
+  data-endpoint="https://ingest.leasyd.com/v1/rum"
+  data-trace-origins="https://api.example.com"&gt;&lt;/script&gt;</code></pre>
+      <p>Then open <strong>Explore › Web</strong>: per site, page views and visits, Core Web Vitals at the 75th percentile with the share of good visits, your pages, JavaScript errors, failing API calls and browsers. Open an error to replay that visit's events in order.</p>
+      <p><strong>From the page to the backend.</strong> Calls to the page's own origin, and to the origins in <code>data-trace-origins</code>, carry a W3C <code>traceparent</code> header, so a failed or slow call links to the backend trace it started (your API must allow that header in CORS). Options: <code>data-sample="0.25"</code> keeps a quarter of visits; <code>data-slow-call-ms="1000"</code> sets when a call counts as slow.</p>
+      <p><strong>If your site has a Content-Security-Policy</strong>, allow <code>script-src https://app.leasyd.com</code> and <code>connect-src https://ingest.leasyd.com</code>.</p>
+      <p>Each event is a log record of the site (service), so it's billed like any log, searchable in Logs, usable in PromQL, dashboards and alerts, and Leasyd AI can investigate it.</p>
 
       <h2 id="mcp">AI agents (MCP)</h2>
       <p>Leasyd has an MCP server, so AI agents and coding assistants can investigate your systems with you: "why did checkout get slow after 2 pm?", "show me the errors behind this trace". They get the same read-only tools as Leasyd's AI SRE: services overview, PromQL, log and span search, a whole trace, top values, SQL, synthetic checks and alerts. They can read, never change anything, and only your account's data.</p>

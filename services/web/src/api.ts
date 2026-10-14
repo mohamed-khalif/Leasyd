@@ -83,7 +83,8 @@ export async function signup(email: string, company: string, website = ""): Prom
 
 // The tenant's own account (Settings): plan and today's data, users, API keys.
 export type AccountUser = { email: string; role: "owner" | "member"; created_at?: string; invited_by?: string };
-export type AccountKey = { key_id: string; scope: "ingest" | "read"; status: string; created_at?: string; expires_at?: string };
+export type KeyScope = "ingest" | "read" | "browser";
+export type AccountKey = { key_id: string; scope: KeyScope; status: string; created_at?: string; expires_at?: string; origins?: string[] };
 export type Account = {
   tenant: string; company: string; plan: string; daily_cap_bytes?: number | null; created_at?: string;
   today: { bytes: number; records: number; refused_bytes: number };
@@ -94,13 +95,23 @@ export type Account = {
   you: { email: string; role: "owner" | "member" }; users: AccountUser[]; keys: AccountKey[];
   limits: { keys: number; users: number };
 };
+/** The web-monitoring script tag for a browser key (served by the app at /install/). */
+export function rumSnippet(key: string, app = "my-website"): string {
+  const c = getConfig();
+  return `<script src="${location.origin}/install/leasyd-rum.js" defer
+  data-key="${key}" data-app="${app}"
+  data-endpoint="${(c.ingestUrl || location.origin).replace(/\/$/, "")}/v1/rum"></script>`;
+}
+
 export const account = {
   get: () => call<Account>("/v1/app/account"),
   invite: (email: string, role: "owner" | "member" = "member") =>
     call<AccountUser>("/v1/app/account/users", { method: "POST", body: JSON.stringify({ email, role }) }),
   remove: (email: string) => call<unknown>(`/v1/app/account/users/${encodeURIComponent(email)}`, { method: "DELETE" }),
-  createKey: (scope: "ingest" | "read") =>
-    call<{ key_id: string; scope: string; api_key: string }>("/v1/app/account/keys", { method: "POST", body: JSON.stringify({ scope }) }),
+  // browser: a public key for web monitoring, usable only from `origins` (the sites the script runs on)
+  createKey: (scope: KeyScope, origins?: string[]) =>
+    call<{ key_id: string; scope: string; api_key: string; origins?: string[] }>("/v1/app/account/keys",
+      { method: "POST", body: JSON.stringify(scope === "browser" ? { scope, origins } : { scope }) }),
   revokeKey: (id: string) => call<unknown>(`/v1/app/account/keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
   dropRules: () => call<{ rules: DropRule[]; updated_at?: string; updated_by?: string; limits: { rules: number; conditions: number } }>(
     "/v1/app/account/drop-rules"),

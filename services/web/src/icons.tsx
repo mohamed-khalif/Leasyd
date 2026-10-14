@@ -23,4 +23,5 @@ export const IconSpark = () => <svg {...s}><path d="M8 1.8l1.5 4.2 4.2 1.5-4.2 1
 export const IconMap = () => <svg {...s}><circle cx="3.5" cy="8" r="1.8" /><circle cx="12.5" cy="3.5" r="1.8" /><circle cx="12.5" cy="12.5" r="1.8" /><path d="M5.2 7.2 10.8 4.3M5.2 8.8l5.6 2.9" /></svg>;
 export const IconStart = () => <svg {...s}><path d="M3 13.5c1-3 2.5-5 4.5-6.5M7.5 7c.8-2 2.6-4.2 6-4.5-.3 3.4-2.5 5.2-4.5 6L7.5 7z" /><circle cx="10.4" cy="5.6" r=".9" /></svg>;
 export const IconFilter = () => <svg {...s}><path d="M2 3h12l-4.6 5.4V13l-2.8-1.4V8.4z" /></svg>;
+export const IconGlobe = () => <svg {...s}><circle cx="8" cy="8" r="5.8" /><path d="M2.2 8h11.6M8 2.2c1.7 1.6 2.6 3.6 2.6 5.8S9.7 12.2 8 13.8M8 2.2C6.3 3.8 5.4 5.8 5.4 8s.9 4.2 2.6 5.8" /></svg>;
 export const IconLambda = () => <svg {...s}><path d="M3.5 2.5h2.6l6.4 11h-2.6L7.6 9.1 5.2 13.5H2.8l3.5-6.4L4.6 4.1H3.5z" /></svg>;

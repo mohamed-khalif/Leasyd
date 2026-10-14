@@ -43,8 +43,23 @@ def test_traces_are_connected_trees_and_logs_point_at_their_spans():
     assert max(len(t) for t in by_trace.values()) >= 12           # a checkout crosses most services
     assert len({svc(rs) for rs in docs["traces"]["resourceSpans"]}) == len(demo.SERVICES)
     span_ids = {(s["traceId"], s["spanId"]) for s in ss}
-    logs = [r for rl in docs["logs"]["resourceLogs"] for sl in rl["scopeLogs"] for r in sl["logRecords"]]
+    logs = [r for rl in docs["logs"]["resourceLogs"] for sl in rl["scopeLogs"] for r in sl["logRecords"]
+            if sl["scope"]["name"] != "leasyd-rum"]
     assert logs and all((r["traceId"], r["spanId"]) in span_ids for r in logs)
+
+
+def test_the_website_sends_real_user_events_linked_to_backend_traces():
+    m = demo.Minute(NOON - NOON % demo.INCIDENT_EVERY + 2)       # during an incident: checkouts fail
+    docs = demo.documents(m.minute)
+    traces = {s["traceId"] for s in spans(docs)}
+    web = [r for rl in docs["logs"]["resourceLogs"] for sl in rl["scopeLogs"] if sl["scope"]["name"] == "leasyd-rum"
+           for r in sl["logRecords"]]
+    kind = lambda r: next(a["value"]["stringValue"] for a in r["attributes"] if a["key"] == "rum.type")   # noqa: E731
+    kinds = {kind(r) for r in web}
+    assert {"page_view", "web_vital", "api_call"} <= kinds
+    calls = [r for r in web if kind(r) == "api_call"]
+    assert calls and all(r["traceId"] in traces for r in calls)    # a failed checkout opens its backend trace
+    assert all(svc(rl) == "shop-web" for rl in docs["logs"]["resourceLogs"] if rl["scopeLogs"][0]["scope"]["name"] == "leasyd-rum")
 
 
 def test_incidents_slow_shipping_and_fail_checkouts():

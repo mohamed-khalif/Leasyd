@@ -118,7 +118,11 @@ SIGNALS = ("logs", "traces", "metrics")
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 USER_POOL = os.environ.get("USER_POOL_ID", "")   # Cognito user pool of obs-state (empty: no logins)
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
-SCOPES = {"ingest", "read"}   # see the authorizer: ingest sends, read queries
+SCOPES = {"ingest", "read", "browser"}   # see the authorizer: ingest sends, read queries; browser: web monitoring only
+# A browser key is public (it sits in a web page): POST /v1/rum takes it, only from its allowed origins,
+# and only for web-monitoring events. The API key authorizer refuses it everywhere else.
+_ORIGIN = re.compile(r"^https?://[a-z0-9.-]{1,253}(:[0-9]{1,5})?$")
+MAX_ORIGINS = 10
 _KEY_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 # A new API Gateway key takes minutes (measured up to 12+) to reach every API Gateway node, and is
 # refused (403, which OpenTelemetry exporters drop) by some requests until then. So customer keys
@@ -256,12 +260,31 @@ def signup(tenant, email, company, context=None):
     return {"tenant": tenant, "email": out["email"], "status": "signed up", "email_sent": out["email_sent"]}
 
 
-def add_key(tenant, scope="ingest", context=None):
+def add_key(tenant, scope="ingest", origins=None, context=None):
     if scope not in SCOPES:
         raise Refused(f"unknown scope {scope!r}; one of {sorted(SCOPES)}")
     rec = _active(tenant)
-    key, key_id = _issue_key(tenant, rec.get("plan", "standard"), scope)
-    return {"tenant": tenant, "scope": scope, "key_id": key_id, "api_key": key}
+    if scope == "browser":
+        origins = check_origins(origins)
+    key, key_id = _issue_key(tenant, rec.get("plan", "standard"), scope, origins)
+    return {"tenant": tenant, "scope": scope, "key_id": key_id, "api_key": key,
+            **({"origins": origins} if scope == "browser" else {})}
+
+
+def check_origins(origins):
+    """A browser key's allowed origins: 1-10 of scheme://host[:port], e.g. https://shop.example.com."""
+    if isinstance(origins, str):
+        origins = [o for o in re.split(r"[\s,]+", origins) if o]
+    if not isinstance(origins, list) or not 1 <= len(origins) <= MAX_ORIGINS:
+        raise Refused(f"origins: 1-{MAX_ORIGINS} web addresses the script runs on, e.g. https://shop.example.com")
+    out = []
+    for o in origins:
+        o = str(o).strip().rstrip("/").lower()
+        if not _ORIGIN.match(o):
+            raise Refused(f"origins: {o[:80]!r} is not scheme://host[:port], e.g. https://shop.example.com")
+        if o not in out:
+            out.append(o)
+    return out
 
 
 def set_cap(tenant, daily_gb=None, context=None):
@@ -429,6 +452,8 @@ def _searches(rec, tenant):
 
 
 def rotate(tenant, grace_hours=24, scope="ingest", context=None):
+    if scope == "browser":
+        raise Refused("browser keys aren't rotated: add a new one, update the page's script, then revoke the old one")
     if scope not in SCOPES:
         raise Refused(f"unknown scope {scope!r}; one of {sorted(SCOPES)}")
     rec = _active(tenant)
@@ -790,7 +815,7 @@ def restore(context=None):
         rec = _record(t["tenant"])
         _provision_streams(t["tenant"], int(rec.get("buffer_seconds", BUFFER_SECONDS)))
         for k in _keys(t["tenant"]):
-            if k["status"] not in ("active", "expiring"):
+            if k["status"] not in ("active", "expiring") or k.get("scope") == "browser":   # browser keys: no gateway key
                 continue
             plan_id = PLANS[k.get("plan", "standard")]
             if k["api_key_id"] not in in_plan[plan_id]:
@@ -898,7 +923,13 @@ def _active(tenant):
     return rec
 
 
-def _issue_key(tenant, plan, scope="ingest"):
+def _issue_key(tenant, plan, scope="ingest", origins=None):
+    if scope == "browser":   # public; checked by obs-ingest itself, never an API Gateway key
+        key = "pub_" + "".join(secrets.choice(_KEY_CHARS) for _ in range(32))
+        item = {"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active", "scope": scope,
+                "plan": plan, "created_at": _iso(_now()), "api_key_id": "b" + secrets.token_hex(5), "origins": origins}
+        tenants.put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
+        return key, item["api_key_id"]
     key = "obs_" + "".join(secrets.choice(_KEY_CHARS) for _ in range(40))
     item = {"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active", "scope": scope,
             "plan": plan, "created_at": _iso(_now())}
@@ -959,6 +990,8 @@ def _revoke_key(k, delete_from_gateway=False):
         tenants.update_item(Key={"pk": k["pk"]}, UpdateExpression="SET #s = :r, revoked_at = :n",
                             ExpressionAttributeNames={"#s": "status"},
                             ExpressionAttributeValues={":r": "revoked", ":n": _iso(_now())})
+    if k.get("scope") == "browser":
+        return   # no API Gateway key
     try:
         if delete_from_gateway:
             apigw.delete_api_key(apiKey=k["api_key_id"])

@@ -72,6 +72,7 @@ class Minute:
         self.spans, self.logs = {}, {}       # (service, pod) -> list
         self.requests = {}                   # (service, pod, route) -> [durations ms]
         self.declines = {}                   # pod -> count
+        self.checkouts = []                  # (trace id, start ns, error): the web page's checkout calls link to them
         for _ in range(round(PEAK_REQUESTS_PER_MINUTE * load(minute) * (0.9 + 0.2 * self.rnd.random()))):
             self.request()
 
@@ -96,7 +97,10 @@ class Minute:
             route, inner = "POST /api/checkout", [self.checkout()]
         tree = self.call("frontend-proxy", "ingress", [self.call("frontend", route, inner, kind="server")],
                          attrs={"http.request.method": route.split()[0], "http.route": route.split()[1]})
-        self.emit(tree, self.id(32), None, t0, {"user.id": user})
+        trace = self.id(32)
+        self.emit(tree, trace, None, t0, {"user.id": user})
+        if route == "POST /api/checkout":
+            self.checkouts.append((trace, t0, inner[0]["error"]))
 
     def call(self, service, name, children=(), kind="server", attrs=None, error=None, slow=1.0):
         return {"service": service, "name": name, "children": list(children), "kind": kind,
@@ -281,6 +285,72 @@ def metrics(m: Minute):
     return out
 
 
+# ------------------------------------------------------------------ the shop's website (real users)
+
+# (browser, version, OS, device, share of visits)
+BROWSERS = [("Chrome", "129", "Windows", "desktop", 0.34), ("Safari", "17", "iOS", "mobile", 0.27), ("Chrome", "129", "Android", "mobile", 0.16),
+            ("Safari", "17", "macOS", "desktop", 0.10), ("Edge", "129", "Windows", "desktop", 0.07), ("Firefox", "131", "Linux", "desktop", 0.04),
+            ("Samsung Internet", "26", "Android", "mobile", 0.02)]
+PAGES = [("/", 0.38, 1.0), ("/product", 0.32, 1.45), ("/cart", 0.16, 1.05), ("/checkout", 0.10, 1.25), ("/account", 0.04, 0.9)]
+
+
+def web(m):
+    """What the shop's visitors' browsers send through Leasyd's browser script (as obs-ingest's rum.py
+    stores it): page views, Core Web Vitals, JavaScript errors, failed API calls (linked to the backend's
+    checkout traces of the same minute). Own random source, so the rest of the minute is unchanged."""
+    r = random.Random(f"web/{m.minute}")
+    out = {}
+    def add(b, t_ns, sev, body, attrs, trace=None):
+        rec = {"timeUnixNano": str(int(t_ns)), "severityNumber": {"INFO": 9, "WARN": 13, "ERROR": 17}[sev], "severityText": sev,
+               "body": {"stringValue": body}, "attributes": _attrs(attrs)}
+        if trace:
+            rec["traceId"] = trace
+        out.setdefault(b, []).append(rec)
+    visits = max(1, round(PEAK_REQUESTS_PER_MINUTE * load(m.minute) / 5 * (0.9 + 0.2 * r.random())))
+    for _ in range(visits):
+        b = r.choices(BROWSERS, weights=[x[4] for x in BROWSERS])[0]
+        session, t = "%032x" % r.getrandbits(128), (m.minute * 60 + r.random() * 50) * 10**9
+        slow = 1.6 if b[3] == "mobile" else 1.0
+        for _ in range(r.choice([1, 1, 2, 2, 3, 4])):
+            path, _, weight = r.choices(PAGES, weights=[p[1] for p in PAGES])[0]
+            if path == "/product":
+                path = f"/product/{r.choice(PRODUCTS)}"
+            pv = "%016x" % r.getrandbits(64)
+            base = {"rum.session_id": session, "rum.page_view_id": pv, "url.path": path}
+            load_ms = round(900 * weight * slow * math.exp(r.gauss(0, 0.35)))
+            ttfb = round(180 * math.exp(r.gauss(0, 0.4)))
+            add(b, t, "INFO", f"page_view {path}", {**base, "rum.type": "page_view", "rum.title": "OpenTelemetry Demo",
+                                                     "rum.load_ms": load_ms, "rum.ttfb_ms": ttfb, "rum.spa": "false"})
+            vitals = {"TTFB": ttfb, "FCP": round(load_ms * 0.55), "LCP": round(load_ms * 1.15 * (1.5 if path.startswith("/product") and b[3] == "mobile" else 1)),
+                      "CLS": round(abs(r.gauss(0.04, 0.05)) * (2.5 if path == "/" else 1), 3), "INP": round(90 * slow * math.exp(r.gauss(0, 0.5)) * (2.2 if path == "/checkout" else 1))}
+            for name, v in vitals.items():
+                lim = {"LCP": (2500, 4000), "INP": (200, 500), "CLS": (0.1, 0.25), "FCP": (1800, 3000), "TTFB": (800, 1800)}[name]
+                rating = "good" if v <= lim[0] else "needs-improvement" if v <= lim[1] else "poor"
+                unit = "" if name == "CLS" else " ms"
+                add(b, t + 2 * 10**9, "WARN" if rating == "poor" else "INFO", f"{name} {v:g}{unit} {rating} {path}",
+                    {**base, "rum.type": "web_vital", "rum.vital.name": name, "rum.vital.value": v, "rum.vital.rating": rating})
+            if path == "/checkout" and b[1:3] == ("17", "iOS") and r.random() < 0.35:
+                add(b, t + 3 * 10**9, "ERROR", "js_error TypeError: undefined is not an object (evaluating 'order.total.amount')",
+                    {**base, "rum.type": "js_error", "error.message": "TypeError: undefined is not an object (evaluating 'order.total.amount')",
+                     "error.kind": "error", "error.source": "/static/js/checkout.4f2a9c.js", "error.line": 1, "error.column": 48211})
+            elif r.random() < 0.012:
+                add(b, t + 3 * 10**9, "ERROR", "js_error ChunkLoadError: Loading chunk 812 failed.",
+                    {**base, "rum.type": "js_error", "error.message": "ChunkLoadError: Loading chunk 812 failed.", "error.kind": "unhandledrejection"})
+            t += r.uniform(8, 40) * 10**9
+    for trace, t0, error in m.checkouts:   # the checkout calls that failed, as the page saw them
+        if not error:
+            continue
+        b = r.choices(BROWSERS, weights=[x[4] for x in BROWSERS])[0]
+        status, ms = (504, 5200 + r.randint(0, 600)) if "timed out" in error else (402, 180 + r.randint(0, 120))
+        add(b, t0, "ERROR" if status >= 500 else "WARN", f"POST /api/checkout {status} {ms} ms",
+            {"rum.session_id": "%032x" % r.getrandbits(128), "url.path": "/checkout", "rum.type": "api_call",
+             "http.request.method": "POST", "url.full": "/api/checkout", "http.response.status_code": status, "rum.duration_ms": ms}, trace)
+    return [{"resource": {"attributes": _attrs({"service.name": "shop-web", "telemetry.sdk.name": "leasyd-rum",
+                                                "deployment.environment": "prod", "browser.name": b[0], "browser.version": b[1],
+                                                "os.name": b[2], "device.type": b[3]})},
+             "scopeLogs": [{"scope": {"name": "leasyd-rum"}, "logRecords": recs}]} for b, recs in out.items()]
+
+
 def documents(minute):
     """-> {"traces": doc, "logs": doc, "metrics": doc}: one OTLP JSON request per signal."""
     m = Minute(minute)
@@ -289,7 +359,7 @@ def documents(minute):
         "traces": {"resourceSpans": [{"resource": _resource(s, p), "scopeSpans": [{"scope": {"name": s}, "spans": v}]}
                                      for (s, p), v in sorted(m.spans.items())]},
         "logs": {"resourceLogs": [{"resource": _resource(s, p), "scopeLogs": [{"scope": {"name": s}, "logRecords": v}]}
-                                  for (s, p), v in sorted(m.logs.items())]},
+                                  for (s, p), v in sorted(m.logs.items())] + web(m)},
         "metrics": {"resourceMetrics": [{"resource": _resource(s, p), "scopeMetrics": [{"scope": {"name": s}, "metrics": v}]}
                                         for (s, p), v in sorted(mets.items())]},
     }

@@ -2,20 +2,21 @@
 // (endpoint + API keys, a new key shown once), and the team (invite, remove). Owners change keys
 // and people; members see them.
 import { FormEvent, useEffect, useState } from "react";
-import { account, Account } from "../api";
+import { account, Account, KeyScope, rumSnippet } from "../api";
 import type { Ctx } from "../App";
 import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
 import { fmtNum, fmtUnit } from "../time";
 
-const SCOPES = { ingest: "Send data", read: "Read data (API)" } as const;
+const SCOPES = { ingest: "Send data", read: "Read data (API)", browser: "Web monitoring (browser)" } as const;
 
 export function Settings({ ctx }: { ctx: Ctx }) {
   const [acc, setAcc] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [newKey, setNewKey] = useState<{ key_id: string; scope: string; api_key: string } | null>(null);
-  const [scope, setScope] = useState<"ingest" | "read">("ingest");
+  const [newKey, setNewKey] = useState<{ key_id: string; scope: string; api_key: string; origins?: string[] } | null>(null);
+  const [scope, setScope] = useState<KeyScope>("ingest");
+  const [origins, setOrigins] = useState("");
   const [invite, setInvite] = useState({ email: "", role: "member" as "member" | "owner" });
   const [note, setNote] = useState<string | null>(null);
 
@@ -106,8 +107,14 @@ OTEL_SERVICE_NAME=my-service`}</pre>
       <Panel title="API keys" flush right={<span className="faint">{acc.keys.length} of {acc.limits.keys}</span>}>
         {newKey && (
           <div className="newkey">
-            <b>New key: copy it now, it won't be shown again.</b>
-            <span className="faint">It starts working within about 2 minutes (until then, data sent with it is refused with 403).</span>
+            {newKey.scope === "browser" ? <>
+              <b>New browser key: add this to every page of your site, before &lt;/head&gt;.</b>
+              <span className="faint">It's public by design: it can only send web-monitoring events, and only from {newKey.origins?.join(", ")}. It works at once.</span>
+              <pre className="code">{rumSnippet(newKey.api_key)}</pre>
+            </> : <>
+              <b>New key: copy it now, it won't be shown again.</b>
+              <span className="faint">It starts working within about 2 minutes (until then, data sent with it is refused with 403).</span>
+            </>}
             <div className="newkey-row">
               <code className="mono">{newKey.api_key}</code>
               <button className="btn" onClick={() => navigator.clipboard?.writeText(newKey.api_key).then(() => setNote("Copied."))}>Copy</button>
@@ -122,7 +129,7 @@ OTEL_SERVICE_NAME=my-service`}</pre>
             {acc.keys.map((k) => (
               <tr key={k.key_id}>
                 <td className="mono">{k.key_id}</td>
-                <td>{SCOPES[k.scope] ?? k.scope}</td>
+                <td>{SCOPES[k.scope] ?? k.scope}{k.origins?.length ? <div className="faint">{k.origins.join(", ")}</div> : null}</td>
                 <td className="faint">{k.created_at?.slice(0, 10)}</td>
                 <td>{k.status === "expiring" ? `expires ${k.expires_at?.slice(0, 16).replace("T", " ")}` : "active"}</td>
                 {owner && <td className="num"><button className="linkbtn danger" disabled={busy}
@@ -133,11 +140,15 @@ OTEL_SERVICE_NAME=my-service`}</pre>
         </table>
         {owner && (
           <div className="panel-foot">
-            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as "ingest" | "read")} aria-label="Key can">
+            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as KeyScope)} aria-label="Key can">
               <option value="ingest">Send data (for your apps)</option>
               <option value="read">Read data (for scripts using the query API)</option>
+              <option value="browser">Web monitoring (a public key for your website's pages)</option>
             </select>
-            <button className="btn primary" disabled={busy} onClick={() => act(async () => setNewKey(await account.createKey(scope)))}>Create key</button>
+            {scope === "browser" && <input className="input" style={{ minWidth: 320 }} value={origins} onChange={(e) => setOrigins(e.target.value)}
+              placeholder="Your site, e.g. https://shop.example.com" aria-label="Allowed origins (comma-separated)" />}
+            <button className="btn primary" disabled={busy || (scope === "browser" && !origins.trim())}
+              onClick={() => act(async () => setNewKey(await account.createKey(scope, scope === "browser" ? origins.split(/[\s,]+/).filter(Boolean) : undefined)))}>Create key</button>
           </div>
         )}
       </Panel>

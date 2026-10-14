@@ -337,8 +337,46 @@ function aiView(c: { id: string; title: string; created_by: string; created_at: 
 
 const JOBS = new Map<string, { ready: number; status: number; out: unknown }>();
 
+// Web monitoring (pages/Web.tsx): a shop's real users, by the shape of each query.
+function rumMock(sql: string): { columns: string[]; rows: unknown[][] } {
+  const now = Date.now();
+  if (/rum.session_id'\] = /.test(sql)) {
+    const ev = [["INFO", "page_view /", ""], ["INFO", "LCP 1840 ms good /", ""], ["INFO", "page_view /product/42", ""],
+      ["WARN", "LCP 4630 ms poor /product/42", ""], ["INFO", "page_view /checkout", ""],
+      ["ERROR", "POST /api/checkout 503 1240 ms", "4bf92f3577b34da6a3ce929d0e0e4736"], ["ERROR", "js_error TypeError: Cannot read properties of undefined (reading 'total')", ""]];
+    return { columns: ["ts", "sev", "body", "type", "page", "trace_id", "browser", "os", "device"],
+      rows: ev.map((e, i) => [new Date(now - (ev.length - i) * 41_000).toISOString(), e[0], e[1], "", "", e[2], "Safari", "iOS", "mobile"]) };
+  }
+  if (/AS visits,\s*count\(\*\) FILTER \(WHERE attributes\['rum.type'\] = 'js_error'\) AS errors,\s*count/.test(sql))
+    return { columns: ["views", "visits", "errors", "failed_calls", "load75"], rows: [[48213, 13108, 342, 97, 2310]] };
+  if (/AS visits, count\(\*\)/.test(sql) || /AS browser/.test(sql))
+    return { columns: ["browser", "device", "visits", "errors"], rows: [["Chrome", "desktop", 5210, 48], ["Safari", "mobile", 4102, 231],
+      ["Chrome", "mobile", 2230, 39], ["Edge", "desktop", 840, 6], ["Firefox", "desktop", 512, 4], ["Samsung Internet", "mobile", 214, 14]] };
+  if (/rum.vital.name'\] AS name/.test(sql))
+    return { columns: ["name", "p75", "n", "good"], rows: [["LCP", 2890, 31200, 22100], ["INP", 168, 18800, 15900], ["CLS", 0.06, 30100, 27800],
+      ["FCP", 1520, 31900, 26100], ["TTFB", 610, 32000, 27300]] };
+  if (/time_bucket/.test(sql)) {
+    const rows: unknown[][] = [];
+    for (let i = 0; i < 30; i++) rows.push([new Date(now - (30 - i) * 60000).toISOString(), Math.round(1500 + 500 * Math.sin(i / 5)), Math.round(8 + 6 * Math.max(0, Math.sin(i / 2)))]);
+    return { columns: ["t", "views", "errors"], rows };
+  }
+  if (/AS message/.test(sql))
+    return { columns: ["message", "n", "visits", "last", "page", "source", "session"], rows: [
+      ["TypeError: Cannot read properties of undefined (reading 'total')", 214, 188, new Date(now - 60000).toISOString(), "/checkout", "/assets/checkout.js", "0f3a9c1e5b7d2468ace0f3a9c1e5b7d2"],
+      ["ChunkLoadError: Loading chunk 812 failed", 61, 58, new Date(now - 300000).toISOString(), "/product/42", "/assets/app.js", "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"],
+      ["ResizeObserver loop completed with undelivered notifications", 44, 40, new Date(now - 120000).toISOString(), "/", "", "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e"]] };
+  if (/AS page,/.test(sql))
+    return { columns: ["page", "views", "load75", "lcp75", "inp75", "errors"], rows: [["/", 18200, 1980, 2210, 140, 22], ["/product/{id}", 14100, 2640, 4630, 190, 61],
+      ["/cart", 7300, 2010, 2380, 210, 18], ["/checkout", 5200, 2890, 3020, 520, 231], ["/account", 3400, 1700, 1900, 120, 10]] };
+  if (/AS method/.test(sql))
+    return { columns: ["method", "url", "status", "n", "p75", "trace"], rows: [["POST", "/api/checkout", "503", 97, 1240, "4bf92f3577b34da6a3ce929d0e0e4736"],
+      ["GET", "/api/recommendations", "200", 412, 1610, "5b8efff798038103d269b633813fc60c"], ["GET", "/api/cart", "0", 23, 30000, ""]] };
+  return { columns: ["service", "views"], rows: [["shop-web", 48213]] };
+}
+
 function sqlMock(q: { sql: string }) {
   if (!/^\s*(select|with)\b/i.test(q.sql)) return [400, { error: "only one SELECT query is allowed" }];
+  if (/leasyd-rum/.test(q.sql)) return [200, { ...rumMock(q.sql), stats: { files: 12 } }];
   if (/time_bucket/i.test(q.sql)) {
     const rows: unknown[][] = [];
     for (let i = 0; i < 30; i++) for (const s of ["checkout", "payment", "cart"])

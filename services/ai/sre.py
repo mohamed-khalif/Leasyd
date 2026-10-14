@@ -138,7 +138,14 @@ leasyd.span.duration (seconds, for histogram_quantile(0.95, sum by (service_name
 severity_text, severity_range = ERROR_FATAL | WARN | INFO | TRACE_DEBUG). Attributes are labels \
 (underscores match dots). Histogram metrics: histogram_quantile over <name>_bucket. Synthetic checks \
 write synthetics.check.success (1/0) and synthetics.check.duration (ms) with labels check_id, \
-check_name; check_excluded="" keeps the runs that count. Steps and ranges are multiples of 10 seconds."""
+check_name; check_excluded="" keeps the runs that count. Steps and ranges are multiples of 10 seconds.
+
+Web monitoring (real users' browsers): logs whose resource has telemetry.sdk.name = leasyd-rum \
+(service = the website), attribute rum.type = page_view | web_vital | js_error | api_call, plus \
+rum.session_id, url.path; web_vital: rum.vital.name (LCP, INP, CLS, FCP, TTFB), rum.vital.value (ms; \
+CLS unitless), rum.vital.rating; js_error: error.message, error.source; api_call: http.request.method, \
+url.full, http.response.status_code, rum.duration_ms, and trace_id = the backend trace it started. \
+In SQL, attribute values are text: TRY_CAST(attributes['rum.vital.value'] AS DOUBLE)."""
 
 
 TOOLS = [

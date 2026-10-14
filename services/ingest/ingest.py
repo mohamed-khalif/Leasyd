@@ -27,6 +27,7 @@ import io
 import json
 import os
 import re
+import sys
 import time
 
 import boto3
@@ -85,6 +86,9 @@ class HttpError(Exception):
 
 
 def handler(event, context):
+    if (event.get("path") or "").rstrip("/").endswith("/v1/rum"):   # web monitoring: a public browser key, not the authorizer
+        import rum
+        return rum.handle(event, sys.modules[__name__])
     try:
         tenant = ((event.get("requestContext") or {}).get("authorizer") or {}).get("tenant")
         if not tenant or not _TENANT.match(tenant):

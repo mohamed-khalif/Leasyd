@@ -6,13 +6,13 @@
 // Install files (collector.sh, the Ruby runtime metrics, the AWS templates) are served by the web app
 // itself under /install/ (infra/deploy-phaseW1.sh copies them from examples/).
 import { ReactNode, useEffect, useMemo, useState } from "react";
-import { account, Account, query, records } from "../api";
+import { account, Account, query, records, rumSnippet } from "../api";
 import type { Ctx } from "../App";
 import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
 import { fmtNum } from "../time";
 
-type Source = "server" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda";
+type Source = "server" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "web";
 const SOURCES: [Source, string, string][] = [
   ["server", "Linux server", "Host metrics and system logs, and a local endpoint for your apps"],
   ["java", "Java", "OpenTelemetry Java agent: traces, logs, JVM metrics"],
@@ -20,6 +20,7 @@ const SOURCES: [Source, string, string][] = [
   ["python", "Python", "Auto-instrumentation: traces, logs, runtime metrics"],
   ["ruby", "Ruby", "OpenTelemetry SDK plus Leasyd's runtime metrics"],
   ["lambda", "AWS Lambda", "CloudWatch metrics for every function, plus traces"],
+  ["web", "Website (real users)", "Page loads, Core Web Vitals, JavaScript errors, slow API calls"],
   ["other", "Other (.NET, Go, PHP…)", "Any OpenTelemetry SDK, over OTLP/HTTP"],
 ];
 const SIGNALS = ["traces", "logs", "metrics"] as const;
@@ -287,6 +288,8 @@ OTEL_EXPORTER_OTLP_HEADERS=x-api-key=${key}`}</Code>
           </p>
         </>
       );
+    case "web":
+      return <WebGuide />;
     case "other":
       return (
         <>
@@ -299,4 +302,40 @@ OTEL_EXPORTER_OTLP_HEADERS=x-api-key=${key}`}</Code>
         </>
       );
   }
+}
+
+
+/** Web monitoring: a public browser key for the site's origins (not the API key above), then one script tag. */
+function WebGuide() {
+  const [origins, setOrigins] = useState("");
+  const [key, setKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const create = async () => {
+    setBusy(true); setError(null);
+    try { setKey((await account.createKey("browser", origins.split(/[\s,]+/).filter(Boolean))).api_key); }
+    catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <p>Real users' page loads, Core Web Vitals (LCP, INP, CLS), JavaScript errors and slow or failed API calls, from a small
+        script on your site (about 4 KB gzipped, no cookies, URLs sent without query strings). It needs a <b>browser key</b>:
+        public by design, it can only send web events, and only from the sites you list.</p>
+      {key ? <>
+        <p>Add this to every page, before <code className="mono">&lt;/head&gt;</code> (set <code className="mono">data-app</code> to your site's name):</p>
+        <Code>{rumSnippet(key)}</Code>
+        <p className="muted">Calls from the page to its own origin carry a trace header, so a slow page links to the backend trace; list other
+          API origins in <code className="mono">data-trace-origins</code> (they must accept the <code className="mono">traceparent</code> header).
+          Then see <b>Explore › Web</b>.</p>
+      </> : <>
+        <div className="start-row">
+          <input className="input grow" value={origins} onChange={(e) => setOrigins(e.target.value)}
+            placeholder="Your site, e.g. https://shop.example.com (several: comma-separated)" aria-label="Your site's address" />
+          <button className="btn primary" disabled={busy || !origins.trim()} onClick={create}>{busy ? "Creating…" : "Create browser key"}</button>
+        </div>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <p className="faint">Owners create keys; others can find browser keys in Settings › API keys.</p>
+      </>}
+    </>
+  );
 }
