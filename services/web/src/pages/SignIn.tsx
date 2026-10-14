@@ -17,7 +17,7 @@ const HEADINGS: Record<Step, [string, string]> = {
   sent: ["Check your inbox", "We're setting up your account. Within a couple of minutes you'll get an email with a temporary password; sign in with it here."],
 };
 
-export function SignIn(props: { onSignedIn: () => void }) {
+export function SignIn(props: { onSignedIn: () => void; notice?: string | null }) {
   // The website's "Start free trial" links to app.leasyd.com/#/signup (?email=... from its email box).
   const [step, setStep] = useState<Step>(() => (window.location.hash.startsWith("#/signup") ? "signup" : "signin"));
   const [email, setEmail] = useState(() => (new URLSearchParams(window.location.hash.split("?")[1] || "").get("email") || "").slice(0, 254));
@@ -26,7 +26,7 @@ export function SignIn(props: { onSignedIn: () => void }) {
   const [newPw, setNewPw] = useState("");
   const [complete, setComplete] = useState<((pw: string) => Promise<void>) | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(props.notice ?? null);
   const [note, setNote] = useState<string | null>(null);
   const [company, setCompany] = useState("");
   const [website, setWebsite] = useState("");   // hidden: only bots fill it in
@@ -127,6 +127,8 @@ export function SignIn(props: { onSignedIn: () => void }) {
             : <button className="btn primary" disabled={busy}>{busy ? button[1] : button[0]}</button>}
           {step === "signin" && <button type="button" className="linkbtn" onClick={() => go("forgot")}>Forgot password?</button>}
           {step === "signin" && <span className="faint signin-alt">New to Leasyd? <button type="button" className="linkbtn" onClick={() => go("signup")}>Create an account</button></span>}
+          {(step === "signin" || step === "signup") && <span className="faint signin-alt">Just looking?{" "}
+            <button type="button" className="linkbtn" onClick={() => { window.location.hash = "/demo"; props.onSignedIn(); }}>Explore the live demo</button></span>}
           {step === "signup" && <span className="faint signin-alt">By creating an account you agree to the{" "}
             <a href="https://www.leasyd.com/terms" target="_blank" rel="noreferrer">Terms of Service</a> and{" "}
             <a href="https://www.leasyd.com/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.</span>}

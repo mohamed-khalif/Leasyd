@@ -3,7 +3,7 @@ import { Settings } from "./pages/Settings";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 import { me } from "./api";
-import { idToken, signOut } from "./auth";
+import { idToken, signOut, startDemo } from "./auth";
 import { getConfig } from "./config";
 import { Shell } from "./Shell";
 import { SignIn } from "./pages/SignIn";
@@ -43,14 +43,27 @@ export function App() {
   const hash = useHash();
   const go = useCallback((h: string) => { location.hash = h; }, []);
 
+  const [demoError, setDemoError] = useState<string | null>(null);
   const loadUser = useCallback(async () => {
+    // #/demo (the website's "Explore the live demo"): sign in to the read-only demo account.
+    if (location.hash.startsWith("#/demo")) {
+      try {
+        signOut();
+        await startDemo();
+        location.hash = "/";
+      } catch (e) {
+        setDemoError((e as Error).message);
+        location.hash = "/";
+        return setUser(null);
+      }
+    }
     if (!(await idToken())) return setUser(null);
     me().then(setUser, () => setUser(null));
   }, []);
   useEffect(() => { loadUser(); }, [loadUser]);
 
   if (user === undefined) return <div className="state" style={{ height: "100%" }}>Loading…</div>;
-  if (user === null || (getConfig().mock && location.search.includes("signin"))) return <SignIn onSignedIn={loadUser} />;
+  if (user === null || (getConfig().mock && location.search.includes("signin"))) return <SignIn onSignedIn={loadUser} notice={demoError} />;
 
   const [path, query] = hash.split("?");
   const params = new URLSearchParams(query || "");

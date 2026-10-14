@@ -2,8 +2,21 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconStart, IconFilter } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { account } from "./api";
+import { isDemo, signOut } from "./auth";
 
 export const CONTACT_EMAIL = "support@leasyd.com";
+
+/** The live demo (a read-only account with a sample shop's live data): what it is and the way to a trial. */
+function DemoBanner() {
+  const trial = () => { signOut(); location.hash = "/signup"; location.reload(); };
+  return (
+    <div className="trial-banner demo-banner" role="status">
+      <span>You're exploring a <b>live demo</b>: a sample online shop's real-time data, read-only. Try the service map, a trace,
+      or ask Leasyd AI why checkout errors happen (3 questions).</span>
+      <button type="button" className="btn primary small" onClick={trial}>Start your free trial</button>
+    </div>
+  );
+}
 
 /** A free trial's days left, or that it (or the subscription) ended: shown above every page. Once
  * billing is set up the way out is adding payment details in Settings; before that, an email. */
@@ -96,7 +109,7 @@ export function Shell(p: Props) {
           <RangePicker range={p.range} onRange={p.onRange} />
           <button className="btn" onClick={p.onRefresh} title="Refresh" aria-label="Refresh"><IconRefresh /></button>
         </header>
-        <TrialBanner />
+        {isDemo() ? <DemoBanner /> : <TrialBanner />}
         <div className="content">{p.children}</div>
       </div>
     </div>
