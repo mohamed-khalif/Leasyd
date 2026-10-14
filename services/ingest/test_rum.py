@@ -130,3 +130,12 @@ def test_user_agents():
         {"browser.name": "Edge", "browser.version": "129", "os.name": "Windows", "device.type": "desktop"}
     assert rum.browser("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36")["device.type"] == "mobile"
     assert rum.browser("")["device.type"] == "unknown"
+
+
+def test_pages_group_by_route():
+    assert rum.route("/product/1YMWWN1N4O") == "/product/{id}"
+    assert rum.route("/orders/12345/items") == "/orders/{id}/items"
+    assert rum.route("/u/3f2a9c1e-5b7d-4468-ace0-f3a9c1e5b7d2") == "/u/{id}"
+    assert rum.route("/checkout") == "/checkout" and rum.route("/") == "/"
+    assert rum.route("/blog/how-to-scale") == "/blog/how-to-scale"     # words stay
+    assert rum.route("https://api.example.com/v1/carts/a8f3c2d19e") == "https://api.example.com/v1/carts/{id}"

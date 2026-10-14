@@ -85,7 +85,7 @@ phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enab
 Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
 unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
 
-### Web monitoring (real users) (2026-10-14, in code, to deploy)
+### Web monitoring (real users) (2026-10-14, live; verified on AWS)
 
 Browser script `examples/web/leasyd-rum.js` (served at app.leasyd.com/install/leasyd-rum.js, 3.8 KB
 gzipped, no cookies, query strings stripped): page views and load timing, Core Web Vitals (LCP, INP,
@@ -99,8 +99,13 @@ search, PromQL, alerts and the AI SRE apply. App: **Explore › Web** (visits, v
 pages, JS errors with a visit replay, failing API calls linked to traces, browsers). Demo shop sends a
 website too (shop-web; failed checkouts link to the backend traces). Tested: unit tests (ingest 74,
 tenants 50, demo 6, AI 14) and the script in Chromium against a local server (beacons, traceparent,
-SPA route change, query strings stripped). Deploy: phaseT2 (route), phaseT5 (browser keys), phaseW1
-(page + script), phaseAI (prompt), phaseD1 (demo); then check on AWS.
+SPA route change, query strings stripped). Verified on AWS 2026-10-15: a browser key from Settings'
+API; POST /v1/rum from the allowed origin 200 (CORS header), other or no origin 403, bad key 401,
+preflight 204, the browser key refused on /v1/logs (401); the 4 events stored (LCP poor WARN, the
+503 call ERROR with its trace id, the JS error, the page view; browser Safari from the User-Agent);
+the demo's shop-web answers the page's queries (vitals p75, pages, JS errors, browsers). Paths group
+by route (/product/{id}: ID-like segments become {id}). First phaseT2 deploy rolled back: a per-path
+MethodSetting can't use HttpMethod "*" (fixed: POST).
 
 ## Stacks on AWS
 

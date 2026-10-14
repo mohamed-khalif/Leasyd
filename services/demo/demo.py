@@ -314,7 +314,7 @@ def web(m):
         for _ in range(r.choice([1, 1, 2, 2, 3, 4])):
             path, _, weight = r.choices(PAGES, weights=[p[1] for p in PAGES])[0]
             if path == "/product":
-                path = f"/product/{r.choice(PRODUCTS)}"
+                path = "/product/{id}"   # as rum.py routes /product/<id>
             pv = "%016x" % r.getrandbits(64)
             base = {"rum.session_id": session, "rum.page_view_id": pv, "url.path": path}
             load_ms = round(900 * weight * slow * math.exp(r.gauss(0, 0.35)))

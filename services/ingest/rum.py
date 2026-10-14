@@ -131,7 +131,7 @@ def record(e, session):
         ts_ms = float(e.get("t") or time.time() * 1000)
     except (TypeError, ValueError):
         return None
-    page = _text(e.get("page"), 300)
+    page = route(_text(e.get("page"), 300))
     a = {"rum.type": t, "rum.session_id": session, "rum.page_view_id": _id(e.get("pv")), "url.path": page}
     sev, trace = 9, ""
     if t == "page_view":
@@ -157,7 +157,7 @@ def record(e, session):
         sev, text = 17, f"js_error {msg}"
     else:   # api_call
         status, ms = int(_num(e.get("status")) or 0), _num(e.get("duration_ms")) or 0
-        method, url = _text(e.get("method"), 10).upper() or "GET", _text(e.get("url"), 300)
+        method, url = _text(e.get("method"), 10).upper() or "GET", route(_text(e.get("url"), 300))
         a.update({"http.request.method": method, "url.full": url, "http.response.status_code": status, "rum.duration_ms": ms})
         sev = 17 if status == 0 or status >= 500 else 13 if status >= 400 else 9
         trace = str(e.get("trace_id") or "").lower()
@@ -168,6 +168,18 @@ def record(e, session):
     if _HEX32.match(trace):
         rec["traceId"] = trace
     return rec
+
+
+_ID_SEG = re.compile(r"^(\d+|[0-9a-f]{8,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{6,})$", re.I)
+
+
+def route(path):
+    """/product/1YMWWN1N4O -> /product/{id}: pages group by route, not by each product, order or user."""
+    head, sep, rest = path.partition("://")
+    if sep:   # another origin: keep it, route its path
+        host, _, p = rest.partition("/")
+        return f"{head}://{host}" + route("/" + p)
+    return "/".join("{id}" if _ID_SEG.match(seg) else seg for seg in path.split("/"))
 
 
 def browser(ua):
