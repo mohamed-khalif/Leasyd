@@ -568,3 +568,19 @@ def test_tick_skips_tenants_whose_free_trial_ended(aws, monkeypatch):
         "invoke": lambda self, **kw: invoked.append(json.loads(kw["Payload"]))})())
     assert synthetics.tick({}, None) == {"due": 2}
     assert sorted(c["tenant"] for p in invoked for c in p["checks"]) == ["acme", "initech"]
+
+
+def test_a_viewer_can_look_but_not_change_or_run(aws):
+    """The public live demo's login (role viewer): GETs work; creating, editing, deleting, testing,
+    running and excluding are refused, so demo visitors can't change the demo or send requests."""
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(
+        Item={"pk": "user#ana@demo.io", "tenant": "demo", "role": "viewer", "status": "active"})
+    assert call("demo", "GET", "/v1/app/checks")[0] == 200
+    assert call("demo", "GET", "/v1/app/slos")[0] == 200
+    for method, resource, cid in [("POST", "/v1/app/checks", None), ("POST", "/v1/app/checks/test", None),
+                                  ("PUT", "/v1/app/checks/{id}", "aaaabbbbcccc"), ("DELETE", "/v1/app/checks/{id}", "aaaabbbbcccc"),
+                                  ("POST", "/v1/app/checks/{id}/run", "aaaabbbbcccc"),
+                                  ("POST", "/v1/app/checks/{id}/exclusions", "aaaabbbbcccc"),
+                                  ("POST", "/v1/app/windows", None), ("POST", "/v1/app/slos", None)]:
+        assert call("demo", method, resource, settings(), cid) == (403, {"error": synthetics.VIEWER_REFUSED})
+    assert call("acme", "POST", "/v1/app/checks", settings())[0] == 201       # other users unaffected

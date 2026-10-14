@@ -45,6 +45,10 @@ TABLE = os.environ.get("TENANTS_TABLE", "obs-tenants")
 QUERY_FUNCTION = os.environ.get("QUERY_FUNCTION", "obs-query")
 SELF = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "obs-ai")
 TURNS_PER_DAY = {"free": 20, "standard": 200}
+# The public live demo (role viewer, one shared login): each visitor's session asks a few
+# questions, and all visitors together a capped number a day (each costs about $0.10).
+VIEWER_TURNS_PER_SESSION = int(os.environ.get("VIEWER_TURNS_PER_SESSION", "3"))
+VIEWER_TURNS_PER_DAY = int(os.environ.get("VIEWER_TURNS_PER_DAY", "100"))
 MAX_STEPS = 25                 # tool rounds in one turn
 TURN_SECONDS = 600             # then it answers with what it has
 RESULT_CHARS = 12_000          # a tool result is cut to this (the model is told)
@@ -479,7 +483,7 @@ def view(conv):
     return {k: conv[k] for k in ("id", "title", "status", "created_by", "created_at", "updated_at", "view", "range")}
 
 
-def start_turn(tenant, user, body, plan):
+def start_turn(tenant, user, body, plan, viewer=False):
     message = str(body.get("message") or "").strip()
     if not message:
         raise Refused(400, "message: what to ask")
@@ -492,8 +496,12 @@ def start_turn(tenant, user, body, plan):
     if cid:
         if not _ID.match(str(cid)) or not (conv := load(tenant, cid)):
             raise Refused(404, "no such conversation")
+        if viewer and conv.get("created_by") != user:     # demo visitors: only their own conversations
+            raise Refused(404, "no such conversation")
         if conv["status"] == "running":
             raise Refused(409, "still answering the last question")
+    if viewer:
+        _count_viewer_turn(user)
     _count_turn(tenant, plan)
     now = datetime.now(timezone.utc)
     ctx = body.get("context") or {}
@@ -527,6 +535,29 @@ def _count_turn(tenant, plan):
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             raise Refused(429, f"you've asked {limit} questions today, this plan's limit; it resets at 00:00 UTC")
         raise
+
+
+def _count_viewer_turn(session):
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for pk, limit, msg in [     # the visit's first, so a visitor over their own limit doesn't use up the day's
+            (f"rate#ai#viewer#{session}#{day}", VIEWER_TURNS_PER_SESSION,
+             f"the live demo answers {VIEWER_TURNS_PER_SESSION} questions per visit; start a free trial to ask about your own data"),
+            (f"rate#ai#viewer#{day}", VIEWER_TURNS_PER_DAY,
+             "the live demo's AI has answered all its questions for today; start a free trial to ask about your own data")]:
+        try:
+            client("table").update_item(Key={"pk": pk}, UpdateExpression="ADD n :one",
+                                        ConditionExpression="attribute_not_exists(n) OR n < :max",
+                                        ExpressionAttributeValues={":one": 1, ":max": limit})
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise Refused(429, msg)
+            raise
+
+
+def _viewer_session(claims):
+    """Demo visitors share one login: a visit is one sign-in (the token's origin_jti, kept across
+    its refreshes), so each sees and continues only the conversations of their own visit."""
+    return f"{(claims.get('email') or '').lower()}#{claims.get('origin_jti') or claims.get('auth_time') or 'demo'}"
 
 
 STOP = "Stop investigating now: answer with what you have found so far, and say what you would check next."
@@ -657,6 +688,10 @@ def handler(event, context):
             raise Refused(401, "sign in first")
         method = event.get("httpMethod", "GET")
         cid = ((event.get("pathParameters") or {}).get("proxy") or "").strip("/")
+        me = client("table").get_item(Key={"pk": f"user#{user}"}).get("Item") or {}
+        viewer = me.get("role") == "viewer"
+        if viewer:
+            user = _viewer_session(claims)
         if method == "POST" and not cid:
             rec = client("table").get_item(Key={"pk": f"tenant#{tenant}"}).get("Item") or {}
             raw = event.get("body") or "{}"
@@ -665,7 +700,7 @@ def handler(event, context):
             body = json.loads(raw)
             if not isinstance(body, dict):
                 raise Refused(400, "body: a JSON object")
-            return _http(202, start_turn(tenant, user, body, rec.get("plan")))
+            return _http(202, start_turn(tenant, user, body, rec.get("plan"), viewer))
         if method == "GET" and not cid:
             items = sorted(_items(tenant, f"ai#{tenant}#"), key=lambda i: i.get("updated_at", ""), reverse=True)
             mine = [i for i in items if i.get("created_by") == user][:30]
@@ -673,7 +708,7 @@ def handler(event, context):
                                                  for i in mine], "enabled": bool(MODEL)})
         if method == "GET" and _ID.match(cid):
             conv = load(tenant, cid)
-            if not conv:
+            if not conv or (viewer and conv.get("created_by") != user):
                 raise Refused(404, "no such conversation")
             return _http(200, view(conv))
         raise Refused(404, "not found")

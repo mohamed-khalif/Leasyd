@@ -55,11 +55,12 @@ def tool_use(i, name, **inp):
     return {"type": "tool_use", "id": f"tu_{i}", "name": name, "input": inp}
 
 
-def api(mod, method, body=None, cid=None, tenant="acme", user="ana@acme.io"):
+def api(mod, method, body=None, cid=None, tenant="acme", user="ana@acme.io", visit=None):
     # As API Gateway delivers them: the API passes every body through as binary (base64).
     raw = base64.b64encode(json.dumps(body).encode()).decode() if body else None
+    claims = {"custom:tenant": tenant, "email": user, **({"origin_jti": visit} if visit else {})}
     out = mod.handler({"httpMethod": method, "pathParameters": {"proxy": cid} if cid else None, "body": raw, "isBase64Encoded": bool(body),
-                       "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant, "email": user}}}}, None)
+                       "requestContext": {"authorizer": {"claims": claims}}}, None)
     return out["statusCode"], json.loads(out["body"])
 
 
@@ -248,3 +249,26 @@ def test_with_an_anthropic_key_it_uses_the_claude_api(sre, monkeypatch):
 def test_sql_tool_says_span_kind_and_status_are_integers(sre):
     sql = next(t for t in sre.TOOLS if t["name"] == "run_sql")["description"]
     assert "kind INTEGER (1 internal, 2 server, 3 client" in sql and "status_code INTEGER (0 unset, 1 ok, 2 error" in sql
+
+
+def test_live_demo_visitors_ask_a_few_questions_each_and_see_only_their_own(sre, monkeypatch):
+    """One shared read-only login (role viewer); each visit (sign-in) is its own."""
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(
+        Item={"pk": "user#demo@leasyd.com", "tenant": "shop", "role": "viewer", "status": "active"})
+    demo = dict(tenant="shop", user="demo@leasyd.com")
+    s, conv = api(sre, "POST", {"message": "why errors?"}, visit="v1", **demo)
+    assert s == 202
+    assert api(sre, "GET", cid=conv["id"], visit="v1", **demo)[0] == 200
+    assert api(sre, "GET", cid=conv["id"], visit="v2", **demo)[0] == 404              # another visitor
+    assert api(sre, "GET", visit="v2", **demo)[1]["conversations"] == []
+    assert [c["id"] for c in api(sre, "GET", visit="v1", **demo)[1]["conversations"]] == [conv["id"]]
+    assert api(sre, "POST", {"message": "x", "conversation_id": conv["id"]}, visit="v2", **demo)[0] == 404
+    assert api(sre, "POST", {"message": "two"}, visit="v1", **demo)[0] == 202
+    assert api(sre, "POST", {"message": "three"}, visit="v1", **demo)[0] == 202
+    s, e = api(sre, "POST", {"message": "four"}, visit="v1", **demo)
+    assert s == 429 and "3 questions per visit" in e["error"]
+    monkeypatch.setattr(sre, "VIEWER_TURNS_PER_DAY", 4)
+    assert api(sre, "POST", {"message": "a"}, visit="v3", **demo)[0] == 202
+    s, e = api(sre, "POST", {"message": "b"}, visit="v4", **demo)
+    assert s == 429 and "for today" in e["error"]
+    assert api(sre, "POST", {"message": "owners are not limited this way"})[0] == 202

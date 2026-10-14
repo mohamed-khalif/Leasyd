@@ -28,4 +28,5 @@ aws cloudformation deploy --stack-name obs-phaseT5 \
   --capabilities CAPABILITY_NAMED_IAM --tags project=obs phase=T5 \
   --parameter-overrides "StandardPlanId=$(t2 StandardPlanId)" "TestTinyPlanId=$(t2 TestTinyPlanId)" \
                         "FreePlanId=$(t2 FreePlanId)" "ApiId=$(t2 ApiId)" \
-                        "UserPoolId=$(u1 UserPoolId)" "EmailFrom=${EMAIL_FROM}" "$@"
+                        "UserPoolId=$(u1 UserPoolId)" "AppClientId=$(u1 AppClientId)" "EmailFrom=${EMAIL_FROM}" \
+                        "DemoUser=${DEMO_USER-$(aws ssm get-parameter --name /obs/demo/viewer-user --query Parameter.Value --output text 2>/dev/null || true)}" "$@"

@@ -502,7 +502,7 @@ def delete(tenant, context=None):
                     "until one finds nothing"}
 
 
-ROLES = {"owner", "member"}
+ROLES = {"owner", "member", "viewer"}   # viewer: read only (the public live demo)
 
 
 def invite_user(tenant, email, send_email=True, role="owner", invited_by=None, welcome=False, context=None):

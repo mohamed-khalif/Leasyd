@@ -131,6 +131,15 @@ def table():
     return _table
 
 
+VIEWER_REFUSED = "this is a read-only demo; start a free trial to try this with your own data"
+
+
+def _is_viewer(email):
+    """A read-only user (the public live demo's login): may look, never change or run anything."""
+    item = table().get_item(Key={"pk": f"user#{(email or '').lower()}"}).get("Item") or {}
+    return item.get("role") == "viewer"
+
+
 def kms():
     global _kms
     _kms = _kms or boto3.client("kms")
@@ -928,6 +937,8 @@ def api(event, context):
         body = json.loads(raw) if method in ("POST", "PUT") else {}
     except ValueError:
         return _http(400, {"error": "body must be JSON"})
+    if method != "GET" and _is_viewer(user):
+        return _http(403, {"error": VIEWER_REFUSED})
     try:
         if resource.startswith(("/v1/app/windows", "/v1/app/slos")):
             return _settings_api(tenant, user, method, resource, check_id, body)

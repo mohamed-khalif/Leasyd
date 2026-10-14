@@ -638,6 +638,15 @@ def handler(event, context=None):
     return evaluate(event, context)
 
 
+VIEWER_REFUSED = "this is a read-only demo; start a free trial to try this with your own data"
+
+
+def _is_viewer(email):
+    """A read-only user (the public live demo's login): may look, never change or send anything."""
+    item = client("table").get_item(Key={"pk": f"user#{(email or '').lower()}"}).get("Item") or {}
+    return item.get("role") == "viewer"
+
+
 def api(event, context=None):
     """/v1/app/alerts/{proxy+}; the tenant is the signed-in user's (Cognito authorizer)."""
     claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
@@ -646,6 +655,9 @@ def api(event, context=None):
         return _http(401, {"error": "no tenant for this user"})
     method = event.get("httpMethod")
     parts = [p for p in ((event.get("pathParameters") or {}).get("proxy") or "").split("/") if p]
+    reads = method == "GET" or (method == "POST" and parts == ["rules", "preview"])   # a preview only reads
+    if not reads and _is_viewer(user):
+        return _http(403, {"error": VIEWER_REFUSED})
     if (event.get("resource") or "").startswith("/v1/app/dashboards"):
         import dashboards
         try:

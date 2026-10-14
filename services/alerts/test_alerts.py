@@ -378,3 +378,22 @@ def test_an_account_users_address_gets_alerts_at_once_by_ses(aws, monkeypatch):
     assert s == 200 and out["sent"] is True
     [(to, subject, paragraphs, button)] = sent
     assert to == "ana@acme.io" and "Test alert" in subject and button[0] == "Open in Leasyd"
+
+
+def test_a_viewer_can_look_but_not_change_or_send(aws):
+    """The public live demo's login (role viewer): reads and rule previews work; changing channels,
+    rules or dashboards, and test notifications, are refused."""
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(
+        Item={"pk": "user#ana@demo.io", "tenant": "demo", "role": "viewer", "status": "active"})
+    refused = (403, {"error": alerts.VIEWER_REFUSED})
+    assert call("demo", "GET", "rules")[0] == 200 and call("demo", "GET", "channels")[0] == 200
+    assert call("demo", "POST", "rules/preview", {"query": "x"})[0] != 403
+    for method, path in [("POST", "channels"), ("POST", "channels/abc/test"), ("POST", "rules"),
+                         ("PUT", "rules/abc"), ("DELETE", "rules/abc"), ("DELETE", "channels/abc")]:
+        assert call("demo", method, path, {"name": "x"}) == refused
+    dash = {"httpMethod": "POST", "resource": "/v1/app/dashboards", "pathParameters": None, "body": json.dumps({"name": "x"}),
+            "requestContext": {"authorizer": {"claims": {"custom:tenant": "demo", "email": "ana@demo.io"}}}}
+    r = alerts.api(dash)
+    assert (r["statusCode"], json.loads(r["body"])) == refused
+    assert alerts.api({**dash, "httpMethod": "GET", "body": None})["statusCode"] == 200
+    assert call("acme", "POST", "channels", {"name": "x", "type": "email", "target": "ana@acme.io"})[0] != 403
