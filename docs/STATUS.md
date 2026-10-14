@@ -66,6 +66,20 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
 Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.*`.
 
+### Live demo (2026-10-14, in code, to deploy)
+
+`www.leasyd.com` → **Explore the live demo** → `app.leasyd.com/#/demo`: the real app, signed in as the
+read-only viewer `demo@leasyd.com` of `leasyd-demo` (no sign-up). `POST /v1/demo/session` (public,
+throttled 5/s, 30 sessions an hour per address, 3,000 a day) returns only a 15-minute ID token, never
+the password or a refresh/access token. Role `viewer`: every change refused in account, checks,
+windows, SLOs, alerts, dashboards (test / run now too); Settings show no users or keys. Leasyd AI: 3
+questions per visit, 100 a day across all visitors (~$10/day at most); each visit sees only its own
+conversations. Banner with "Start your free trial"; "Book a demo" is an email until there's a booking link.
+Deploy order: phase0 (boundary), phaseT5, `infra/demo-viewer.sh`, phaseT5 again, phaseT2, phase4,
+phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enabled.
+Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
+unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
+
 ## Stacks on AWS
 
 Everything is CloudFormation, brought up and taken down by one command each (`infra/up.sh`,
