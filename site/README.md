@@ -6,7 +6,10 @@ Static pages for the public website (the app is app.leasyd.com). Hosted by `obs-
 - `index.html`: the landing page (dark): hero with a screenshot carousel, cost comparison, a section per
   product with card rows, sign-up boxes that open the app's sign-up with the e-mail filled in. `site.js`
   runs the carousel, card arrows, the typing MCP card and the sign-up boxes. `img/shot-*.webp` (hero),
-  `img/card-*.webp` (cards) and `img/phone-home.webp` are screenshots of the app (dark theme, mock data, 1.5x).
+  `img/card-*.webp` (cards) are screenshots of the app (dark theme, mock data, 1.5x). `img/ai-sre.webm` is the
+  Leasyd AI card's clip: the app in mock mode (`npm run mock`) recorded with Playwright, an outage from
+  the Leasyd AI page (live insights showing the error) to the answer, 650x560, ~21 s, no sound;
+  `img/ai-sre-poster.png` is its last frame (shown with reduced motion).
 - `pricing.html` (+ `pricing.js`, the estimator): served at /pricing. Prices must match
   `services/web/src/pricing.ts` (the in-app Usage & Cost page).
 - `docs.html` (/docs): the product documentation.

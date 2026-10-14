@@ -215,7 +215,7 @@ html:has(body.lp) { overflow-x: clip; }
 .demo-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .btn.ghost { background: transparent; }
 
-/* the product carousel in the hero: a tilted window and a phone */
+/* the product carousel in the hero: a tilted window */
 .showcase { position: relative; perspective: 1600px; }
 .frames { position: relative; aspect-ratio: 16 / 10.4; }
 .win { position: absolute; inset: 0; border-radius: 12px; overflow: hidden; border: 1px solid #2c2c46;
@@ -226,9 +226,6 @@ html:has(body.lp) { overflow-x: clip; }
 .win img.on { opacity: 1; }
 .win::after { content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(180deg, transparent 55%, rgba(11,11,20,.85)), linear-gradient(90deg, rgba(11,11,20,.0) 60%, rgba(11,11,20,.6)); }
-.phone { position: absolute; left: -6%; bottom: -8%; width: 23%; aspect-ratio: 390 / 700; border-radius: 22px; overflow: hidden;
-  border: 5px solid #1d1d2e; background: #0f0f1b; box-shadow: 0 30px 60px -20px rgba(0,0,0,.9); transform: rotateY(-10deg); }
-.phone img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 .caption { text-align: center; color: var(--muted); font-size: 14px; margin-top: 34px; min-height: 22px; }
 .dots { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 12px; }
 .dots button.d { width: 6px; height: 6px; padding: 0; border-radius: 50%; border: 0; background: #3a3a55; cursor: pointer; }
@@ -287,6 +284,9 @@ html:has(body.lp) { overflow-x: clip; }
 .cards .c .vis img { position: absolute; left: 7%; top: 11%; width: 210%; max-width: none; border-radius: 10px; border: 1px solid #2a2a44;
   box-shadow: 0 30px 60px -20px rgba(0,0,0,.9); transition: transform .6s ease; }
 .cards .c.wide .vis img { width: 104%; }
+.cards .c .vis video { position: absolute; left: 50%; top: 34px; width: min(92%, 500px); height: auto; transform: translateX(-50%);
+  border-radius: 10px; border: 1px solid #2a2a44; background: #0b0c10; box-shadow: 0 30px 60px -20px rgba(0,0,0,.9); }
+#ai .cards .c { grid-template-rows: 380px auto; }   /* room for the Leasyd AI clip's answer */
 .cards .c:hover .vis img { transform: translateY(-6px); }
 .cards .c .vis::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 60%, #0e0e18); pointer-events: none; }
 .cards .c .txt { padding: 4px 26px 26px; }
@@ -334,7 +334,6 @@ html:has(body.lp) { overflow-x: clip; }
   .cards { grid-auto-columns: 86%; } .cards .c.wide { grid-column: span 1; }
   .vs { grid-template-columns: 1fr; } .cols div { padding: 16px; } .cols b { font-size: 18px; }
   .foot { grid-template-columns: 1fr 1fr; } .constel { height: 180px; }
-  .phone { display: none; }
   .phead { flex-wrap: wrap; } .phead h2 { width: 100%; } .feat { justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) { .marquee .track, .constel i, .chat .typed::after { animation: none; } .win img { transition: none; } }

@@ -1,7 +1,12 @@
-// leasyd.com landing page: the hero's screenshot carousel, the product rows' arrows, a typing
+// leasyd.com landing page: the hero's screenshot carousel, the Leasyd AI clip, the product rows' arrows, a typing
 // question in the MCP card, and the e-mail boxes (to the app's sign-up, e-mail filled in).
 (function () {
   const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // Clips play muted on a loop; not for visitors who asked for less motion (they see the poster).
+  document.querySelectorAll("video.clip").forEach((v) => {
+    if (still) { v.removeAttribute("autoplay"); v.pause(); }
+  });
 
   // Hero carousel
   const show = document.getElementById("showcase");
