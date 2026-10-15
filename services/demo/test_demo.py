@@ -44,7 +44,7 @@ def test_traces_are_connected_trees_and_logs_point_at_their_spans():
     assert len({svc(rs) for rs in docs["traces"]["resourceSpans"]}) == len(demo.SERVICES)
     span_ids = {(s["traceId"], s["spanId"]) for s in ss}
     logs = [r for rl in docs["logs"]["resourceLogs"] for sl in rl["scopeLogs"] for r in sl["logRecords"]
-            if sl["scope"]["name"] != "leasyd-rum"]
+            if sl["scope"]["name"] != "leasyd-rum" and "k8seventsreceiver" not in sl["scope"]["name"]]
     assert logs and all((r["traceId"], r["spanId"]) in span_ids for r in logs)
 
 
@@ -97,8 +97,32 @@ def test_every_signal_is_accepted_by_ingest_and_compacts(tmp_path):
         raw.write_bytes(body)
         written = compact.compact(signal, [str(raw)], str(tmp_path / signal), "b1", "2025-09-16", "15")
         assert sum(w["rows"] for w in written) > 0
-    kinds = duckdb.sql(f"SELECT DISTINCT metric_name, metric_type FROM '{tmp_path}/metrics/**/*.parquet' ORDER BY 1").fetchall()
+    kinds = duckdb.sql(f"SELECT DISTINCT metric_name, metric_type FROM '{tmp_path}/metrics/**/*.parquet' "
+                       "WHERE service NOT IN ('kubernetes', 'dcgm-exporter') ORDER BY 1").fetchall()
     assert kinds == [("app.orders.placed", "sum"), ("app.payments.declined", "sum"),
                      ("db.client.connections.usage", "sum"), ("http.server.request.duration", "histogram"),
                      ("kafka.consumer.lag", "gauge"), ("process.cpu.utilization", "gauge"),
                      ("process.memory.usage", "sum")]
+
+
+def test_the_cluster_rides_along_and_compacts(tmp_path):
+    """The Kubernetes cluster and GPUs (cluster.py): what Leasyd's collectors send, under the services
+    kubernetes and dcgm-exporter, accepted by ingest and compacted like any data."""
+    import duckdb
+    import compact
+    import ingest
+    docs = demo.documents(NOON)
+    for signal in ("metrics", "logs"):
+        body = json.dumps(docs[signal]).encode()
+        ingest.parse(signal, body, "application/json")
+        raw = tmp_path / f"{signal}.json.gz"
+        raw.write_bytes(gzip.compress(body))
+        compact.compact(signal, [str(raw)], str(tmp_path / signal), "b1", "2025-09-16", "15")
+    by = dict(duckdb.sql(f"SELECT service, count(DISTINCT metric_name) FROM '{tmp_path}/metrics/**/*.parquet' "
+                         "WHERE service IN ('kubernetes', 'dcgm-exporter') GROUP BY 1").fetchall())
+    assert by["dcgm-exporter"] >= 20 and by["kubernetes"] >= 25
+    gpus = duckdb.sql(f"SELECT count(DISTINCT attributes['UUID']) FROM '{tmp_path}/metrics/**/*.parquet' "
+                      "WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL'").fetchone()[0]
+    assert gpus == 16
+    events = duckdb.sql(f"SELECT count(*) FROM '{tmp_path}/logs/**/*.parquet' WHERE attributes['k8s.event.reason'] IS NOT NULL").fetchone()[0]
+    assert events >= 1   # NOON is a multiple of 5 minutes: the stalled job's FailedScheduling

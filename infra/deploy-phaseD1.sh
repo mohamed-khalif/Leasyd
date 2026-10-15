@@ -27,7 +27,7 @@ fi
 
 ENDPOINT="$(aws cloudformation describe-stacks --stack-name obs-phaseT2 \
   --query "Stacks[0].Outputs[?OutputKey=='IngestEndpoint'].OutputValue" --output text)"
-rm -rf services/demo/build && mkdir -p services/demo/build && cp services/demo/demo.py services/demo/build/
+rm -rf services/demo/build && mkdir -p services/demo/build && cp services/demo/demo.py services/demo/cluster.py services/demo/build/
 aws cloudformation package \
   --template-file infra/phaseD1-demo.yaml \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phaseD1 \
