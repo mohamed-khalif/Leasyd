@@ -85,7 +85,7 @@ phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enab
 Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
 unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
 
-### UI audit (2026-10-15, pending deploy: `infra/deploy-phaseW1.sh`)
+### UI audit (2026-10-15, deployed)
 
 Every page walked in the browser (mock data). Menu regrouped (Telemetry, Applications, Analyze, Alerting &
 uptime, Account). Fixed: Get started step 3 layout (the second check's text wrapped under an empty tick);
