@@ -46,6 +46,8 @@
       <a href="#ruby">Ruby</a>
       <a href="#other">Other languages</a>
       <a href="#servers">Linux servers</a>
+      <a href="#kubernetes">Kubernetes</a>
+      <a href="#gpus">NVIDIA GPUs</a>
       <a href="#lambda">AWS Lambda</a>
       <a href="#limits">Limits and answers</a>
       <b>Use it</b>
@@ -140,6 +142,20 @@ opentelemetry-instrument python app.py</code></pre>
 
       <h3 id="servers">Linux servers</h3>
       <p>On a server (Amazon Linux 2023 or Ubuntu 22.04+, x86 or ARM), <strong>Get started › Linux server</strong> installs an OpenTelemetry Collector set up for Leasyd. It sends the server's CPU, memory, disk, network and system logs every 30 seconds (<strong>Dashboards › Leasyd - Hosts</strong>), and accepts your apps' data on <code>localhost:4318</code> (HTTP) and <code>localhost:4317</code> (gRPC), so apps on that server need no key.</p>
+
+      <h3 id="kubernetes">Kubernetes</h3>
+      <p>One script installs the official OpenTelemetry Collector Helm chart twice in namespace <code>leasyd</code> (needs <code>kubectl</code> and <code>helm</code> 3):</p>
+      <pre><code>curl -fsSL https://app.leasyd.com/install/kubernetes/leasyd-k8s.sh -o leasyd-k8s.sh
+LEASYD_API_KEY=YOUR_KEY bash leasyd-k8s.sh --cluster prod [--gpu] [--no-logs]</code></pre>
+      <ul>
+        <li><strong>One collector per node</strong> (DaemonSet): node, pod and container CPU, memory, disk and network; how close each pod is to its requests and limits; pod logs; NVIDIA GPU metrics; and your apps' OpenTelemetry on each node's ports 4317 (gRPC) and 4318 (HTTP), with the pod, namespace, node, workload and the pod labels <code>team</code> and <code>app.kubernetes.io/name</code> added.</li>
+        <li><strong>One collector for the cluster</strong> (Deployment): pod phases, restarts and waiting reasons (CrashLoopBackOff, OOMKilled, ImagePullBackOff), workloads' wanted and ready replicas, node conditions and allocatable CPU and memory, and Kubernetes events as logs.</li>
+      </ul>
+      <p>The key stays in a Kubernetes Secret. The app's <strong>Kubernetes</strong> page shows nodes, workloads, pods (each with its containers, usage against limits, events, logs and traces) and what needs attention; <strong>Dashboards › Leasyd - Kubernetes</strong> and ready-made alerts (crash loops, pending pods, memory limits, nodes not ready, missing replicas) cover the rest. <code>bash leasyd-k8s.sh --uninstall</code> removes it all. The Helm values are public: <code>agent.yaml</code> and <code>cluster.yaml</code> next to the script.</p>
+
+      <h3 id="gpus">NVIDIA GPUs</h3>
+      <p>Leasyd reads NVIDIA's dcgm-exporter: in Kubernetes add <code>--gpu</code> to the command above (if the NVIDIA GPU Operator runs, its exporter is used; otherwise one is installed on the GPU nodes); on a server with Docker and NVIDIA's container toolkit, <code>sudo LEASYD_API_KEY=YOUR_KEY bash collector.sh --gpu</code>. Slurm: point <code>DCGM_HPC_JOB_DIR</code> at your job-mapping directory.</p>
+      <p>The <strong>GPUs</strong> page shows every GPU's utilization, memory, temperature and power; which workload and team holds it; what the fleet costs and what sits idle (held by a workload but under 5% busy) or unallocated, with recommendations; pods waiting for GPUs; hardware problems (XID errors with what each means and what to do, ECC errors, failed row remapping, thermal and power throttling); and daily peaks with the demand trend for planning. Costs use AWS on-demand list prices per GPU hour until you set your own in <strong>Settings › GPU prices</strong>. Label pods <code>team=&lt;name&gt;</code> to see spend by team.</p>
 
       <h3 id="lambda">AWS Lambda</h3>
       <ul>

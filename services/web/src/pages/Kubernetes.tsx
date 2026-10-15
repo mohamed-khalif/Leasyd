@@ -120,7 +120,9 @@ function Overview({ ctx, w, k, hint, f, nodes, pods, onPod, onTab }: Props & { o
               tone={warnings.length ? "warn" : undefined} />
       </div>
 
-      <Panel title="Needs attention" flush>
+      <Panel title="Needs attention" flush right={<span style={{ display: "flex", gap: 12 }}>
+        <a href={`#/alerts/rules/new?template=${encodeURIComponent("Pod crash-looping")}`}>Alert me on crash loops ›</a>
+        <a href={`#/alerts/rules/new?template=${encodeURIComponent("Node not ready")}`}>on nodes ›</a></span>}>
         <Loads q={loads(pods)} empty={false} height={80}>
           {() => problems.length || short.length || ns.some((n) => n.ready !== 1) ? (
             <table className="dtable">

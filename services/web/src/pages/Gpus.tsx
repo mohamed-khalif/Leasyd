@@ -201,7 +201,7 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
         <Card label="Utilization of held GPUs" value={pct(heldUtil)} sub="how hard workloads use the GPUs they hold" />
       </div>
 
-      <Panel title="Recommendations" flush>
+      <Panel title="Recommendations" flush right={<a href={`#/alerts/rules/new?template=${encodeURIComponent("GPU held but idle")}`}>Alert me when a GPU sits idle ›</a>}>
         <Loads q={loads(wl)} empty={false} height={80}>
           {() => recs.length ? (
             <ul className="recs">{recs.map((r, i) => (
@@ -293,7 +293,9 @@ function Health({ w, k, hint, f, onGpu }: Props & { onGpu: (g: string) => void }
         <Card label="Throttled" value={String(throttled)} tone={throttled ? "warn" : "ok"} sub="slowed for heat or power" />
         <Card label={`Hotter than ${HOT_TEMP} °C`} value={String(hot)} tone={hot ? "warn" : "ok"} sub="at some point in the range" />
       </div>
-      <Panel title="GPUs that need attention" flush>
+      <Panel title="GPUs that need attention" flush right={<span style={{ display: "flex", gap: 12 }}>
+        <a href={`#/alerts/rules/new?template=${encodeURIComponent("GPU XID error")}`}>Alert me on XID errors ›</a>
+        <a href={`#/alerts/rules/new?template=${encodeURIComponent("GPU too hot")}`}>on heat ›</a></span>}>
         <Loads q={loads(health)} empty={false} height={140}>
           {() => rs.length ? (
             <table className="dtable">

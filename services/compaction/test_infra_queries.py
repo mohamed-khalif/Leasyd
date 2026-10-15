@@ -196,3 +196,50 @@ def test_k8s_usage_and_pod_detail(eng, hint):
     assert len(cont) == 1 and cont[0]["mem_limit"] == int(pod.mem_lim) and cont[0]["restarts"] == 0
     oom = run(eng, hint, "e", [["e", "k8sEvents", {}, {"namespace": "shop", "name": pod.name}]])
     assert [e["reason"] for e in oom] == ["OOMKilling"]
+
+
+def test_builtin_dashboards_query(eng):
+    """Every PromQL of the built-in Kubernetes and NVIDIA GPU dashboards runs and finds data
+    ($cluster at "any", as the dashboard sends it)."""
+    import promql
+    import query
+    t0, t1, step = int(T0.timestamp()), int(T1.timestamp()), 300
+
+    def run_query(q):
+        return query.run(q, invoke_worker=query.run_worker)
+    for name, p in queries()["dashboards"].items():
+        filled = p["promql"].replace("$__interval", f"{step}s").replace("$__range", f"{t1 - t0}s").replace("$cluster", ".*")
+        if p["type"] == "stat":   # number panels: one evaluation over the range, at its end
+            out = promql.query_instant("acme", filled, t1, run_query=run_query)
+        else:
+            out = promql.query_range("acme", filled, t0, t1, step, run_query=run_query)
+        assert out["status"] == "success" and out["data"]["result"], f"{name}: no data for {filled}"
+
+
+def test_alert_templates_find_the_demo_trouble(eng):
+    """The Kubernetes and GPU alert templates run as the alerts service runs them (one PromQL
+    evaluation), and fire on what the demo is known to hold."""
+    import promql
+    import query
+
+    def run_query(q):
+        return query.run(q, invoke_worker=query.run_worker)
+
+    def firing(t, at):   # at the degraded level when there is one, else critical
+        out = promql.query_instant("acme", t["promql"], int(at.timestamp()), run_query=run_query)
+        vals = [float(r["value"][1]) for r in out["data"]["result"]]
+        level = t.get("degraded", t["critical"])
+        return [v for v in vals if (v > level if t["op"] == ">" else v < level)]
+    at = lambda h, m: datetime.fromtimestamp((DAY0 + h * 60 + m) * 60, timezone.utc)   # noqa: E731
+    templates = {t["name"]: t for t in queries()["alertTemplates"]}
+    expect = {"Pod crash-looping": at(12, 11),   # 3 restarts seen (the data starts at 12:00): degraded "Pod stuck pending": at(14, 0), "GPU XID error": at(13, 7),
+              "GPU double-bit ECC errors": at(13, 8), "GPU thermal throttling": at(13, 30), "GPU held but idle": at(14, 0)}
+    for name, when in expect.items():
+        assert firing(templates[name], when), f"{name} should fire at {when}"
+    quiet = {"Node not ready": at(14, 0), "Node memory high": at(14, 0), "Deployment missing replicas": at(13, 30),
+             "GPU XID error": at(14, 20), "Pod crash-looping": at(14, 20)}
+    for name, when in quiet.items():
+        assert not firing(templates[name], when), f"{name} should be quiet at {when}"
+    assert set(templates) == {t["name"] for t in queries()["alertTemplates"]} and len(templates) == 11
+    for t in templates.values():   # the rest at least evaluate
+        firing(t, at(14, 0))

@@ -811,3 +811,4 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 td.warn { color: var(--sev-warn); }
 .util-bar > span.hot { background: var(--sev-error); }
 .infra-drawer { padding: 12px 16px; }
+.alert-templates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }

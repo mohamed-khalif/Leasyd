@@ -12,9 +12,11 @@ import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
 import { fmtNum } from "../time";
 
-type Source = "server" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "web";
+type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "web";
 const SOURCES: [Source, string, string][] = [
   ["server", "Linux server", "Host metrics and system logs, and a local endpoint for your apps"],
+  ["kubernetes", "Kubernetes", "Nodes, workloads, pods, events and pod logs, with one Helm install"],
+  ["gpu", "NVIDIA GPUs", "Usage, memory, errors and cost of every GPU, in Kubernetes or on a server"],
   ["java", "Java", "OpenTelemetry Java agent: traces, logs, JVM metrics"],
   ["nodejs", "Node.js", "Auto-instrumentation: traces, runtime metrics"],
   ["python", "Python", "Auto-instrumentation: traces, logs, runtime metrics"],
@@ -200,6 +202,37 @@ sudo LEASYD_API_KEY=${key} LEASYD_ENDPOINT=${endpoint} bash leasyd-collector.sh`
             and takes your apps' OpenTelemetry data on <code className="mono">localhost:4318</code> (HTTP) and <code className="mono">:4317</code> (gRPC),
             so apps on this server need no key: set <code className="mono">OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318</code>.
             Add <code className="mono">--sample-app</code> to also install a small demo shop that sends traces.
+          </p>
+        </>
+      );
+    case "kubernetes":
+      return (
+        <>
+          <p>With <code className="mono">kubectl</code> pointing at the cluster and <code className="mono">helm</code> 3, run (add <code className="mono">--gpu</code> if it has NVIDIA GPUs):</p>
+          <Code>{`curl -fsSL ${site}/install/kubernetes/leasyd-k8s.sh -o leasyd-k8s.sh
+LEASYD_API_KEY=${key} LEASYD_ENDPOINT=${endpoint} bash leasyd-k8s.sh --cluster my-cluster`}</Code>
+          <p className="muted">
+            It installs the official OpenTelemetry Collector Helm chart twice in namespace <code className="mono">leasyd</code>: one collector per node
+            (node, pod and container usage, pod logs, GPU metrics, and your apps' OpenTelemetry on each node's ports 4317 / 4318) and one for the
+            cluster (pod phases, restarts, crash loops, workloads, events). The key stays in a Kubernetes Secret. See <b>Kubernetes</b> within a minute or two.
+            Apps in the cluster send to their node: <code className="mono">OTEL_EXPORTER_OTLP_ENDPOINT=http://$(NODE_IP):4318</code> with
+            NODE_IP from the downward API (<code className="mono">status.hostIP</code>). Remove it all: <code className="mono">bash leasyd-k8s.sh --uninstall</code>.
+          </p>
+        </>
+      );
+    case "gpu":
+      return (
+        <>
+          <p><b>In Kubernetes</b>: install with <code className="mono">--gpu</code>. If NVIDIA's GPU Operator runs, Leasyd reads its dcgm-exporter; otherwise the installer adds dcgm-exporter on the GPU nodes:</p>
+          <Code>{`curl -fsSL ${site}/install/kubernetes/leasyd-k8s.sh -o leasyd-k8s.sh
+LEASYD_API_KEY=${key} LEASYD_ENDPOINT=${endpoint} bash leasyd-k8s.sh --cluster my-cluster --gpu`}</Code>
+          <p><b>On a server</b> with NVIDIA GPUs (driver, Docker and NVIDIA's container toolkit installed):</p>
+          <Code>{`curl -fsSL ${site}/install/collector.sh -o leasyd-collector.sh
+sudo LEASYD_API_KEY=${key} LEASYD_ENDPOINT=${endpoint} bash leasyd-collector.sh --gpu`}</Code>
+          <p className="muted">
+            See <b>GPUs</b>: each GPU's utilization, memory, temperature, power and errors (XID, ECC, throttling, with what to do), which workload
+            and team holds it, what it costs and what sits idle. Label pods <code className="mono">team=&lt;name&gt;</code> to see cost by team;
+            set your own prices in <b>Settings › GPU prices</b>. Slurm: set <code className="mono">DCGM_HPC_JOB_DIR</code> to your job-mapping directory to see jobs.
           </p>
         </>
       );

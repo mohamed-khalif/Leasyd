@@ -145,7 +145,25 @@ Web monitoring (real users' browsers): logs whose resource has telemetry.sdk.nam
 rum.session_id, url.path; web_vital: rum.vital.name (LCP, INP, CLS, FCP, TTFB), rum.vital.value (ms; \
 CLS unitless), rum.vital.rating; js_error: error.message, error.source; api_call: http.request.method, \
 url.full, http.response.status_code, rum.duration_ms, and trace_id = the backend trace it started. \
-In SQL, attribute values are text: TRY_CAST(attributes['rum.vital.value'] AS DOUBLE)."""
+In SQL, attribute values are text: TRY_CAST(attributes['rum.vital.value'] AS DOUBLE).
+
+Kubernetes (Leasyd's collectors; resource attributes k8s.cluster.name, k8s.namespace.name, \
+k8s.pod.name, k8s.node.name, k8s.deployment.name / k8s.statefulset.name / k8s.job.name, \
+k8s.pod.labels.team): k8s.pod.cpu.usage (cores), k8s.pod.memory.working_set (bytes), \
+k8s.pod.memory_limit_utilization (0-1), k8s.node.cpu.usage, k8s.node.memory.working_set, \
+k8s.node.allocatable_cpu / _memory, k8s.node.condition_ready (1 ready), k8s.pod.phase (1 Pending, 2 Running, \
+3 Succeeded, 4 Failed), k8s.container.restarts (cumulative; restarts in a window = max_over_time - \
+min_over_time), k8s.container.status.reason (attribute k8s.container.status.reason: CrashLoopBackOff, \
+OOMKilled, ImagePullBackOff...), k8s.deployment.desired / available. Kubernetes events are logs with \
+attribute k8s.event.reason (FailedScheduling, BackOff, OOMKilling...), the message in the body and \
+resource k8s.object.kind / k8s.object.name.
+NVIDIA GPUs (dcgm-exporter, service dcgm-exporter): DCGM_FI_DEV_GPU_UTIL (%), DCGM_FI_DEV_FB_USED / \
+_FB_FREE (MiB), DCGM_FI_DEV_GPU_TEMP (C), DCGM_FI_DEV_POWER_USAGE (W), DCGM_FI_DEV_XID_ERRORS (the last \
+XID code; 0 none; 48 double-bit ECC, 79 fell off the bus, 13/31/43 usually the application), \
+DCGM_FI_DEV_ECC_DBE_VOL_TOTAL (counter), DCGM_FI_DEV_THERMAL_VIOLATION (ns throttled, counter), \
+DCGM_FI_PROF_PIPE_TENSOR_ACTIVE (0-1); labels UUID, gpu, modelName, Hostname, node, and namespace / pod / \
+team of the workload holding the GPU (empty: unallocated). A GPU held by a pod but under 5% busy is \
+idle (paid, unused). The Leasyd app's GPUs and Kubernetes pages show this; point people there."""
 
 
 TOOLS = [

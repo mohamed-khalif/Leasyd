@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AlertChannel, AlertRule, alerts, Check, checks, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
 import type { Ctx } from "../App";
+import { ALERT_TEMPLATES, AlertTemplate } from "../infra/alertTemplates";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Series, TimeSeries } from "../components/TimeSeries";
@@ -83,10 +84,12 @@ function Rules({ ctx }: { ctx: Ctx }) {
 
 function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearchParams }) {
   const { s, error: loadError } = useSettings(0);
+  const tpl = ALERT_TEMPLATES.find((t) => t.name === params.get("template"));   // ?template=: a ready-made query rule
   const [r, setR] = useState<Omit<AlertRule, "id">>({
-    name: params.get("name") ?? "", type: params.get("promql") ? "query" : params.get("slo") ? "slo_burn" : "check_failing", channels: [], enabled: true,
+    name: params.get("name") ?? tpl?.name ?? "", type: params.get("promql") || tpl ? "query" : params.get("slo") ? "slo_burn" : "check_failing", channels: [], enabled: true,
     checks: params.get("check") ? [params.get("check")!] : ["*"], failures: 2, slo: params.get("slo") ?? undefined, burn_rate: 10, budget_below: 25,
-    promql: params.get("promql") ?? "", op: ">", critical: undefined, degraded: null, for_minutes: 2, every_minutes: 1,
+    promql: params.get("promql") ?? tpl?.promql ?? "", op: tpl?.op ?? ">", critical: tpl?.critical, degraded: tpl?.degraded ?? null,
+    for_minutes: tpl?.for_minutes ?? 2, every_minutes: 1,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -319,8 +322,18 @@ function QueryRuleFields({ r, set, ctx }: { r: Omit<AlertRule, "id">; set: (p: P
   }, [shown, r.op, r.critical, r.degraded]);
   const num = (v: string) => (v === "" ? undefined : Number(v));
   const range = { key: "3h", label: "Last 3 hours", minutes: 180 };
+  const applyTemplate = (t: AlertTemplate) => {
+    set({ name: r.name || t.name, promql: t.promql, op: t.op, critical: t.critical, degraded: t.degraded ?? null, for_minutes: t.for_minutes });
+    run(t.promql);
+  };
   return (
     <div style={{ marginTop: 10 }}>
+      <div className="alert-templates">
+        <span className="faint">Start from:</span>
+        {ALERT_TEMPLATES.map((t) => (
+          <button key={t.name} type="button" className="chip" title={`${t.group}: ${t.help}`} onClick={() => applyTemplate(t)}>{t.name}</button>
+        ))}
+      </div>
       <label className="step-body block" style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: "var(--text-2)" }}>PromQL
         <textarea className="input mono qb-editor" rows={3} required spellCheck={false} value={r.promql ?? ""} onChange={(e) => set({ promql: e.target.value })}
                   placeholder='100 * sum by (service_name) (rate(leasyd.spans{status_code="ERROR"}[5m])) / sum by (service_name) (rate(leasyd.spans[5m]))' />
