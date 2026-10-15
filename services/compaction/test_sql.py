@@ -9,8 +9,8 @@ import query
 S, E = f"{DAY}T00:00:00Z", f"{DAY}T23:59:59Z"
 
 
-def sql(text, tenant="acme", start=S, end=E):
-    out = query.run_sql(tenant, text, start, end, invoke_worker=query.run_sql_worker)
+def sql(text, tenant="acme", start=S, end=E, services=None):
+    out = query.run_sql(tenant, text, start, end, invoke_worker=query.run_sql_worker, services=services)
     if out.get("error"):
         raise query.BadQuery(out["error"])
     return out
@@ -27,6 +27,16 @@ def test_queries_all_tables_and_joins(data, spans, counters):
     # logs joined to spans by trace id (none share one here), and the time range applies
     assert sql("SELECT count(*) FROM logs l JOIN spans s USING (trace_id)")["rows"] == [[0]]
     assert sql("SELECT count(*) FROM logs", start=f"{DAY}T10:30:00Z", end=f"{DAY}T10:40:00Z")["rows"][0][0] < len(data)
+
+
+def test_services_hint_reads_only_those_services(data):
+    every = dict(sql("SELECT service, count(*) FROM logs GROUP BY 1")["rows"])
+    assert set(every) == {"api", "web"}
+    assert sql("SELECT service, count(*) FROM logs GROUP BY 1", services=["web"])["rows"] == [["web", every["web"]]]
+    assert sql("SELECT count(*) FROM logs", services=["nope"])["rows"] == [[0]]
+    for bad in ([], "web", [1], ["s"] * 51):
+        with pytest.raises(query.BadQuery, match="services"):
+            sql("SELECT 1 FROM logs", services=bad)
 
 
 def test_other_tenants_see_nothing(data):
@@ -67,7 +77,7 @@ def test_locked_down_even_past_the_checker(data, monkeypatch):
 def test_api_takes_iso_or_epoch_times(monkeypatch):
     seen = []
     monkeypatch.setattr(query, "kept_from", lambda: query.datetime(2000, 1, 1, tzinfo=query.timezone.utc))
-    monkeypatch.setattr(query, "run_sql", lambda tenant, text, start, end: seen.append((start, end)) or {"columns": [], "rows": []})
+    monkeypatch.setattr(query, "run_sql", lambda tenant, text, start, end, services=None: seen.append((start, end)) or {"columns": [], "rows": []})
     for start, end in ((f"{DAY}T10:00:00Z", f"{DAY}T11:00:00Z"), (1767261600, "1767265200")):
         assert query._sql_api("acme", {"sql": "SELECT 1", "start": start, "end": end})["statusCode"] == 200
     assert seen[0] == (f"{DAY}T10:00:00Z", f"{DAY}T11:00:00Z") and seen[1] == ("2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z")

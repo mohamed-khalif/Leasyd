@@ -84,9 +84,11 @@ config:
     resource/cluster:
       attributes:
         - { key: k8s.cluster.name, value: "${env:LEASYD_CLUSTER}", action: upsert }
-    resource/kubernetes:     # kubelet stats that no app owns
-      attributes:
-        - { key: service.name, value: kubernetes, action: insert }
+    transform/kubernetes:    # kubelet stats live under service "kubernetes" (k8sattributes would name
+      metric_statements:     # them after each pod's app), so Leasyd reads them without the apps' data
+        - context: scope
+          statements:
+            - set(resource.attributes["service.name"], "kubernetes") where IsMatch(scope.name, "kubeletstats")
     k8sattributes:
       extract:
         labels:
@@ -110,7 +112,7 @@ config:
         exporters: [otlphttp/leasyd]
       metrics:
         receivers: [otlp, prometheus/dcgm]
-        processors: [memory_limiter, resource_detection, resource/cluster, resource/kubernetes, batch]
+        processors: [memory_limiter, resource_detection, resource/cluster, transform/kubernetes, batch]
         exporters: [otlphttp/leasyd]
       logs:
         receivers: [otlp]

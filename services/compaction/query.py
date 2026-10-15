@@ -480,13 +480,29 @@ def check_sql(sql):
     return used
 
 
-def run_sql(tenant, sql, start, end, invoke_worker=None):
-    """One read-only SELECT over the tenant's logs / spans / metrics between start and end."""
+SQL_MAX_SERVICES = 50
+_SERVICE_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def sql_services(v):
+    """The optional "services" hint of a SQL query: read only these services' files (the pages for
+    Kubernetes and GPUs pass the services that carry that data, so app data isn't read)."""
+    if v is None:
+        return None
+    if not isinstance(v, list) or not 0 < len(v) <= SQL_MAX_SERVICES or not all(isinstance(x, str) for x in v):
+        raise BadQuery(f"services: a list of 1 to {SQL_MAX_SERVICES} service names")
+    return sorted({_SERVICE_UNSAFE.sub("_", x)[:128] or "unknown" for x in v})   # as stored (compact.safe_service)
+
+
+def run_sql(tenant, sql, start, end, invoke_worker=None, services=None):
+    """One read-only SELECT over the tenant's logs / spans / metrics between start and end
+    (with services: only those services' data)."""
     t0 = time.perf_counter()
     used = check_sql(sql)
+    services = sql_services(services)
     files = {}
     for table in used:
-        found = lookup.lookup(tenant=tenant, start=start, end=end, signal=SQL_TABLES[table])
+        found = lookup.lookup(tenant=tenant, start=start, end=end, signal=SQL_TABLES[table], services=services)
         files[table] = found["files"]
     size = sum(f.get("size_bytes", 0) for fs in files.values() for f in fs)
     count = sum(len(fs) for fs in files.values())
@@ -728,7 +744,7 @@ def handler(event, context):
             tenant = layout.check_tenant(event["tenant"])
             start, end = (max(datetime.fromtimestamp(_epoch_of(event[k], k), timezone.utc), kept_from()).strftime("%Y-%m-%dT%H:%M:%SZ")
                           for k in ("start", "end"))
-            return run_sql(tenant, event["sql"], start, end)
+            return run_sql(tenant, event["sql"], start, end, services=event.get("services"))
         return run(event)
     except BadQuery as e:
         return {"error": str(e)}
@@ -1027,7 +1043,7 @@ def _sql_api(tenant, q):
         kept = kept_from()
         start, end = (max(datetime.fromtimestamp(_epoch_of(q[k], k), timezone.utc), kept).strftime("%Y-%m-%dT%H:%M:%SZ")
                       for k in ("start", "end"))
-        out = run_sql(tenant, q["sql"], start, end)
+        out = run_sql(tenant, q["sql"], start, end, services=q.get("services"))
     except BadQuery as e:
         return _http(400, {"error": str(e)})
     except ValueError as e:
