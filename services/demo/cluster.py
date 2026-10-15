@@ -49,6 +49,14 @@ def _h(s, n=10):
     return hashlib.md5(s.encode()).hexdigest()[:n]
 
 
+_K8S = "bcdfghjklmnpqrstvwxz2456789"   # the characters Kubernetes uses in generated name suffixes
+
+
+def _k(s, n):
+    d = hashlib.md5(s.encode()).digest()
+    return "".join(_K8S[b % len(_K8S)] for b in d[:n])
+
+
 def _uuid(node, i):
     h = hashlib.md5(f"{node}/{i}".encode()).hexdigest()
     return f"GPU-{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
@@ -69,9 +77,9 @@ class Pod:
 
 def _replica(owner, i, kind="Deployment"):
     if kind == "Deployment":
-        return f"{owner}-{_h('rs/' + owner, 9)}-{_h(f'{owner}/{i}', 5)}"
+        return f"{owner}-{_k('rs/' + owner, 9 if len(owner) % 2 else 10)}-{_k(f'{owner}/{i}', 5)}"
     if kind in ("DaemonSet", "Job"):
-        return f"{owner}-{_h(f'{owner}/{i}', 5)}"
+        return f"{owner}-{_k(f'{owner}/{i}', 5)}"
     return f"{owner}-{i}"
 
 
