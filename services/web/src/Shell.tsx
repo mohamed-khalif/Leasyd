@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter } from "./icons";
+import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { account } from "./api";
 import { isDemo, signOut } from "./auth";
@@ -83,6 +83,9 @@ export function Shell(p: Props) {
         {link("/services", "Service Map", <IconMap />, p.path.startsWith("/services"))}
         {link("/web", "Web (real users)", <IconGlobe />, p.path.startsWith("/web"))}
         {link("/lambda", "AWS Lambda", <IconLambda />, p.path.startsWith("/lambda"))}
+        <div className="nav-section">Infrastructure</div>
+        {link("/kubernetes", "Kubernetes", <IconK8s />, p.path.startsWith("/kubernetes"))}
+        {link("/gpus", "GPUs", <IconGpu />, p.path.startsWith("/gpus"))}
         <div className="nav-section">Analyze</div>
         {link("/dashboards", "Dashboards", <IconDash />, p.path.startsWith("/dashboards"))}
         {link("/query", "Query Builder", <IconFlask />, p.path.startsWith("/query"))}

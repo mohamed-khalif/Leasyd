@@ -16,6 +16,8 @@ import { Traces } from "./pages/Traces";
 import { ServiceMap } from "./pages/ServiceMap";
 import { Lambda } from "./pages/Lambda";
 import { Web } from "./pages/Web";
+import { Gpus } from "./pages/Gpus";
+import { Kubernetes } from "./pages/Kubernetes";
 import { Metrics } from "./pages/Metrics";
 import { Synthetics } from "./pages/Synthetics";
 import { Slos } from "./pages/Slos";
@@ -80,6 +82,12 @@ export function App() {
   } else if (path.startsWith("/web")) {
     page = <Web ctx={ctx} />;
     crumb = ["Web", "Real users"];
+  } else if (path.startsWith("/gpus")) {
+    page = <Gpus key={query ?? ""} ctx={ctx} params={params} />;   // a link with ?gpu= or ?tab= opens fresh
+    crumb = ["Infrastructure", "GPUs"];
+  } else if (path.startsWith("/kubernetes")) {
+    page = <Kubernetes key={query ?? ""} ctx={ctx} params={params} />;
+    crumb = ["Infrastructure", "Kubernetes"];
   } else if (path.startsWith("/lambda")) {
     const fn = path.split("/")[2];
     page = <Lambda key={fn ?? ""} ctx={ctx} fn={fn ? decodeURIComponent(fn) : undefined} />;

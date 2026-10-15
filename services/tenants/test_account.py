@@ -192,6 +192,34 @@ def test_bad_drop_rules_refused(acc, adm, mail, rule, error):  # noqa: F811
     assert status == 400 and error in out["error"]
 
 
+def test_gpu_prices_saved_by_owners_read_by_everyone(acc, adm, mail):  # noqa: F811
+    _owner_and_member(acc, adm)
+    assert app(acc, "bo@acme.com", "acme", "GET", "gpu-prices")[1]["prices"] == []
+    prices = [{"pattern": "A100.*80", "label": "A100 80GB (reserved)", "usd_per_hour": 2.1}, {"pattern": "T4\\b", "usd_per_hour": 0.35}]
+    status, out = app(acc, "ana@acme.com", "acme", "PUT", "gpu-prices", {"prices": prices})
+    assert status == 200 and out["prices"] == [prices[0], {"pattern": "T4\\b", "label": "T4\\b", "usd_per_hour": 0.35}]
+    got = app(acc, "bo@acme.com", "acme", "GET", "gpu-prices")[1]
+    assert got["prices"] == out["prices"] and got["updated_by"] == "ana@acme.com"
+    assert app(acc, "bo@acme.com", "acme", "PUT", "gpu-prices", {"prices": []})[0] == 403
+
+
+@pytest.mark.parametrize("price,error", [
+    ({"pattern": "", "usd_per_hour": 1}, "pattern"),
+    ({"pattern": "A100[", "usd_per_hour": 1}, "pattern"),
+    ({"pattern": "A100(", "usd_per_hour": 1}, "not a valid pattern"),
+    ({"pattern": "x" * 65, "usd_per_hour": 1}, "pattern"),
+    ({"pattern": "A100", "usd_per_hour": 0}, "usd_per_hour"),
+    ({"pattern": "A100", "usd_per_hour": "2"}, "usd_per_hour"),
+    ({"pattern": "A100", "usd_per_hour": True}, "usd_per_hour"),
+    ({"pattern": "A100", "usd_per_hour": 5000}, "usd_per_hour"),
+])
+def test_bad_gpu_prices_refused(acc, adm, mail, price, error):  # noqa: F811
+    _owner_and_member(acc, adm)
+    status, out = app(acc, "ana@acme.com", "acme", "PUT", "gpu-prices", {"prices": [price]})
+    assert status == 400 and error in out["error"]
+    assert app(acc, "ana@acme.com", "acme", "PUT", "gpu-prices", {"prices": [{"pattern": "a", "usd_per_hour": 1}] * 31})[0] == 400
+
+
 def test_meters_per_day(acc, adm, mail):  # noqa: F811
     _owner_and_member(acc, adm)
     t = boto3.resource("dynamodb").Table("obs-tenants")

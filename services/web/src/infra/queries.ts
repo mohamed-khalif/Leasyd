@@ -5,7 +5,7 @@
 //
 // `uses` says which data a query reads; the page passes the services carrying that data as the
 // engine's "services" hint (see discovery()), so an account's app data isn't read for these pages.
-import { DCGM, IDLE_UTIL, K8S, WORKLOAD_METRICS } from "./model";
+import { DCGM, IDLE_UTIL, K8S, K8S_SUFFIX, WORKLOAD_METRICS } from "./model";
 
 export type Uses = "gpu" | "k8s" | "events";
 export type Q = { sql: string; uses: Uses[] };
@@ -149,7 +149,7 @@ held AS (
   WHERE util IS NOT NULL AND holder <> '')
 SELECT held.ns AS namespace,
   coalesce(o.workload, CASE WHEN held.ns = 'slurm' THEN held.pod
-    ELSE regexp_replace(regexp_replace(held.pod, '-[a-z0-9]{6,10}-[a-z0-9]{5}$', ''), '-[a-z0-9]{5}$', '') END) AS workload,
+    ELSE regexp_replace(regexp_replace(held.pod, '-${K8S_SUFFIX}{6,10}-${K8S_SUFFIX}{5}$', ''), '-${K8S_SUFFIX}{5}$', '') END) AS workload,
   coalesce(o.kind, CASE WHEN held.ns = 'slurm' THEN 'Slurm job' ELSE '' END) AS kind,
   coalesce(nullif(any_value(held.team), ''), any_value(o.team), '') AS team, held.model AS model,
   count(DISTINCT held.gpu) AS gpus, count(DISTINCT held.pod) AS pods,

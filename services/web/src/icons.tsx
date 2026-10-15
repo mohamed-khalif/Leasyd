@@ -24,4 +24,6 @@ export const IconMap = () => <svg {...s}><circle cx="3.5" cy="8" r="1.8" /><circ
 export const IconStart = () => <svg {...s}><path d="M3 13.5c1-3 2.5-5 4.5-6.5M7.5 7c.8-2 2.6-4.2 6-4.5-.3 3.4-2.5 5.2-4.5 6L7.5 7z" /><circle cx="10.4" cy="5.6" r=".9" /></svg>;
 export const IconFilter = () => <svg {...s}><path d="M2 3h12l-4.6 5.4V13l-2.8-1.4V8.4z" /></svg>;
 export const IconGlobe = () => <svg {...s}><circle cx="8" cy="8" r="5.8" /><path d="M2.2 8h11.6M8 2.2c1.7 1.6 2.6 3.6 2.6 5.8S9.7 12.2 8 13.8M8 2.2C6.3 3.8 5.4 5.8 5.4 8s.9 4.2 2.6 5.8" /></svg>;
+export const IconK8s = () => <svg {...s}><path d="M8 1.8l5.1 2.5 1.3 5.5-3.5 4.4H5.1L1.6 9.8l1.3-5.5z" /><circle cx="8" cy="8.3" r="1.6" /><path d="M8 4.2v2.5M8 9.9v2.4M4.3 7l2.2 1M9.5 8.6l2.3 1M11.7 7l-2.2 1M6.5 8.6l-2.2 1" /></svg>;
+export const IconGpu = () => <svg {...s}><rect x="2" y="4" width="12" height="8" rx="1.2" /><rect x="5" y="6.3" width="6" height="3.4" rx=".5" /><path d="M4.5 4V2.3M8 4V2.3M11.5 4V2.3M4.5 12v1.7M8 12v1.7M11.5 12v1.7" /></svg>;
 export const IconLambda = () => <svg {...s}><path d="M3.5 2.5h2.6l6.4 11h-2.6L7.6 9.1 5.2 13.5H2.8l3.5-6.4L4.6 4.1H3.5z" /></svg>;

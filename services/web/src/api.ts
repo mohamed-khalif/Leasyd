@@ -2,6 +2,7 @@
 // the signed-in user's token.
 import { idToken } from "./auth";
 import { getConfig } from "./config";
+import type { GpuPrice } from "./infra/model";
 
 export type Signal = "logs" | "traces" | "metrics";
 export type Where = { field: string; op: string; value?: unknown };
@@ -69,7 +70,7 @@ export const promql = (q: { promql: string; start: string; end: string; step: nu
 export type PromInstant = { status: string; data: { resultType: string; result: { metric: Record<string, string>; value: [number, string] }[] } };
 export const promqlAt = (q: { promql: string; time: number }, opts?: Parameters<typeof runQuery>[1]) => runQuery<PromInstant>(q, opts);
 export type SqlResult = { columns: string[]; rows: unknown[][]; truncated?: boolean; stats?: Record<string, number> };
-export const sql = (q: { sql: string; start: string; end: string }, opts?: Parameters<typeof runQuery>[1]) =>
+export const sql = (q: { sql: string; start: string; end: string; services?: string[] }, opts?: Parameters<typeof runQuery>[1]) =>
   runQuery<SqlResult>(q, opts);
 
 export const me = () => call<{ tenant: string; email: string }>("/v1/app/me");
@@ -118,6 +119,10 @@ export const account = {
   saveDropRules: (rules: DropRule[]) =>
     call<{ rules: DropRule[] }>("/v1/app/account/drop-rules", { method: "PUT", body: JSON.stringify({ rules }) }),
   meters: (days = 2) => call<{ days: Meter[] }>(`/v1/app/account/meters?days=${days}`),
+  // Prices per GPU hour the GPU pages use for cost (the defaults in infra/model.ts when none are set)
+  gpuPrices: () => call<{ prices: GpuPrice[]; updated_at?: string; updated_by?: string }>("/v1/app/account/gpu-prices"),
+  saveGpuPrices: (prices: GpuPrice[]) =>
+    call<{ prices: GpuPrice[] }>("/v1/app/account/gpu-prices", { method: "PUT", body: JSON.stringify({ prices }) }),
   // Owners: a Stripe page to add payment details (Checkout), or to manage billing (customer portal).
   checkout: () => call<{ url: string }>("/v1/app/account/billing/checkout", { method: "POST" }),
   portal: () => call<{ url: string }>("/v1/app/account/billing/portal", { method: "POST" }),

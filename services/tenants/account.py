@@ -10,6 +10,8 @@
   DELETE /v1/app/account/keys/{id}    owners: revoke a key
   GET  /v1/app/account/drop-rules     the tenant's drop rules (data discarded as it arrives)
   PUT  /v1/app/account/drop-rules     owners: replace them {rules: [...]} (see check_drop_rules)
+  GET  /v1/app/account/gpu-prices     the tenant's own prices per GPU hour (the GPU pages' defaults otherwise)
+  PUT  /v1/app/account/gpu-prices     owners: replace them {prices: [{pattern, label, usd_per_hour}]}
   GET  /v1/app/account/meters?days=N  per UTC day (today and the N-1 before, N <= 31): records
                                       received and, per signal, received (in_<s>) and dropped
   POST /v1/app/account/billing/checkout  owners: {url} of a Stripe Checkout page to add payment
@@ -234,16 +236,26 @@ def account(tenant, email, method, parts, body, params=None):
                      "updated_by": item.get("updated_by"), "limits": {"rules": MAX_DROP_RULES, "conditions": MAX_CONDITIONS}}
     if parts == ["meters"] and method == "GET":
         return 200, {"days": meters(tenant, (params or {}).get("days"))}
+    if parts == ["gpu-prices"] and method == "GET":
+        item = table.get_item(Key={"pk": f"gpuprices#{tenant}"}).get("Item") or {}
+        return 200, {"prices": json.loads(item.get("prices_json", "[]")), "updated_at": item.get("updated_at"),
+                     "updated_by": item.get("updated_by"), "limits": {"prices": MAX_GPU_PRICES}}
     if role == "viewer":
         raise Refused(403, VIEWER_REFUSED)
     if role != "owner":
-        raise Refused(403, "only the account's owners can change its users, keys and drop rules")
+        raise Refused(403, "only the account's owners can change its users, keys, drop rules and GPU prices")
     if parts == ["drop-rules"] and method == "PUT":
         rules = check_drop_rules(body.get("rules"))
         table.put_item(Item={"pk": f"drop#{tenant}", "tenant": tenant, "rules_json": json.dumps(rules),
                              "updated_at": _iso(_now()), "updated_by": email})
         print(json.dumps({"drop_rules_saved": len(rules), "tenant": tenant, "by": email}))
         return 200, {"rules": rules}
+    if parts == ["gpu-prices"] and method == "PUT":
+        prices = check_gpu_prices(body.get("prices"))
+        table.put_item(Item={"pk": f"gpuprices#{tenant}", "tenant": tenant, "prices_json": json.dumps(prices),
+                             "updated_at": _iso(_now()), "updated_by": email})
+        print(json.dumps({"gpu_prices_saved": len(prices), "tenant": tenant, "by": email}))
+        return 200, {"prices": prices}
     if parts[:1] == ["billing"] and method == "POST" and len(parts) == 2 and parts[1] in ("checkout", "portal"):
         rec = table.get_item(Key={"pk": f"tenant#{tenant}"}, ConsistentRead=True).get("Item") or {}
         out = billing.checkout(tenant, email, rec) if parts[1] == "checkout" else billing.portal(rec)
@@ -308,6 +320,35 @@ def _billing(tenant, **fields):
     except Refused as e:     # e.g. a tenant deleted since: nothing to change
         out = {"error": str(e)}
     print(json.dumps({"set_billing": tenant, **fields, "result": out}, default=str))
+
+
+# ------------------------------------------------------------------ GPU prices
+
+MAX_GPU_PRICES = 30
+_GPU_PATTERN = re.compile(r"^[A-Za-z0-9 ._\-()|\\*+?]{1,64}$")
+
+
+def check_gpu_prices(prices):
+    """Validated GPU prices: [{pattern, label, usd_per_hour}]. pattern is matched (case-insensitive,
+    as a regular expression) against dcgm-exporter's modelName, e.g. "A100.*80" or "T4\\b"; the
+    first matching entry wins (services/web/src/infra/model.ts, priceFor)."""
+    if not isinstance(prices, list) or len(prices) > MAX_GPU_PRICES:
+        raise Refused(400, f"prices: a list of at most {MAX_GPU_PRICES}")
+    out = []
+    for i, p in enumerate(prices):
+        if not isinstance(p, dict):
+            raise Refused(400, f"prices[{i}]: an object")
+        pattern, label, usd = str(p.get("pattern") or "").strip(), str(p.get("label") or "").strip()[:64], p.get("usd_per_hour")
+        if not _GPU_PATTERN.match(pattern):
+            raise Refused(400, f"prices[{i}].pattern: 1-64 letters, digits, spaces and . _ - ( ) | \\ * + ?")
+        try:
+            re.compile(pattern)
+        except re.error:
+            raise Refused(400, f"prices[{i}].pattern: not a valid pattern")
+        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not 0 < usd <= 1000:
+            raise Refused(400, f"prices[{i}].usd_per_hour: a number above 0, at most 1000")
+        out.append({"pattern": pattern, "label": label or pattern, "usd_per_hour": round(float(usd), 4)})
+    return out
 
 
 # ------------------------------------------------------------------ drop rules and meters

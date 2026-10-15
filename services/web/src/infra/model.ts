@@ -127,8 +127,10 @@ function safeTest(pattern: string, s: string): boolean {
   try { return new RegExp(pattern, "i").test(s); } catch { return s.toLowerCase().includes(pattern.toLowerCase()); }
 }
 
+/** The characters Kubernetes uses for generated name suffixes (no vowels, no 0 1 3). */
+export const K8S_SUFFIX = "[bcdfghjklmnpqrstvwxz2456789]";
 /** Kubernetes pod names: the workload from a pod's name when nothing better is known
  *  (checkout-7d9f8b6c5-x2x7k -> checkout, node-exporter-x2x7k -> node-exporter). */
 export function workloadFromPod(pod: string): string {
-  return pod.replace(/-[a-z0-9]{6,10}-[a-z0-9]{5}$/, "").replace(/-[a-z0-9]{5}$/, "");
+  return pod.replace(new RegExp(`-${K8S_SUFFIX}{6,10}-${K8S_SUFFIX}{5}$`), "").replace(new RegExp(`-${K8S_SUFFIX}{5}$`), "");
 }

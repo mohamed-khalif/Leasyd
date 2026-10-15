@@ -299,6 +299,7 @@ function promqlMock(q: Q & { promql: string; step: number; time?: number }) {
   return [200, { status: "success", data: { resultType: "matrix", result }, stats: { engine_queries: /\/ sum/.test(text) ? 2 : 1, bytes: 48_000_000 } }];
 }
 
+const GPU_PRICES = { prices: [] as object[] };
 const DROP = {
   rules: [
     { id: "r0", name: "Debug and trace logs", signal: "logs", enabled: true, keep_percent: 0, conditions: [{ field: "severity_number", op: "<", value: 9 }] },
@@ -380,6 +381,9 @@ function rumMock(sql: string): { columns: string[]; rows: unknown[][] } {
       ["GET", "/api/recommendations", "200", 412, 1610, "5b8efff798038103d269b633813fc60c"], ["GET", "/api/cart", "0", 23, 30000, ""]] };
   return { columns: ["service", "views"], rows: [["shop-web", 48213]] };
 }
+
+// SQL over Kubernetes and GPU data goes to the real query engine over the demo cluster
+const ENGINE_SQL = /DCGM_FI_|'k8s\.|k8s\.event\.reason|k8s\.pod\.|k8s\.node\./;
 
 function sqlMock(q: { sql: string }) {
   if (!/^\s*(select|with)\b/i.test(q.sql)) return [400, { error: "only one SELECT query is allowed" }];
@@ -692,6 +696,8 @@ export function mockApi(): Plugin {
               const u = { email: body.email, role: body.role, created_at: new Date().toISOString(), invited_by: "ana@acme.io" };
               ACCOUNT.users.push(u); status = 201; out = u;
             } else if (what === "users" && req.method === "DELETE") { ACCOUNT.users = ACCOUNT.users.filter((u) => u.email !== id); out = { status: "removed" }; }
+            else if (what === "gpu-prices" && req.method === "PUT") { GPU_PRICES.prices = body.prices; out = GPU_PRICES; }
+            else if (what === "gpu-prices") out = GPU_PRICES;
             else if (what === "drop-rules" && req.method === "PUT") { DROP.rules = body.rules.map((r: object, i: number) => ({ id: `r${i}`, ...r })); out = DROP; }
             else if (what === "drop-rules") out = DROP;
             else if (what === "meters") {
@@ -776,6 +782,13 @@ export function mockApi(): Plugin {
             JOBS.set(id, { ready: Date.now() + 5000, status: status as number, out });
             res.statusCode = 202;
             return res.end(JSON.stringify({ job: id, status: "running" }));
+          }
+          if (parsed.sql && ENGINE_SQL.test(parsed.sql)) {   // Kubernetes and GPU pages: the real engine (mock/engine_server.py)
+            fetch("http://127.0.0.1:5299/sql", { method: "POST", body }).then(async (r) => {
+              res.statusCode = r.status;
+              res.end(await r.text());
+            }, () => { res.statusCode = 503; res.end(JSON.stringify({ error: "start mock/engine_server.py for Kubernetes and GPU data" })); });
+            return;
           }
           if (parsed.promql || parsed.sql) {
             const [status, out] = parsed.promql ? promqlMock(parsed) : sqlMock(parsed);
