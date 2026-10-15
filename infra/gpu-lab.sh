@@ -21,7 +21,8 @@ LAB_STATE="${LAB_STATE:-${TMPDIR:-/tmp}/leasyd-gpulab.json}"
 ENDPOINT="${LEASYD_ENDPOINT:-https://ingest.leasyd.com}"
 BUCKET="$(aws lambda get-function-configuration --function-name obs-recent-indexer --query Environment.Variables.BUCKET --output text)"
 
-admin() { local out; out="$(mktemp)"; aws lambda invoke --function-name obs-tenant-admin --cli-binary-format raw-in-base64-out --payload "$1" "$out" >/dev/null; cat "$out"; rm -f "$out"; }
+CBF=(); aws --version 2>&1 | grep -q "aws-cli/2" && CBF=(--cli-binary-format raw-in-base64-out)   # AWS CLI v2 (v1 sends JSON as is)
+admin() { local out; out="$(mktemp)"; aws lambda invoke --function-name obs-tenant-admin "${CBF[@]}" --payload "$1" "$out" >/dev/null; cat "$out"; rm -f "$out"; }
 state() { python3 -c "import json,sys; print(json.load(open('$LAB_STATE')).get('$1',''))"; }
 instance() { aws ec2 describe-instances --filters Name=tag:project,Values=obs-gpulab Name=instance-state-name,Values=pending,running,stopping \
   --query 'Reservations[].Instances[].InstanceId' --output text; }
@@ -66,7 +67,7 @@ status)
   [[ -n "$id" ]] && aws ec2 describe-instances --instance-ids $id --query 'Reservations[0].Instances[0].[State.Name,LaunchTime,InstanceType]' --output text
   end="$(date -u +%Y-%m-%dT%H:%M:%SZ)" start="$(date -u -d '-4 hours' +%Y-%m-%dT%H:%M:%SZ)"
   out="$(mktemp)"
-  aws lambda invoke --function-name obs-query --cli-binary-format raw-in-base64-out --payload \
+  aws lambda invoke --function-name obs-query "${CBF[@]}" --payload \
     "{\"tenant\":\"$TENANT\",\"sql\":\"SELECT ts, body FROM logs WHERE service = 'gpulab-bootstrap' ORDER BY ts DESC LIMIT 30\",\"start\":\"$start\",\"end\":\"$end\"}" "$out" >/dev/null
   python3 -c "import json; r=json.load(open('$out')); [print(row[0][11:19], row[1][:400]) for row in reversed(r.get('rows', []))] or print(r)"
   rm -f "$out"
