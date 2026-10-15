@@ -138,6 +138,7 @@ class Events:
 
 def test_switched_off_schedules_are_counted(monkeypatch):
     """Found 2026-10-13: the canary and synthetics schedules had been off for 9 days unnoticed."""
+    monkeypatch.setattr(canary, "SCHEDULES_MAY_BE_OFF", {"obs-demo-schedule"})
     rules = [{"Name": "obs-canary-schedule", "State": "DISABLED", "ScheduleExpression": "rate(1 minute)"},
              {"Name": "obs-synthetics-schedule", "State": "ENABLED", "ScheduleExpression": "rate(1 minute)"},
              {"Name": "obs-demo-schedule", "State": "DISABLED", "ScheduleExpression": "rate(1 minute)"},  # may be off

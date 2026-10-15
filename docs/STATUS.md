@@ -85,14 +85,16 @@ phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enab
 Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
 unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
 
-### Live demo closed (2026-10-16): "Book a demo" only
+### Demo account removed (2026-10-16): "Book a demo" only
 
-The site's "Explore the live demo" buttons are gone (hero and bottom: "Book a demo", a mailto); the app's sign-in page says
-"Want a walkthrough first? Book a demo"; old #/demo links show a note pointing to booking. `deploy-phaseT5.sh` now passes an
-empty DemoUser, so POST /v1/demo/session answers 404. Kept on purpose, for the demos you give: the demo tenant
-(leasyd-demo) and its generator (obs-demo, with the Kubernetes cluster and GPUs), and its read-only login demo@leasyd.com
-(password in SSM /obs/demo/viewer-password). To reopen the public demo: DEMO_USER=demo@leasyd.com infra/deploy-phaseT5.sh
-and put the links back.
+No public demo and no demo tenant. Site and sign-in page: "Book a demo" (a mailto); old #/demo links show a note.
+Code removed: POST /v1/demo/session (T2 route, DeploymentV20; account.py; T5 parameters and SSM permission),
+the obs-demo alarms and dashboard line (T7), `infra/demo-viewer.sh`. Kept: the generator `services/demo/` (tests and the
+local preview use it) and `infra/deploy-phaseD1.sh`, to build a demo account only when a customer asks
+(`DEMO=1 infra/up.sh`, then delete the stack afterwards). The "viewer" role stays (read-only users).
+AWS cleanup (in order): deploy T7, T5, T2, W1, site; delete stack obs-phaseD1; delete tenant leasyd-demo
+(obs-tenant-admin "delete"); delete Cognito user demo@leasyd.com; delete SSM /obs/demo/viewer-password,
+/obs/demo/viewer-user, /obs/demo/api-key. Older notes below that mention the demo tenant are history.
 
 ### Kubernetes and GPU monitoring (2026-10-16, built and tested locally; pending deploy and the real-cluster test)
 

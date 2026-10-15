@@ -47,7 +47,7 @@ SERVICE = "canary"
 APP_CLIENT_ID = os.environ.get("APP_CLIENT_ID", "")
 APP_USER = os.environ.get("APP_USER", "")
 APP_PASSWORD_PARAM = os.environ.get("APP_PASSWORD_PARAM", "/obs/canary/app-password")
-SCHEDULES_MAY_BE_OFF = set(filter(None, os.environ.get("SCHEDULES_MAY_BE_OFF", "obs-demo-schedule").split(",")))
+SCHEDULES_MAY_BE_OFF = set(filter(None, os.environ.get("SCHEDULES_MAY_BE_OFF", "").split(",")))
 # (name, method, path, body): one read per backend function behind /v1/app.
 ROUTES = [("account", "GET", "/v1/app/account", None),                  # obs-account-api
           ("checks", "GET", "/v1/app/checks", None),                    # obs-synthetics-api
@@ -186,7 +186,7 @@ def route_checks(now=None):
 
 def schedules_off(events):
     """Names of obs-* schedules (EventBridge rules with a schedule) that are switched off, apart from
-    SCHEDULES_MAY_BE_OFF (the demo). None if they can't be read (counted as one off: alarm)."""
+    SCHEDULES_MAY_BE_OFF (comma-separated names). None if they can't be read (counted as one off: alarm)."""
     try:
         rules, kw = [], {"NamePrefix": "obs-"}
         while True:

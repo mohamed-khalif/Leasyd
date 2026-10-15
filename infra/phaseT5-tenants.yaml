@@ -29,16 +29,6 @@ Parameters:
   AppUrl:
     Type: String
     Default: https://app.leasyd.com
-  AppClientId:
-    Type: String
-    Default: ""
-    Description: obs-state output AppClientId; with DemoUser, POST /v1/demo/session signs visitors in to the live demo.
-  DemoUser:
-    Type: String
-    Default: ""
-    Description: >
-      The live demo's read-only login (role viewer of the demo tenant; infra/demo-viewer.sh makes it,
-      its password in SSM /obs/demo/viewer-password). Empty = no live demo.
   SignupsPerDay:
     Type: Number
     Default: 100
@@ -153,10 +143,6 @@ Resources:
                 Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/stripe/*"
-              - Sid: DemoLogin        # the live demo's viewer password (POST /v1/demo/session)
-                Effect: Allow
-                Action: ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/demo/viewer-password"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T5" }
@@ -308,10 +294,6 @@ Resources:
                 Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/stripe/*"
-              - Sid: DemoLogin        # the live demo's viewer password (POST /v1/demo/session)
-                Effect: Allow
-                Action: ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/demo/viewer-password"
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T5" }
@@ -342,8 +324,6 @@ Resources:
           SIGNUPS_PER_DAY: !Ref SignupsPerDay
           EMAIL_FROM: !Ref EmailFrom
           APP_URL: !Ref AppUrl
-          APP_CLIENT_ID: !Ref AppClientId
-          DEMO_USER: !Ref DemoUser
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "T5" }

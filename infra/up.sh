@@ -7,7 +7,7 @@
 #   ALERT_EMAIL=you@example.com infra/up.sh   where alarms and budget alerts go (first run; kept after)
 #   DOMAIN=leasyd.com infra/up.sh           also the product's domain (see infra/deploy-dns.sh)
 #   TEST_TOOLS=1 infra/up.sh                also the load generator and Athena workgroup (dev accounts)
-#   DEMO=1 infra/up.sh                      also the "leasyd-demo" tenant's live demo data (obs-phaseD1)
+#   DEMO=1 infra/up.sh                      also a "leasyd-demo" tenant with demo data (obs-phaseD1; on request only)
 #
 # infra/down.sh takes it down again. Tenants, keys, data and logins live in obs-state and survive
 # a down/up: the "restore" step below reconnects them to the recreated API.
