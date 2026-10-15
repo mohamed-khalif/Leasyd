@@ -7,8 +7,11 @@
 #   - adds the EC2 details (instance id, type, region, ...) and forwards everything to Leasyd.
 # Optional --sample-app also installs a small two-service shop (Python, auto-instrumented) with
 # steady traffic, so you see traces even before your own app is instrumented.
+# Optional --gpu (servers with NVIDIA GPUs, the driver and Docker with NVIDIA's container toolkit):
+# runs NVIDIA's dcgm-exporter in Docker and sends each GPU's usage, memory, temperature, power and
+# errors (Leasyd > GPUs). Slurm: set DCGM_HPC_JOB_DIR to your job-mapping directory to see jobs.
 #
-#   sudo LEASYD_API_KEY=obs_... bash setup.sh [--sample-app]
+#   sudo LEASYD_API_KEY=obs_... bash setup.sh [--sample-app] [--gpu]
 #
 # Amazon Linux 2023 or Ubuntu 22.04+/24.04, x86_64 or arm64. Safe to re-run (to change the key too).
 set -euo pipefail
@@ -16,7 +19,16 @@ set -euo pipefail
 LEASYD_ENDPOINT="${LEASYD_ENDPOINT:-https://ingest.leasyd.com}"
 HOST_SERVICE="${HOST_SERVICE:-ec2-host}"      # service name for the server's own metrics and logs
 OTELCOL_VERSION="${OTELCOL_VERSION:-0.161.0}"
-SAMPLE_APP=false; [[ "${1:-}" == "--sample-app" ]] && SAMPLE_APP=true
+DCGM_IMAGE="${DCGM_IMAGE:-nvcr.io/nvidia/k8s/dcgm-exporter:4.6.1-4.8.4-distroless}"
+INSTALL_BASE="${LEASYD_INSTALL_BASE:-https://app.leasyd.com/install}"
+SAMPLE_APP=false GPU=false
+for arg in "$@"; do
+  case "$arg" in
+    --sample-app) SAMPLE_APP=true ;;
+    --gpu) GPU=true ;;
+    *) echo "unknown option $arg (options: --sample-app, --gpu)" >&2; exit 2 ;;
+  esac
+done
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
 
 case "$(uname -m)" in x86_64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "unsupported CPU $(uname -m)" >&2; exit 1 ;; esac
@@ -56,6 +68,7 @@ receivers:
       processes: {}
   journald:                           # system logs
     priority: info
+#GPU_RECEIVER#
 
 processors:
   memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 25 }
@@ -81,7 +94,27 @@ service:
     logs:         { receivers: [otlp],        processors: [memory_limiter, resource_detection, batch],                exporters: [otlphttp/leasyd] }
     metrics/host: { receivers: [hostmetrics], processors: [memory_limiter, resource_detection, resource/host, batch], exporters: [otlphttp/leasyd] }
     logs/host:    { receivers: [journald],    processors: [memory_limiter, resource_detection, resource/host, batch], exporters: [otlphttp/leasyd] }
+#GPU_PIPELINE#
 YAML
+if $GPU; then
+  echo "== NVIDIA dcgm-exporter (GPU metrics on localhost:9400)"
+  command -v nvidia-smi >/dev/null || { echo "no nvidia-smi: install the NVIDIA driver first" >&2; exit 1; }
+  command -v docker >/dev/null || { echo "--gpu needs Docker with NVIDIA's container toolkit" >&2; exit 1; }
+  mkdir -p /etc/leasyd
+  curl -fsSL "${INSTALL_BASE}/kubernetes/dcgm-counters.csv" -o /etc/leasyd/dcgm-counters.csv
+  job=(); [[ -n "${DCGM_HPC_JOB_DIR:-}" ]] && job=(-v "${DCGM_HPC_JOB_DIR}:${DCGM_HPC_JOB_DIR}:ro" -e "DCGM_HPC_JOB_MAPPING_DIR=${DCGM_HPC_JOB_DIR}")
+  docker rm -f leasyd-dcgm >/dev/null 2>&1 || true
+  docker run -d --name leasyd-dcgm --restart unless-stopped --gpus all --cap-add SYS_ADMIN -p 127.0.0.1:9400:9400 \
+    -v /etc/leasyd/dcgm-counters.csv:/etc/dcgm-exporter/default-counters.csv:ro ${job[@]+"${job[@]}"} "$DCGM_IMAGE" >/dev/null
+  sed -i 's|^#GPU_RECEIVER#$|  prometheus/dcgm:                    # NVIDIA GPUs, from dcgm-exporter\
+    config:\
+      scrape_configs:\
+        - job_name: dcgm-exporter\
+          scrape_interval: 30s\
+          static_configs: [{ targets: ["localhost:9400"] }]|' /etc/otelcol-contrib/config.yaml
+  sed -i 's|^#GPU_PIPELINE#$|    metrics/gpu:  { receivers: [prometheus/dcgm], processors: [memory_limiter, resource_detection, batch], exporters: [otlphttp/leasyd] }|' /etc/otelcol-contrib/config.yaml
+fi
+sed -i '/^#GPU_RECEIVER#$/d; /^#GPU_PIPELINE#$/d' /etc/otelcol-contrib/config.yaml
 # The key stays out of the config file, in the service's environment file (readable by root only).
 cat > /etc/otelcol-contrib/otelcol-contrib.conf <<CONF
 OTELCOL_OPTIONS="--config=/etc/otelcol-contrib/config.yaml"
@@ -204,7 +237,7 @@ sleep 5
 if systemctl is-active --quiet otelcol-contrib; then
   echo
   echo "Done. The collector is running and sending to ${LEASYD_ENDPOINT}."
-  echo "Data shows up in Leasyd within a minute or two: Dashboards > Leasyd - Hosts, Metrics (service ${HOST_SERVICE}), Logs$($SAMPLE_APP && echo ", Traces (shop-api, inventory)")."
+  echo "Data shows up in Leasyd within a minute or two: Dashboards > Leasyd - Hosts, Metrics (service ${HOST_SERVICE}), Logs$($SAMPLE_APP && echo ", Traces (shop-api, inventory)")$($GPU && echo ", GPUs")."
   echo "Its own log: sudo journalctl -u otelcol-contrib -f"
 else
   echo "The collector did not start; see: sudo journalctl -u otelcol-contrib -n 50" >&2

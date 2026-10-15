@@ -1,0 +1,118 @@
+# Leasyd for Kubernetes: the agent, one OpenTelemetry Collector per node (a DaemonSet).
+# Helm values for the official chart open-telemetry/opentelemetry-collector. Installed by
+# leasyd-k8s.sh, which also creates the Secret leasyd-api-key and sets LEASYD_CLUSTER.
+#
+# Per node it sends to Leasyd:
+#   - kubelet stats: node, pod and container CPU, memory, file system and network, and how close each
+#     pod is to its CPU / memory requests and limits (kubeletstats)
+#   - the pods' logs (filelog), unless installed with --no-logs
+#   - NVIDIA GPU metrics from dcgm-exporter pods on the same node (prometheus/dcgm), with the node
+#     name as label "node"
+#   - your apps' traces, metrics and logs, sent to the node's agent on port 4317 (gRPC) / 4318 (HTTP)
+# and adds to all of it: the pod, namespace, node and workload (k8sattributes), the pod labels team
+# and app.kubernetes.io/name, the cloud details (resource_detection) and k8s.cluster.name.
+# Contract with the Leasyd app: docs/gpu-kubernetes.md.
+mode: daemonset
+image:
+  repository: otel/opentelemetry-collector-contrib
+presets:
+  kubernetesAttributes:
+    enabled: true
+  kubeletMetrics:
+    enabled: true
+  logsCollection:
+    enabled: true          # leasyd-k8s.sh --no-logs sets false
+ports:
+  jaeger-compact: { enabled: false }
+  jaeger-thrift: { enabled: false }
+  jaeger-grpc: { enabled: false }
+  zipkin: { enabled: false }
+extraEnvs:
+  - name: LEASYD_API_KEY
+    valueFrom: { secretKeyRef: { name: leasyd-api-key, key: api-key } }
+  - name: LEASYD_ENDPOINT
+    value: https://ingest.leasyd.com
+  - name: LEASYD_CLUSTER
+    value: my-cluster      # leasyd-k8s.sh --cluster sets it
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+tolerations:               # run on every node, GPU and tainted ones included
+  - operator: Exists
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null       # the chart's self-scrape; the collector's own health is not needed
+    kubeletstats:
+      collection_interval: 30s
+      auth_type: serviceAccount
+      endpoint: ${env:K8S_NODE_IP}:10250
+      insecure_skip_verify: true            # most kubelets serve self-signed certificates
+      metric_groups: [node, pod, container]
+      k8s_api_config: { auth_type: serviceAccount }   # pod specs, for the request / limit ratios
+      metrics:
+        k8s.pod.cpu_limit_utilization: { enabled: true }
+        k8s.pod.memory_limit_utilization: { enabled: true }
+        k8s.pod.cpu_request_utilization: { enabled: true }
+        k8s.pod.memory_request_utilization: { enabled: true }
+    prometheus/dcgm:
+      config:
+        scrape_configs:
+          - job_name: dcgm-exporter
+            scrape_interval: 30s
+            kubernetes_sd_configs:
+              - role: pod
+                selectors:
+                  - role: pod
+                    field: spec.nodeName=${env:K8S_NODE_NAME}
+            relabel_configs:
+              # NVIDIA GPU Operator (app=nvidia-dcgm-exporter) or the dcgm-exporter Helm chart
+              - source_labels: [__meta_kubernetes_pod_label_app, __meta_kubernetes_pod_label_app_kubernetes_io_name]
+                regex: "nvidia-dcgm-exporter;.*|.*;dcgm-exporter"
+                action: keep
+              - source_labels: [__meta_kubernetes_pod_container_port_number]
+                regex: "9400"
+                action: keep
+              - source_labels: [__meta_kubernetes_pod_node_name]
+                target_label: node
+  processors:
+    resource_detection:
+      detectors: [env, ec2, gcp, azure]
+      timeout: 3s
+      override: false
+    resource/cluster:
+      attributes:
+        - { key: k8s.cluster.name, value: "${env:LEASYD_CLUSTER}", action: upsert }
+    resource/kubernetes:     # kubelet stats that no app owns
+      attributes:
+        - { key: service.name, value: kubernetes, action: insert }
+    k8sattributes:
+      extract:
+        labels:
+          - { tag_name: k8s.pod.labels.team, key: team, from: pod }
+          - { tag_name: k8s.pod.labels.app, key: app.kubernetes.io/name, from: pod }
+    batch:
+      timeout: 5s
+      send_batch_size: 2000
+      send_batch_max_size: 4000
+  exporters:
+    debug: null
+    otlphttp/leasyd:
+      endpoint: ${env:LEASYD_ENDPOINT}
+      headers: { x-api-key: "${env:LEASYD_API_KEY}" }
+      compression: gzip
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, resource_detection, resource/cluster, batch]
+        exporters: [otlphttp/leasyd]
+      metrics:
+        receivers: [otlp, prometheus/dcgm]
+        processors: [memory_limiter, resource_detection, resource/cluster, resource/kubernetes, batch]
+        exporters: [otlphttp/leasyd]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, resource_detection, resource/cluster, batch]
+        exporters: [otlphttp/leasyd]

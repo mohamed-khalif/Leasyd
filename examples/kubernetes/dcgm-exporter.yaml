@@ -1,0 +1,26 @@
+# Leasyd for Kubernetes: NVIDIA's dcgm-exporter, for clusters with GPUs that don't run it yet (the
+# NVIDIA GPU Operator already does; then leasyd-k8s.sh skips this). Helm values for NVIDIA's chart
+# (https://nvidia.github.io/dcgm-exporter/helm-charts), installed by leasyd-k8s.sh --gpu.
+#
+# One exporter per GPU node: per GPU utilization, memory, temperature, power, clocks, XID and ECC
+# errors, throttling time, and which pod (namespace, container, labels team and
+# app.kubernetes.io/name) holds it. Leasyd's agent on the same node scrapes it.
+# The fields: dcgm-counters.csv, which leasyd-k8s.sh passes as customMetrics.
+kubernetes:
+  enablePodLabels: true
+  podLabelAllowlistRegex:
+    - "^team$"
+    - "^app\\.kubernetes\\.io/name$"
+serviceMonitor:
+  enabled: false
+tolerations:
+  - operator: Exists
+affinity:                  # GPU nodes only, as the usual GPU labels mark them; leasyd-k8s.sh also
+  nodeAffinity:            # labels the GPU nodes it finds leasyd.com/gpu=true
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions: [{ key: leasyd.com/gpu, operator: In, values: ["true"] }]
+        - matchExpressions: [{ key: nvidia.com/gpu.present, operator: In, values: ["true"] }]
+        - matchExpressions: [{ key: k8s.amazonaws.com/accelerator, operator: Exists }]
+        - matchExpressions: [{ key: cloud.google.com/gke-accelerator, operator: Exists }]
+        - matchExpressions: [{ key: kubernetes.azure.com/accelerator, operator: Exists }]

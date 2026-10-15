@@ -1,0 +1,76 @@
+# Leasyd for Kubernetes: the cluster collector, one OpenTelemetry Collector for the whole cluster
+# (a Deployment with one replica). Helm values for the official chart
+# open-telemetry/opentelemetry-collector, installed by leasyd-k8s.sh.
+#
+# It sends to Leasyd, every 30 s, from the Kubernetes API:
+#   - pod phases, container restarts, readiness and waiting reasons (CrashLoopBackOff, ...), CPU and
+#     memory requests and limits; deployment, statefulset, daemonset, job and HPA counts; node
+#     allocatable CPU / memory / pods and node conditions (k8s_cluster)
+#   - Kubernetes events as logs: scheduling failures, OOM kills, image pulls, evictions (k8s_events)
+# Contract with the Leasyd app: docs/gpu-kubernetes.md.
+mode: deployment
+replicaCount: 1
+image:
+  repository: otel/opentelemetry-collector-contrib
+presets:
+  clusterMetrics:
+    enabled: true
+  kubernetesEvents:
+    enabled: true
+    useK8sEventsReceiver: true
+ports:
+  jaeger-compact: { enabled: false }
+  jaeger-thrift: { enabled: false }
+  jaeger-grpc: { enabled: false }
+  zipkin: { enabled: false }
+  otlp: { enabled: false }
+  otlp-http: { enabled: false }
+extraEnvs:
+  - name: LEASYD_API_KEY
+    valueFrom: { secretKeyRef: { name: leasyd-api-key, key: api-key } }
+  - name: LEASYD_ENDPOINT
+    value: https://ingest.leasyd.com
+  - name: LEASYD_CLUSTER
+    value: my-cluster
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 512Mi }
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    otlp: null
+    prometheus: null
+    k8s_cluster:
+      collection_interval: 30s
+      node_conditions_to_report: [Ready, MemoryPressure, DiskPressure, PIDPressure]
+      allocatable_types_to_report: [cpu, memory, pods]
+      metrics:
+        k8s.container.status.reason: { enabled: true }
+        k8s.pod.status_reason: { enabled: true }
+  processors:
+    resource/cluster:
+      attributes:
+        - { key: k8s.cluster.name, value: "${env:LEASYD_CLUSTER}", action: upsert }
+        - { key: service.name, value: kubernetes, action: insert }
+    batch:
+      timeout: 5s
+      send_batch_size: 2000
+      send_batch_max_size: 4000
+  exporters:
+    debug: null
+    otlphttp/leasyd:
+      endpoint: ${env:LEASYD_ENDPOINT}
+      headers: { x-api-key: "${env:LEASYD_API_KEY}" }
+      compression: gzip
+  service:
+    pipelines:
+      traces: null
+      metrics:
+        receivers: []
+        processors: [memory_limiter, resource/cluster, batch]
+        exporters: [otlphttp/leasyd]
+      logs:
+        receivers: []
+        processors: [memory_limiter, resource/cluster, batch]
+        exporters: [otlphttp/leasyd]
