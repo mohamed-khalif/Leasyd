@@ -15,7 +15,8 @@ Every minute (scheduled) it sends the previous minute's traces, logs and metrics
     queue-lag gauges, memory and connection-pool up/down counters
 
 Invoke with {} (scheduled: the previous minute), {"backfill_hours": 24} (fans out one async
-invocation per hour) or {"from_minute": m, "minutes": 60}. The ingest key is read from SSM.
+invocation per hour) or {"from_minute": m, "minutes": 60}; add "only": "cluster" to send just the
+Kubernetes cluster and GPUs (cluster.py). The ingest key is read from SSM.
 """
 
 import gzip
@@ -405,10 +406,16 @@ def send(signal, doc, patient=False):
         time.sleep(min(0.5 * 2 ** attempt, 10))
 
 
-def run(minutes, patient=False):
+def cluster_documents(minute):
+    """Only the Kubernetes cluster and GPUs (cluster.py): to backfill them without resending the shop."""
+    k8s = cluster.documents(minute)
+    return {"metrics": {"resourceMetrics": k8s["metrics"]}, "logs": {"resourceLogs": k8s["logs"]}}
+
+
+def run(minutes, patient=False, only=None):
     sent = {}
     for minute in minutes:
-        for signal, doc in documents(minute).items():
+        for signal, doc in (cluster_documents(minute) if only == "cluster" else documents(minute)).items():
             status = send(signal, doc, patient)
             sent[status] = sent.get(status, 0) + 1
     return sent
@@ -421,11 +428,11 @@ def handler(event, context):
         lam = boto3.client("lambda")
         for h in range(int(event["backfill_hours"])):
             lam.invoke(FunctionName=SELF, InvocationType="Event",
-                       Payload=json.dumps({"from_minute": first + 60 * h, "minutes": 60}).encode())
+                       Payload=json.dumps({"from_minute": first + 60 * h, "minutes": 60, "only": event.get("only")}).encode())
         out = {"backfill_invocations": int(event["backfill_hours"])}
     elif "from_minute" in event:
         start = int(event["from_minute"])
-        out = {"from_minute": start, "sent": run(range(start, start + int(event.get("minutes", 1))), patient=True)}
+        out = {"from_minute": start, "sent": run(range(start, start + int(event.get("minutes", 1))), patient=True, only=event.get("only"))}
     else:
         out = {"minute": int(time.time() // 60) - 1, "sent": run([int(time.time() // 60) - 1])}
     print(json.dumps(out))

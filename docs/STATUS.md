@@ -1,7 +1,7 @@
 # Status
 
 Where the project stands, what is running on AWS, and how to pick it up.
-Last updated: 2026-10-15. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+Last updated: 2026-10-16. Detail: `docs/observability-plan.md` (the plan, with results per phase)
 and `infra/README.md` (deploy and test commands per phase).
 
 ## What exists
@@ -84,6 +84,34 @@ Deploy order: phase0 (boundary), phaseT5, `infra/demo-viewer.sh`, phaseT5 again,
 phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enabled.
 Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
 unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
+
+### Kubernetes and GPU monitoring (2026-10-16, built and tested locally; pending deploy and the real-cluster test)
+
+Design and data contract: `docs/gpu-kubernetes.md`. Collection: `examples/kubernetes/leasyd-k8s.sh` installs the official
+OpenTelemetry Collector Helm chart (0.176.0, contrib image) twice: an agent DaemonSet (kubeletstats, pod logs, k8sattributes
+with the pod labels team / app.kubernetes.io/name, apps' OTLP on each node, and dcgm-exporter scraped on the same node) and a
+cluster Deployment (k8s_cluster, k8s_events); `--gpu` adds NVIDIA's dcgm-exporter (Leasyd's fields: `dcgm-counters.csv`) unless
+the GPU Operator runs one. `setup.sh --gpu` does GPUs on plain servers (Docker). Rendered with `helm template` and checked with
+`otelcol-contrib validate` 0.162.0. Served at app.leasyd.com/install/kubernetes/ (deploy-phaseW1.sh copies them).
+App: **Infrastructure › Kubernetes** (overview with what needs attention, nodes, workloads, pods, events; a pod drawer with
+containers, usage against limits, events, logs, traces) and **Infrastructure › GPUs** (fleet, device distribution, every GPU;
+workloads and teams with cost, idle spend and recommendations, pods waiting for GPUs; health: XIDs with what to do, ECC, row
+remapping, throttling, heat; planning: daily peaks, never-needed GPUs, 30-day trend; a GPU drawer). Costs: AWS list prices per
+GPU hour (`infra/model.ts`) or the account's own (**Settings › GPU prices**, `GET/PUT /v1/app/account/gpu-prices`). Built-in
+dashboards Leasyd - Kubernetes and Leasyd - NVIDIA GPUs; 11 alert templates; Get started sources Kubernetes and NVIDIA GPUs;
+site docs; Leasyd AI knows the metric names. Query engine: SQL takes an optional `services` hint (the pages read only the
+kubernetes / dcgm-exporter services' files). Demo: `services/demo/cluster.py` adds cluster shop-prod (6 nodes, 16 GPUs:
+busy training, inference, idle notebooks, unallocated GPUs, a job waiting for GPUs, a daily XID 48, a hot throttled GPU,
+a crash loop, OOM kills) to the demo tenant (+~0.6 GB a day).
+Tests: `test_infra_queries.py` runs every page query, dashboard query and alert template on the real engine over the
+demo cluster and checks the answers (15 tests); `npm test` (analysis), account API tests for GPU prices; the local preview
+(`mock/engine_server.py`) runs the pages' SQL on the real engine. Bugs found by them and fixed: unstable row order on ties,
+an INT32 overflow on large counters, workload names cut by the pod-name heuristic ("node-exporter" -> "node").
+**Not yet done**: the real cluster (`infra/gpu-lab.sh up`: k3s on a g4dn.12xlarge with 4 T4, workloads in
+`infra/gpu-lab/workloads.yaml`) needs the deployer policy `infra/iam/deployer-gpulab.json`; then capture its data as a
+fixture (`gpu-lab.sh capture`) and run the tests on it too.
+Deploy: phase4 (services hint), phaseT5 (GPU prices), phaseAI (prompt), phaseD1 (demo; then backfill the cluster:
+`aws lambda invoke --function-name obs-demo --payload '{"backfill_hours":24,"only":"cluster"}' ...`), phaseW1 (app).
 
 ### UI audit (2026-10-15, deployed)
 
