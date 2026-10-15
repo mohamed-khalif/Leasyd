@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GpuLabLaunchFrom",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:us-east-1::image/*",
+        "arn:aws:ec2:us-east-1:199301651524:subnet/*",
+        "arn:aws:ec2:us-east-1:199301651524:network-interface/*",
+        "arn:aws:ec2:us-east-1:199301651524:security-group/*",
+        "arn:aws:ec2:us-east-1:199301651524:volume/*"
+      ]
+    },
+    {
+      "Sid": "GpuLabLaunchTaggedOnly",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:us-east-1:199301651524:instance/*",
+      "Condition": {
+        "StringEquals": {"aws:RequestTag/project": "obs-gpulab"},
+        "StringLike": {"ec2:InstanceType": ["g4dn.*", "g5.*", "g6.*", "t3.*"]}
+      }
+    },
+    {
+      "Sid": "GpuLabTagAtLaunch",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": ["arn:aws:ec2:us-east-1:199301651524:instance/*", "arn:aws:ec2:us-east-1:199301651524:volume/*"],
+      "Condition": {"StringEquals": {"ec2:CreateAction": "RunInstances"}}
+    },
+    {
+      "Sid": "GpuLabStopOwnInstances",
+      "Effect": "Allow",
+      "Action": ["ec2:TerminateInstances", "ec2:StopInstances"],
+      "Resource": "arn:aws:ec2:us-east-1:199301651524:instance/*",
+      "Condition": {"StringEquals": {"aws:ResourceTag/project": "obs-gpulab"}}
+    },
+    {
+      "Sid": "GpuLabLook",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeInstances", "ec2:DescribeImages", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
+                 "ec2:DescribeInstanceTypes", "ec2:GetConsoleOutput"],
+      "Resource": "*"
+    }
+  ]
+}
