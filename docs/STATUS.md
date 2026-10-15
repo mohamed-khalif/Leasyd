@@ -98,6 +98,10 @@ AWS cleanup (in order): deploy T7, T5, T2, W1, site; delete stack obs-phaseD1; d
 
 ### Kubernetes and GPU monitoring (2026-10-16, built and tested locally; pending deploy and the real-cluster test)
 
+GPU lab (infra/gpu-lab.sh), paused 2026-10-15: first run on g4dn.12xlarge got k3s up but the node showed no GPUs
+(device plugin without the NVIDIA runtime); fixed in the bootstrap (NVIDIA as k3s default runtime), not yet re-run.
+Instance terminated; tenant qa-gpulab kept (no cost). Next: `infra/gpu-lab.sh up`, then capture, tests, `down`.
+
 Design and data contract: `docs/gpu-kubernetes.md`. Collection: `examples/kubernetes/leasyd-k8s.sh` installs the official
 OpenTelemetry Collector Helm chart (0.176.0, contrib image) twice: an agent DaemonSet (kubeletstats, pod logs, k8sattributes
 with the pod labels team / app.kubernetes.io/name, apps' OTLP on each node, and dcgm-exporter scraped on the same node) and a
