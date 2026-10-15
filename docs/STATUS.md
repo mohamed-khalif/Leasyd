@@ -85,6 +85,15 @@ phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enab
 Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
 unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
 
+### Live demo closed (2026-10-16): "Book a demo" only
+
+The site's "Explore the live demo" buttons are gone (hero and bottom: "Book a demo", a mailto); the app's sign-in page says
+"Want a walkthrough first? Book a demo"; old #/demo links show a note pointing to booking. `deploy-phaseT5.sh` now passes an
+empty DemoUser, so POST /v1/demo/session answers 404. Kept on purpose, for the demos you give: the demo tenant
+(leasyd-demo) and its generator (obs-demo, with the Kubernetes cluster and GPUs), and its read-only login demo@leasyd.com
+(password in SSM /obs/demo/viewer-password). To reopen the public demo: DEMO_USER=demo@leasyd.com infra/deploy-phaseT5.sh
+and put the links back.
+
 ### Kubernetes and GPU monitoring (2026-10-16, built and tested locally; pending deploy and the real-cluster test)
 
 Design and data contract: `docs/gpu-kubernetes.md`. Collection: `examples/kubernetes/leasyd-k8s.sh` installs the official

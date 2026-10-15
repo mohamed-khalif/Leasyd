@@ -3,9 +3,9 @@ import { Settings } from "./pages/Settings";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 import { me } from "./api";
-import { idToken, signOut, startDemo } from "./auth";
+import { idToken, signOut } from "./auth";
 import { getConfig } from "./config";
-import { Shell } from "./Shell";
+import { CONTACT_EMAIL, Shell } from "./Shell";
 import { SignIn } from "./pages/SignIn";
 import { Insights } from "./pages/Insights";
 import { GetStarted } from "./pages/GetStarted";
@@ -46,19 +46,12 @@ export function App() {
   const hash = useHash();
   const go = useCallback((h: string) => { location.hash = h; }, []);
 
-  const [demoError, setDemoError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const loadUser = useCallback(async () => {
-    // #/demo (the website's "Explore the live demo"): sign in to the read-only demo account.
+    // #/demo: the old live demo's link (closed); point to booking one
     if (location.hash.startsWith("#/demo")) {
-      try {
-        signOut();
-        await startDemo();
-        location.hash = "/";
-      } catch (e) {
-        setDemoError((e as Error).message);
-        location.hash = "/";
-        return setUser(null);
-      }
+      setNotice(`Our self-serve demo has closed. Book a demo and we'll walk you through Leasyd: ${CONTACT_EMAIL}`);
+      location.hash = "/";
     }
     if (!(await idToken())) return setUser(null);
     me().then(setUser, () => setUser(null));
@@ -66,7 +59,7 @@ export function App() {
   useEffect(() => { loadUser(); }, [loadUser]);
 
   if (user === undefined) return <div className="state" style={{ height: "100%" }}>Loading…</div>;
-  if (user === null || (getConfig().mock && location.search.includes("signin"))) return <SignIn onSignedIn={loadUser} notice={demoError} />;
+  if (user === null || (getConfig().mock && location.search.includes("signin"))) return <SignIn onSignedIn={loadUser} notice={notice} />;
 
   const [path, query] = hash.split("?");
   const params = new URLSearchParams(query || "");

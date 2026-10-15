@@ -29,4 +29,4 @@ aws cloudformation deploy --stack-name obs-phaseT5 \
   --parameter-overrides "StandardPlanId=$(t2 StandardPlanId)" "TestTinyPlanId=$(t2 TestTinyPlanId)" \
                         "FreePlanId=$(t2 FreePlanId)" "ApiId=$(t2 ApiId)" \
                         "UserPoolId=$(u1 UserPoolId)" "AppClientId=$(u1 AppClientId)" "EmailFrom=${EMAIL_FROM}" \
-                        "DemoUser=${DEMO_USER-$(aws ssm get-parameter --name /obs/demo/viewer-user --query Parameter.Value --output text 2>/dev/null || true)}" "$@"
+                        "DemoUser=${DEMO_USER:-}" "$@"   # empty: the public live demo (POST /v1/demo/session) is off

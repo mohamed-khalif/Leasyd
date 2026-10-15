@@ -18,7 +18,6 @@ function userPool(): CognitoUserPool {
 export type SignInResult = { kind: "ok" } | { kind: "new-password"; complete: (pw: string) => Promise<void> };
 
 export function signIn(email: string, password: string): Promise<SignInResult> {
-  endDemo();
   const user = new CognitoUser({ Username: email.trim().toLowerCase(), Pool: userPool() });
   const details = new AuthenticationDetails({ Username: email.trim().toLowerCase(), Password: password });
   return new Promise((resolve, reject) => {
@@ -63,42 +62,13 @@ export function resetPassword(email: string, code: string, password: string): Pr
 }
 
 export function signOut(): void {
-  endDemo();
   if (getConfig().mock) return;
   userPool().getCurrentUser()?.signOut();
 }
 
-// The live demo: POST /v1/demo/session signs the visitor in as the demo account's read-only
-// viewer and returns only an ID token (15 minutes), kept for this tab; a new one is asked for when
-// it runs out. Nothing about the demo login is stored or known here.
-const DEMO_KEY = "leasyd.demo";
-type DemoToken = { token: string; until: number };
-
-function demoToken(): DemoToken | null {
-  try { return JSON.parse(sessionStorage.getItem(DEMO_KEY) || "null"); } catch { return null; }
-}
-
-export function isDemo(): boolean { return demoToken() !== null; }
-
-export async function startDemo(): Promise<void> {
-  const res = await fetch(getConfig().apiBase + "/v1/demo/session", { method: "POST" });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.id_token) throw new Error(body.error || "The live demo isn't available right now. Please try again later.");
-  const until = Date.now() + (Number(body.expires_in) || 900) * 1000 - 60_000;
-  sessionStorage.setItem(DEMO_KEY, JSON.stringify({ token: body.id_token, until }));
-}
-
-function endDemo(): void {
-  try { sessionStorage.removeItem(DEMO_KEY); } catch { /* storage unavailable */ }
-}
-
 /** A valid ID token, refreshed if needed; null when not signed in. */
 export async function idToken(): Promise<string | null> {
-  const demo = demoToken();
-  if (demo) {
-    if (Date.now() < demo.until) return demo.token;
-    try { await startDemo(); return demoToken()?.token ?? null; } catch { endDemo(); return null; }
-  }
+  try { sessionStorage.removeItem("leasyd.demo"); } catch { /* the old live demo's token, if a tab still has one */ }
   return accountToken();
 }
 
