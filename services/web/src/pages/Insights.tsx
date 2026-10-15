@@ -283,10 +283,10 @@ function Alerting({ ctx, b, ts, checkList }: { ctx: Ctx; b: number; ts: string; 
   const names = new Map((checkList ?? []).map((c) => [c.id, c.name]));
   const failing = byCheck.data ? records(byCheck.data).filter((r) => Number(r.count) > 0) : [];
   return (
-    <Section id="home.alerting" title="Alerting" right={<><button className="btn small" onClick={() => ctx.go("/alerts")}>Alert rules</button>
+    <Section id="home.alerting" title="Alerting & uptime" right={<><button className="btn small" onClick={() => ctx.go("/alerts")}>Alert rules</button>
                                                          <button className="btn small" onClick={() => ctx.go("/synthetics")}>View in Synthetics</button></>}>
       <div className="grid">
-        <Panel title="Synthetic check runs: failed and passed" span={8}>
+        <Panel title="Synthetic check runs, passed and failed" span={8}>
           <Loads q={q} empty={!bars.length} height={200}>
             {() => <StackedBars bars={bars} keys={keys} range={ctx.range} bucketMs={b * 1000} height={180} />}
           </Loads>

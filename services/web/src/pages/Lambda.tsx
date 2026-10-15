@@ -71,8 +71,8 @@ function Functions({ ctx }: { ctx: Ctx }) {
         <Loads q={loading} empty={!fns.length} height={160}>
           {() => (
             <table className="dtable">
-              <thead><tr><th style={{ width: "34%" }}>Function</th><th>Region</th><th className="num">Invocations</th><th className="num">Errors</th>
-                <th className="num">Error rate</th><th className="num">Duration avg</th><th>From</th></tr></thead>
+              <thead><tr><th style={{ width: "28%" }}>Function</th><th>Region</th><th className="num">Invocations</th><th className="num">Errors</th>
+                <th className="num">Error rate</th><th className="num">Duration avg</th><th style={{ width: 150 }}>Data from</th></tr></thead>
               <tbody>{shown.map((f) => (
                 <tr key={f.name} onClick={() => ctx.go(`/lambda/${encodeURIComponent(f.name)}`)}>
                   <td title={f.name}>{f.name}</td>
@@ -81,7 +81,7 @@ function Functions({ ctx }: { ctx: Ctx }) {
                   <td className={`num${f.e ? " bad" : ""}`}>{fmtNum(f.e)}</td>
                   <td className={`num${pct(f.e, f.n) >= 1 ? " bad" : ""}`}>{pct(f.e, f.n).toFixed(2)}%</td>
                   <td className="num">{fmtMs(f.ms * 1e6)}</td>
-                  <td className="faint">{[f.traced && "traces", f.cloudwatch && "CloudWatch"].filter(Boolean).join(", ")}</td>
+                  <td className="faint" style={{ whiteSpace: "nowrap" }}>{[f.traced && "traces", f.cloudwatch && "CloudWatch"].filter(Boolean).join(", ")}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -90,8 +90,9 @@ function Functions({ ctx }: { ctx: Ctx }) {
       </Panel>
       {!fns.length && !traced.loading && !cw.loading && (
         <p className="faint">
-          No Lambda functions in this time range. Send their metrics with a CloudWatch metric stream
-          (<span className="mono">examples/aws/cloudwatch-metrics.yaml</span>), and their invocations with OpenTelemetry's Lambda layer.
+          No Lambda functions in this time range. To add them, follow{" "}
+          <a href="#/start?source=lambda">Get started › AWS Lambda</a>: a CloudWatch metric stream sends every function's
+          invocations, errors and duration, and OpenTelemetry's Lambda layer adds traces.
         </p>
       )}
     </div>

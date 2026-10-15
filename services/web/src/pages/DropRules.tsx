@@ -55,7 +55,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
     account.dropRules().then((r) => { setRules(r.rules); setSaved(JSON.stringify(r.rules)); setLimits(r.limits); },
       (e: Error) => setError(e.message));
     account.get().then((a) => setOwner(a.you.role === "owner"), () => undefined);
-    account.meters(1).then((r) => setToday(r.days[0] ?? null), () => undefined);
+    account.meters(1).then((r) => setToday(r.days?.[0] ?? null), () => undefined);
   }, [ctx.tick]);
 
   const preview = (r: DropRule) => {

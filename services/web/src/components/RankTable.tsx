@@ -8,12 +8,14 @@ export function RankTable(props: { head: string[]; rows: ReactNode[][]; onRow?: 
     <div className="table-scroll" style={props.maxHeight ? { maxHeight: props.maxHeight } : undefined}>
       <table className="table">
         <thead>
-          <tr>{props.head.map((h, i) => <th key={i} className={isNum(i, props.head.length) ? "num" : undefined}>{h}{i === props.head.length - 1 ? " ↓" : ""}</th>)}</tr>
+          <tr>{props.head.map((h, i) => (
+            <th key={i} className={narrow(h) ? "narrow" : isNum(i, props.head.length) ? "num" : undefined}>{label(h)}</th>
+          ))}</tr>
         </thead>
         <tbody>
           {props.rows.map((r, i) => (
             <tr key={i} onClick={props.onRow && (() => props.onRow!(i))} style={props.onRow ? { cursor: "pointer" } : undefined}>
-              {r.map((c, j) => <td key={j} className={isNum(j, r.length) ? "num" : undefined} title={typeof c === "string" ? c : undefined}>{c}</td>)}
+              {r.map((c, j) => <td key={j} className={narrow(props.head[j] ?? "x") ? "narrow" : isNum(j, r.length) ? "num" : undefined} title={typeof c === "string" ? c : undefined}>{c}</td>)}
             </tr>
           ))}
         </tbody>
@@ -21,3 +23,7 @@ export function RankTable(props: { head: string[]; rows: ReactNode[][]; onRow?: 
     </div>
   );
 }
+
+const narrow = (h: string) => h === "" || h === "#";   // a status dot or a step number
+// "send to" -> "Send to"; attribute names such as http.route stay as they are
+const label = (h: string) => (/^[a-z][a-z &]*$/.test(h) ? h[0].toUpperCase() + h.slice(1) : h);

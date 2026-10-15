@@ -25,8 +25,8 @@ const VIEWS: (View & { where: Where[]; services?: string[] })[] = [
   { key: "errors", label: "Errors & fatal", where: [{ field: "severity_number", op: ">=", value: 17 }] },
   { key: "warnings", label: "Warnings", where: [{ field: "severity_number", op: ">=", value: 13 }, { field: "severity_number", op: "<", value: 17 }] },
   { key: "traced", label: "Logs in a trace", hint: "Records that carry a trace id", where: [{ field: "trace_id", op: "exists" }] },
-  { key: "synthetics", label: "Synthetic check failures", group: "Leasyd", where: [], services: ["synthetics"] },
-  { key: "alerts", label: "Alert history", group: "Leasyd", where: [], services: ["alerts"] },
+  { key: "synthetics", label: "Synthetic check failures", group: "From Leasyd", where: [], services: ["synthetics"] },
+  { key: "alerts", label: "Alert history", group: "From Leasyd", where: [], services: ["alerts"] },
 ];
 const LEVEL_VIEW: Record<string, string> = { error: "errors", warn: "warnings" };   // old links: ?level=
 

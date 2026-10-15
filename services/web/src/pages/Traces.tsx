@@ -27,7 +27,7 @@ const VIEWS: (View & { where: Where[]; services?: string[] })[] = [
   { key: "grpc", label: "gRPC", where: [{ field: "attributes.rpc.system", op: "=", value: "grpc" }] },
   { key: "http", label: "HTTP", where: [{ field: "attributes.http.request.method", op: "exists" }] },
   { key: "server", label: "Service requests", hint: "Server spans: requests your services received", where: [{ field: "kind", op: "=", value: 2 }] },
-  { key: "synthetics", label: "Synthetic check runs", group: "Leasyd", where: [{ field: "parent_span_id", op: "not_exists" }], services: ["synthetics"] },
+  { key: "synthetics", label: "Synthetic check runs", group: "From Leasyd", where: [{ field: "parent_span_id", op: "not_exists" }], services: ["synthetics"] },
 ];
 const KINDS = ["Unspecified", "Internal", "Server", "Client", "Producer", "Consumer"];
 const kindName = (k: unknown) => {

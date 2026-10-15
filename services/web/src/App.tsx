@@ -115,7 +115,7 @@ export function App() {
     page = <Ai ctx={ctx} path={path} params={params} />;
     crumb = ["Leasyd AI", path.split("/")[2] ? "Investigation" : "Ask"];
   } else if (path.startsWith("/start")) {
-    page = <GetStarted ctx={ctx} />;
+    page = <GetStarted ctx={ctx} initial={params.get("source")} />;
     crumb = ["Get started", "Send your first data"];
   } else if (path.startsWith("/drop-rules")) {
     page = <DropRules ctx={ctx} />;

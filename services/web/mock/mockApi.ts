@@ -299,6 +299,13 @@ function promqlMock(q: Q & { promql: string; step: number; time?: number }) {
   return [200, { status: "success", data: { resultType: "matrix", result }, stats: { engine_queries: /\/ sum/.test(text) ? 2 : 1, bytes: 48_000_000 } }];
 }
 
+const DROP = {
+  rules: [
+    { id: "r0", name: "Debug and trace logs", signal: "logs", enabled: true, keep_percent: 0, conditions: [{ field: "severity_number", op: "<", value: 9 }] },
+    { id: "r1", name: "Health-check spans", signal: "traces", enabled: true, keep_percent: 0, conditions: [{ field: "attributes.http.route", op: "in", value: ["/health", "/healthz"] }] },
+  ] as object[],
+  updated_at: "2026-10-02T09:14:00Z", updated_by: "ana@acme.io", limits: { rules: 50, conditions: 5 },
+};
 const ACCOUNT = {
   tenant: "acme", company: "Acme Inc.", plan: "free", daily_cap_bytes: 1e9, created_at: "2026-09-20T10:00:00Z",
   searches: { units_today: 640, units_per_day: 2000 }, trial_ends_at: new Date(Date.now() + 5 * 86_400_000).toISOString(),
@@ -685,6 +692,13 @@ export function mockApi(): Plugin {
               const u = { email: body.email, role: body.role, created_at: new Date().toISOString(), invited_by: "ana@acme.io" };
               ACCOUNT.users.push(u); status = 201; out = u;
             } else if (what === "users" && req.method === "DELETE") { ACCOUNT.users = ACCOUNT.users.filter((u) => u.email !== id); out = { status: "removed" }; }
+            else if (what === "drop-rules" && req.method === "PUT") { DROP.rules = body.rules.map((r: object, i: number) => ({ id: `r${i}`, ...r })); out = DROP; }
+            else if (what === "drop-rules") out = DROP;
+            else if (what === "meters") {
+              const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+              out = { days: [0, 1].map((n) => ({ day: day(n), records: 1_310_000 - n * 90_000, bytes: 642e6 - n * 4e7,
+                in_logs: 610_000, dropped_logs: 84_000, in_traces: 640_000, dropped_traces: 0, in_metrics: 60_000, dropped_metrics: 0 })) };
+            }
             else if (what === "billing") {   // no Stripe here: pretend the checkout was completed
               Object.assign(ACCOUNT, { plan: "standard", trial_ends_at: null, daily_cap_bytes: null });
               ACCOUNT.billing = { enabled: true, status: "active", has_customer: true, started_at: new Date().toISOString() };

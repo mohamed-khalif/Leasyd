@@ -79,9 +79,9 @@ export function ServiceMap({ ctx }: { ctx: Ctx }) {
 
   const { nodes, edges } = useMemo(() => {
     if (!nq.data || !eq.data) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const edges = records(eq.data).map((r) => ({ source: String(r.source), target: String(r.target), calls: Number(r.calls), errors: Number(r.errors) }));
+    const edges = records(eq.data).map((r) => ({ source: String(r.source), target: String(r.target), calls: Number(r.calls) || 0, errors: Number(r.errors) || 0 }));
     const raw = records(nq.data).map((r) => ({
-      service: String(r.service), requests: Number(r.requests), errors: Number(r.errors), avg_ms: Number(r.avg_ms ?? 0),
+      service: String(r.service), requests: Number(r.requests) || 0, errors: Number(r.errors) || 0, avg_ms: Number(r.avg_ms) || 0,
       attrs: Object.fromEntries(ATTRS.map(([k]) => [k, r[k] == null ? "" : String(r[k])])),
     }));
     return { nodes: layout(raw, edges), edges };

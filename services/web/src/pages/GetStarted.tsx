@@ -26,13 +26,13 @@ const SOURCES: [Source, string, string][] = [
 const SIGNALS = ["traces", "logs", "metrics"] as const;
 const POLL_MS = 10_000;
 
-export function GetStarted({ ctx }: { ctx: Ctx }) {
+export function GetStarted({ ctx, initial }: { ctx: Ctx; initial?: string | null }) {
   const [acc, setAcc] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [created, setCreated] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [source, setSource] = useState<Source>("server");
+  const [source, setSource] = useState<Source>(SOURCES.find(([id]) => id === initial)?.[0] ?? "server");
   const [baseline, setBaseline] = useState<number | null>(null);
   const [services, setServices] = useState<Record<string, string[]>>({});
 
@@ -133,7 +133,7 @@ export function GetStarted({ ctx }: { ctx: Ctx }) {
           <Check ok={arrived || today > 0} pending="Waiting for your first data…"
                  done={`Leasyd has received ${fmtNum(today)} records today${arrived ? ` (${fmtNum(today - (baseline ?? 0))} since you opened this page)` : ""}.`} />
           <Check ok={found} pending="Waiting for it to be searchable (usually within a minute of arriving)…"
-                 done={<>Searchable now: {allServices.map((s) => <code key={s} className="mono start-svc">{s}</code>)}</>} />
+                 done={<>Searchable now, from {allServices.length} service{allServices.length === 1 ? "" : "s"}: {allServices.map((s) => <code key={s} className="mono start-svc">{s}</code>)}</>} />
           {found && (
             <div className="start-row">
               {services.traces?.length ? <button className="btn primary" onClick={() => ctx.go("/services")}>Open the Service Map</button> : null}

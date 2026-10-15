@@ -137,7 +137,7 @@ function DashboardView({ ctx, id, edit, onChanged, initial }: { ctx: Ctx; id: st
         <div className="dash-title">
           {edit ? <input className="input dash-name-input" value={draft.name} maxLength={100} onChange={(e) => set({ name: e.target.value })} aria-label="Dashboard name" />
             : <h1>{d.name}</h1>}
-          <span className="faint">(v{saved.version}{readOnly && <span className="pill readonly">Read-only</span>})</span>
+          <span className="faint">v{saved.version}</span>{readOnly && <span className="pill readonly" title="Built-in dashboards can't be edited: clone one to change it">Built-in · read-only</span>}
           {saved.updated_by && !edit && <span className="faint" title={saved.updated_at}>edited by {saved.updated_by}</span>}
         </div>
         <span className="spacer" />

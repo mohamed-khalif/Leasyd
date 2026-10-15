@@ -198,6 +198,7 @@ a:hover { text-decoration: underline; }
 .table td { padding: 3px 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
 .table tr:hover td { background: var(--surface-2); }
 .table .num { text-align: right; width: 110px; }
+.table .narrow { width: 38px; padding-right: 0; text-overflow: clip; }
 .table.compact .num { width: 74px; padding-left: 6px; }
 .table-scroll { overflow: auto; max-height: 420px; }
 
@@ -270,6 +271,8 @@ a:hover { text-decoration: underline; }
 .form-section h3 { font-size: 14px; font-weight: 600; margin: 4px 0 10px; }
 .step-body h4 { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin: 18px 0 8px; text-transform: uppercase; letter-spacing: .4px; }
 .step-body label.block { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); margin-top: 8px; }
+.checks { display: flex; gap: 6px 18px; flex-wrap: wrap; margin: 4px 0; }
+.checks label.check { display: inline-flex; gap: 6px; align-items: center; }
 .step-body .checks { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-size: 12.5px; color: var(--text-2); }
 .step-body .checks label { display: flex; gap: 6px; align-items: center; }
 .step-card { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; background: var(--surface-2); }
@@ -678,7 +681,8 @@ tr:hover .link { text-decoration: underline; }
 .span-panel { position: sticky; top: 0; max-height: calc(100vh - 120px); overflow: auto; display: grid; align-content: start; }
 .span-panel-head { padding: 14px 16px 8px; display: grid; gap: 4px; }
 .span-panel-title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 15px; overflow-wrap: anywhere; }
-.span-panel .tabs { padding: 0 16px; }
+.span-panel .tabs { padding: 0 8px; overflow-x: auto; scrollbar-width: none; }
+.span-panel .tabs button { padding: 8px 9px; white-space: nowrap; flex: none; }
 .span-panel-body { padding: 14px 16px 16px; display: grid; gap: 14px; }
 .span-when { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
 .span-when b { justify-self: center; padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); font-weight: 500;
@@ -724,7 +728,7 @@ tr:hover .link { text-decoration: underline; }
 .start-step p { margin: 0; }
 .start-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .start-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
-.start-source { display: grid; gap: 3px; text-align: left; padding: 10px 12px; border-radius: var(--radius); cursor: pointer;
+.start-source { display: grid; gap: 3px; align-content: start; text-align: left; padding: 10px 12px; border-radius: var(--radius); cursor: pointer;
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text); font: inherit; }
 .start-source span { font-size: 12px; }
 .start-source:hover { border-color: var(--border-strong); }
@@ -733,13 +737,14 @@ tr:hover .link { text-decoration: underline; }
 .start-code { position: relative; }
 .start-code .code { margin: 0; padding-right: 76px; }
 .start-code .btn { position: absolute; top: 6px; right: 6px; }
-.start-check { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.start-check { display: flex; gap: 10px; align-items: flex-start; }
+.start-check > span:last-child { flex: 1; min-width: 0; line-height: 1.9; }
 .start-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border-strong); display: inline-grid; place-items: center;
   font-size: 11px; flex: none; animation: start-pulse 1.4s ease-in-out infinite; }
 .start-check.ok .start-dot { background: var(--accent); border-color: var(--accent); color: #fff; animation: none; }
 @keyframes start-pulse { 50% { border-color: var(--accent); } }
 @media (prefers-reduced-motion: reduce) { .start-dot { animation: none; } }
-.start-svc { margin: 0 4px; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); }
+.start-svc { display: inline-block; white-space: nowrap; margin: 0 4px 0 0; padding: 1px 6px; line-height: 1.5; border-radius: 4px; background: var(--surface-2); }
 .start-banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--radius);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }

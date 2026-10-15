@@ -1,7 +1,7 @@
 # Status
 
 Where the project stands, what is running on AWS, and how to pick it up.
-Last updated: 2026-10-12. Detail: `docs/observability-plan.md` (the plan, with results per phase)
+Last updated: 2026-10-15. Detail: `docs/observability-plan.md` (the plan, with results per phase)
 and `infra/README.md` (deploy and test commands per phase).
 
 ## What exists
@@ -84,6 +84,18 @@ Deploy order: phase0 (boundary), phaseT5, `infra/demo-viewer.sh`, phaseT5 again,
 phaseS1, phaseA1, phaseAI, phaseT7, phaseW1, site; keep `obs-demo-schedule` enabled.
 Also in this batch: gateway 5xx answered 503 + Retry-After (T2), clear 503 when query workers are
 unavailable (phase4), alarm obs-schedule-disabled (phase0 + T7).
+
+### UI audit (2026-10-15, pending deploy: `infra/deploy-phaseW1.sh`)
+
+Every page walked in the browser (mock data). Menu regrouped (Telemetry, Applications, Analyze, Alerting &
+uptime, Account). Fixed: Get started step 3 layout (the second check's text wrapped under an empty tick);
+tables say "Send to", not "send to", lose a sort arrow that sorted nothing, and keep status dots narrow so
+names aren't cut; alert-rule checkboxes spaced so each sits with its label; trace span tabs no longer cut
+"Links"; built-in dashboard title reads "v1 · Built-in · read-only"; Service Map guards missing numbers
+(NaN); Lambda "Data from" column no longer cut, and its empty state links to Get started › AWS Lambda
+(`#/start?source=…` opens a source) instead of a repo path; copy: "From Leasyd" views, "Alerting &
+uptime" on Home, SQL "in the selected time range", Settings no longer says "Leasyd Vault". Mock API now
+answers drop rules and meters (the Drop rules page had crashed in mock mode only).
 
 ### Web monitoring (real users) (2026-10-14, live; verified on AWS)
 

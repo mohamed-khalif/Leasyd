@@ -81,7 +81,7 @@ export function Sql({ ctx }: { ctx: Ctx }) {
     <>
       <div className="page-head">
         <h1>SQL</h1>
-        <span className="faint">One read-only SELECT over <code>logs</code>, <code>spans</code> and <code>metrics</code> for {ctx.range.label.toLowerCase()} (DuckDB SQL)</span>
+        <span className="faint">One read-only SELECT over <code>logs</code>, <code>spans</code> and <code>metrics</code> in the selected time range: {ctx.range.label.toLowerCase()} (DuckDB SQL)</span>
       </div>
       <div className="sql">
         <aside className="panel sql-schema">
