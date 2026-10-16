@@ -27,6 +27,11 @@ ports:
   jaeger-thrift: { enabled: false }
   jaeger-grpc: { enabled: false }
   zipkin: { enabled: false }
+clusterRole:                 # kubeletstats reads the kubelet's pod list (/pods): Kubernetes 1.33+ checks
+  rules:                     # nodes/pods, older versions nodes/proxy; the chart's preset grants neither
+    - apiGroups: [""]
+      resources: [nodes/pods, nodes/proxy]
+      verbs: [get]
 extraEnvs:
   - name: LEASYD_API_KEY
     valueFrom: { secretKeyRef: { name: leasyd-api-key, key: api-key } }

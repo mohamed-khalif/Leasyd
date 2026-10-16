@@ -12,6 +12,10 @@ LEASYD_API_KEY=obs_... bash <(curl -fsSL https://app.leasyd.com/install/kubernet
 | `dcgm-exporter.yaml` | Values for NVIDIA's dcgm-exporter chart (`--gpu`, when the GPU Operator doesn't already run it) |
 | `dcgm-counters.csv` | The DCGM fields: NVIDIA's defaults plus ECC errors, throttling time and SM activity |
 
+Permissions (read only): the chart's presets (pods, namespaces, nodes, workloads, events, node
+stats) plus `nodes/pods` and `nodes/proxy` (get) for the kubelet's pod list; Kubernetes 1.33+ needs
+only `nodes/pods`, so `nodes/proxy` can be removed from `agent.yaml` there.
+
 What Leasyd reads from this data, and why: `docs/gpu-kubernetes.md`. Checked with
 `helm template` (chart 0.176.0) and `otelcol-contrib validate` (0.162.0); end to end on a real
 cluster with `infra/gpu-lab.sh`.
