@@ -301,7 +301,7 @@ def gpu_metrics(minute):
             util, mem, temp, power, _ = gpu_state(g, minute, r)
             p = holder(g, minute)
             labels = {"gpu": str(g.index), "UUID": g.uuid, "pci_bus_id": g.pci, "device": f"nvidia{g.index}",
-                      "modelName": g.model, "Hostname": node, "DCGM_FI_DRIVER_VERSION": DRIVER, "node": node}
+                      "modelName": g.model, "hostname": node, "DCGM_FI_DRIVER_VERSION": DRIVER, "node": node}
             if p:
                 labels.update({"namespace": p.ns, "pod": p.name, "container": p.container, "team": p.team,
                                "app_kubernetes_io_name": p.app})

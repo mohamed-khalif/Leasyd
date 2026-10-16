@@ -20,9 +20,10 @@ const S = (k: string) => `coalesce(${A(k)}, '')`;   // a label, '' when absent (
 // ------------------------------------------------------------------ shared expressions
 
 /** One GPU: its UUID, else host/index. */
-const GPU = `coalesce(${A("UUID")}, ${A("Hostname")} || '/' || ${A("gpu")})`;
-/** Its node: the agent's "node" label, else dcgm-exporter's Hostname. */
-const GPU_NODE = `coalesce(${A("node")}, ${A("Hostname")}, ${R("k8s.node.name")}, ${R("host.name")}, '')`;
+const HOST = `coalesce(${A("hostname")}, ${A("Hostname")})`;   // dcgm-exporter 4.x: hostname; older: Hostname
+const GPU = `coalesce(${A("UUID")}, ${HOST} || '/' || ${A("gpu")})`;
+/** Its node: the agent's "node" label, else dcgm-exporter's hostname. */
+const GPU_NODE = `coalesce(${A("node")}, ${HOST}, ${R("k8s.node.name")}, ${R("host.name")}, '')`;
 /** The workload holding it: a pod (namespace/pod), else a Slurm job, else none (''). */
 const HOLDER = `CASE WHEN ${S("pod")} <> '' THEN ${S("namespace")} || '/' || ${S("pod")}
   WHEN ${S("hpc_job")} <> '' THEN 'slurm/' || ${S("hpc_job")} ELSE '' END`;

@@ -161,7 +161,7 @@ NVIDIA GPUs (dcgm-exporter, service dcgm-exporter): DCGM_FI_DEV_GPU_UTIL (%), DC
 _FB_FREE (MiB), DCGM_FI_DEV_GPU_TEMP (C), DCGM_FI_DEV_POWER_USAGE (W), DCGM_FI_DEV_XID_ERRORS (the last \
 XID code; 0 none; 48 double-bit ECC, 79 fell off the bus, 13/31/43 usually the application), \
 DCGM_FI_DEV_ECC_DBE_VOL_TOTAL (counter), DCGM_FI_DEV_THERMAL_VIOLATION (ns throttled, counter), \
-DCGM_FI_PROF_PIPE_TENSOR_ACTIVE (0-1); labels UUID, gpu, modelName, Hostname, node, and namespace / pod / \
+DCGM_FI_PROF_PIPE_TENSOR_ACTIVE (0-1); labels UUID, gpu, modelName, hostname, node, and namespace / pod / \
 team of the workload holding the GPU (empty: unallocated). A GPU held by a pod but under 5% busy is \
 idle (paid, unused). The Leasyd app's GPUs and Kubernetes pages show this; point people there."""
 

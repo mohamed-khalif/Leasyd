@@ -66,12 +66,12 @@ ECC, throttle reasons and power violation):
 | Hardware errors | `DCGM_FI_DEV_XID_ERRORS` (last XID), `DCGM_FI_DEV_ECC_DBE_VOL_TOTAL`, `DCGM_FI_DEV_ECC_SBE_VOL_TOTAL`, `DCGM_FI_DEV_ROW_REMAP_FAILURE`, `DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS`, `DCGM_FI_DEV_PCIE_REPLAY_COUNTER` |
 | Throttling | `DCGM_FI_DEV_CLOCKS_EVENT_REASONS` (older DCGM: `DCGM_FI_DEV_CLOCK_THROTTLE_REASONS`), bitmask |
 
-Attributes on every DCGM point: `UUID`, `gpu` (index), `modelName`, `Hostname`, `pci_bus_id`,
+Attributes on every DCGM point: `UUID`, `gpu` (index), `modelName`, `hostname` (`Hostname` before dcgm-exporter 4), `pci_bus_id`,
 `DCGM_FI_DRIVER_VERSION`; and when a pod holds the GPU, `namespace`, `pod`, `container`.
 
 ## 2. Identity and attribution
 
-- **GPU** = `UUID` (else `Hostname/gpu`). **Node** = `node` (agent relabel), else `Hostname`.
+- **GPU** = `UUID` (else `hostname/gpu`). **Node** = `node` (agent relabel), else `hostname`.
 - **Workload** of a GPU = its `namespace/pod` (Kubernetes), else `hpc_job` (Slurm), else none.
 - **Owner** of a pod: joined from kubelet pod metrics on (namespace, pod): workload kind and name
   (`k8s.deployment.name`, `k8s.statefulset.name`, `k8s.job.name`, ...), team = pod label `team`
