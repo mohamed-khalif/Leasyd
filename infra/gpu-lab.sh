@@ -34,6 +34,9 @@ up)
   [[ -z "$(instance)" ]] || { echo "a lab instance already runs: $(instance)"; exit 1; }
   if [[ ! -f "$LAB_STATE" ]]; then
     out="$(admin "{\"action\":\"create\",\"tenant\":\"$TENANT\",\"plan\":\"free\"}")"
+    if [[ "$out" == *"already exists"* ]]; then   # made from another machine: a new key, the old one ends now
+      out="$(admin "{\"action\":\"rotate\",\"tenant\":\"$TENANT\",\"grace_hours\":0}")"
+    fi
     python3 -c "import json,sys; r=json.loads(sys.argv[1]); assert r.get('api_key'), r; json.dump({'tenant':'$TENANT','key':r['api_key']}, open('$LAB_STATE','w'))" "$out"
     chmod 600 "$LAB_STATE"
     admin "{\"action\":\"set-search\",\"tenant\":\"$TENANT\",\"units_per_day\":0}" >/dev/null
