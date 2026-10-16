@@ -40,6 +40,7 @@ up)
     python3 -c "import json,sys; r=json.loads(sys.argv[1]); assert r.get('api_key'), r; json.dump({'tenant':'$TENANT','key':r['api_key']}, open('$LAB_STATE','w'))" "$out"
     chmod 600 "$LAB_STATE"
     admin "{\"action\":\"set-search\",\"tenant\":\"$TENANT\",\"units_per_day\":0}" >/dev/null
+    admin "{\"action\":\"set-cap\",\"tenant\":\"$TENANT\",\"daily_gb\":3}" >/dev/null   # free plan is 1 GB; the lab sends ~1-2 GB in 3 h
     echo "tenant $TENANT created (a new key takes ~2 minutes to work; the bootstrap waits longer than that)"
   fi
   files="$(tar cz -C examples/kubernetes leasyd-k8s.sh agent.yaml cluster.yaml dcgm-exporter.yaml dcgm-counters.csv \

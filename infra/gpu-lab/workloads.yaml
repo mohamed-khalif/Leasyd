@@ -26,7 +26,8 @@ spec:
       containers:
         - name: trainer
           image: nvcr.io/nvidia/k8s/cuda-sample:nbody
-          command: ["sh", "-c", "while true; do nbody -gpu -benchmark -numbodies=1024000; done"]
+          # one line a run: nbody's full output was ~7,000 lines a second (filled the daily cap in minutes)
+          command: ["sh", "-c", "while true; do nbody -gpu -benchmark -numbodies=1024000 >/tmp/run.log 2>&1; tail -n 1 /tmp/run.log; sleep 1; done"]
           resources: { limits: { nvidia.com/gpu: 1 }, requests: { cpu: 500m, memory: 512Mi } }
 ---
 # 1 GPU held but idle: a "notebook" that sleeps (team data-science)
