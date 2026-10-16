@@ -5,7 +5,7 @@
 # --gpu), then workloads.yaml. Progress goes to Leasyd itself as logs of service gpulab-bootstrap.
 # The instance stops (and so terminates) itself after __HOURS__ hours.
 exec > >(tee -a /var/log/gpulab.log) 2>&1
-set -x
+# no `set -x`: it would print the ingest key to the console log (EC2 GetConsoleOutput)
 KEY='__KEY__'
 ENDPOINT='__ENDPOINT__'
 CLUSTER=gpu-lab

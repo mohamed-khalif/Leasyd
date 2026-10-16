@@ -25,6 +25,8 @@ ports:
   zipkin: { enabled: false }
   otlp: { enabled: false }
   otlp-http: { enabled: false }
+service:                     # nothing listens: it only reads the Kubernetes API (a Service with
+  enabled: false             # no ports is refused)
 extraEnvs:
   - name: LEASYD_API_KEY
     valueFrom: { secretKeyRef: { name: leasyd-api-key, key: api-key } }
