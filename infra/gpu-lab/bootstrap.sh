@@ -39,6 +39,9 @@ handler: nvidia
 YAML
 helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
 helm repo update nvdp
+# The chart's DaemonSet only runs on nodes labelled as having NVIDIA GPUs (NFD / GPU Operator labels);
+# a bare k3s node has none, so say it here.
+kubectl label node --all nvidia.com/gpu.present=true --overwrite
 helm upgrade --install nvdp nvdp/nvidia-device-plugin -n nvidia-device-plugin --create-namespace --set runtimeClassName=nvidia --wait --timeout 10m
 for i in $(seq 1 60); do
   [ "$(kubectl get nodes -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}')" -ge 1 ] 2>/dev/null && break
@@ -47,7 +50,7 @@ done
 if ! [ "$(kubectl get nodes -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}')" -ge 1 ] 2>/dev/null; then
   log "no GPUs allocatable after 5 min. containerd: $(grep -A3 -i nvidia /var/lib/rancher/k3s/agent/etc/containerd/config.toml | head -20 | tr '\n' ' ')"
   log "device plugin: $(kubectl -n nvidia-device-plugin logs -l app.kubernetes.io/name=nvidia-device-plugin --tail=30 2>&1 | tr '\n' ' ')"
-  log "which: $(ls -l /usr/bin/nvidia-container-runtime* 2>&1 | tr '\n' ' ')"
+  log "which: $(ls -l /usr/bin/nvidia-container-runtime* 2>&1 | tr '\n' ' ') daemonsets: $(kubectl get ds -A --no-headers 2>&1 | tr '\n' ';')"
   exit 1
 fi
 log "device plugin ready: $(kubectl get nodes -o jsonpath='{.items[0].status.allocatable.nvidia\.com/gpu}') GPUs allocatable"
