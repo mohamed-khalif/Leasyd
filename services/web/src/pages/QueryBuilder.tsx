@@ -3,6 +3,7 @@
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
+import { replaceHashParams } from "../hashParams";
 import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtNum } from "../time";
@@ -132,7 +133,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
   // Keep the link current, so the page can be bookmarked or shared.
   useEffect(() => {
     const blob = btoa(unescape(encodeURIComponent(JSON.stringify({ queries, settings }))));
-    history.replaceState(null, "", `#/query?q=${blob}`);
+    replaceHashParams({ q: blob });   // keeps the range parameter
   }, [queries, settings]);
   // Builder queries re-run as they change; PromQL runs on Run (Ctrl+Enter).
   useEffect(() => {

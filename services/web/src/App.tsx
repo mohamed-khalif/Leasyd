@@ -27,6 +27,7 @@ import { QueryBuilder } from "./pages/QueryBuilder";
 import { Sql } from "./pages/Sql";
 import { Dashboards } from "./pages/Dashboards";
 import { RANGES, Range, rangeFromKey } from "./time";
+import { hashParams, replaceHashParams } from "./hashParams";
 
 /** range: the time range; tick: bumped by Refresh; now: the page's one "now" (epoch ms) that its
  *  windows end at, set when the range changes, on Refresh and on opening a page. */
@@ -44,9 +45,19 @@ function useHash(): string {
 
 export function App() {
   const [user, setUser] = useState<{ tenant: string; email: string } | null | undefined>(undefined);
-  const [range, setRange] = useState<Range>(() => rangeFromKey(safeGet("leasyd.range")) ?? RANGES[1]);
+  // The range: from the link (shared links open with the sender's range), else the last one picked here.
+  const [range, setRange] = useState<Range>(() => rangeFromKey(hashParams().get("range")) ?? rangeFromKey(safeGet("leasyd.range")) ?? RANGES[1]);
   const [tick, setTick] = useState(0);
   const hash = useHash();
+  const [rangeFor, setRangeFor] = useState(hash);
+  if (rangeFor !== hash) {                       // followed a link or Back: take the link's range, if it has one
+    setRangeFor(hash);
+    const linked = rangeFromKey(hashParams(hash).get("range"));
+    if (linked && linked.key !== range.key) setRange(linked);
+  }
+  useEffect(() => {                              // keep the link's range current (and drop a bad one)
+    if (hashParams().get("range") !== range.key) replaceHashParams({ range: range.key });
+  }, [hash, range.key]);
   const [now, setNow] = useState(() => Date.now());
   const [nowFor, setNowFor] = useState({ path: hash.split("?")[0], range, tick });
   if (nowFor.path !== hash.split("?")[0] || nowFor.range !== range || nowFor.tick !== tick) {
