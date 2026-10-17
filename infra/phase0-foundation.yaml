@@ -391,13 +391,13 @@ Resources:
                 Effect: Allow
                 Action: dynamodb:Query
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
-              # Per-tenant query limits: the tenant's plan, and its per-minute counters.
+              # Per-tenant query limits: the tenant's plan, its per-minute counters and its queries running at once.
               - Sid: QueryLimits
                 Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:UpdateItem]
                 Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
                 Condition:
-                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["tenant#*", "rate#query#*", "rate#job#*", "usage#search#*"] }
+                  ForAllValues:StringLike: { "dynamodb:LeadingKeys": ["tenant#*", "rate#query#*", "rate#job#*", "usage#search#*", "inflight#*"] }
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "0" }

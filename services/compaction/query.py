@@ -849,6 +849,8 @@ def api(event, context):
     if q.get("async") and (refused := over_limit(tenant, "job")):
         return refused
     job = secrets.token_hex(16)
+    if (refused := take_slot(tenant, job)):
+        return refused
     _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job), ContentType="application/json",
                      Body=json.dumps({"status": "running", "started": _now().strftime("%Y-%m-%dT%H:%M:%SZ")}))
     wait_s = 0 if q.get("async") else SYNC_DEADLINE_S
@@ -916,6 +918,7 @@ def answer_job(job):
         raise
     finally:
         charge_units(tenant)
+        give_back_slot(tenant, job["id"])
     if time.time() >= job.get("store_after", 0):
         _store_answer(tenant, job["id"], out)
     return out
@@ -968,6 +971,11 @@ def _job_key(tenant, job):
 #    usage#search#<tenant>#<day>; a tenant's own search_units_per_day overrides the plan's
 #    (0: no daily limit). Charged after the query, so the last one of the day may go over.
 RATE_LIMITS = {"query": {"free": 300, "standard": 600}, "job": {"free": 5, "standard": 10}}
+# Queries of one tenant running at once (each up to MaxWorkers workers for up to 5 minutes), held from
+# the API's start to the coordinator's end in obs-tenants inflight#<tenant> (leases: job -> expiry).
+# 25 for now: the app's Home page still sends 20 queries at once; 4 / 12 once it limits itself.
+INFLIGHT_LIMITS = {"free": 25, "standard": 25}
+LEASE_S = 330           # a slot whose run died (the coordinator's timeout is 300 s) is free again after this
 DAILY_SEARCH_UNITS = {"free": 2_000, "standard": 20_000}
 _plans = {}   # tenant -> ((plan, daily units), read at)
 _units = {}   # tenant -> search units used by queries not yet charged
@@ -1034,6 +1042,49 @@ def over_limit(tenant, kind):
             return _http(429, {"error": f"too many {what}: at most {limit} a minute on this plan; try again in a minute"})
         print(json.dumps({"rate_limit_unavailable": str(e)[:300]}))
         return None
+
+
+def take_slot(tenant, job):
+    """None, or the 429 answer when the tenant already has INFLIGHT_LIMITS[plan] queries running.
+    Expired slots (runs that died) are cleared first. Fails open (logged), like over_limit."""
+    table, key, now = _tenants_table(), {"pk": f"inflight#{tenant}"}, int(time.time())
+    try:
+        plan, _ = _plan(table, tenant)
+        limit = INFLIGHT_LIMITS.get(plan, INFLIGHT_LIMITS["standard"])
+        leases = (table.get_item(Key=key, ConsistentRead=True).get("Item") or {}).get("leases")
+        if leases is None:
+            try:
+                table.update_item(Key=key, UpdateExpression="SET leases = :m, expires = :exp",
+                                  ConditionExpression="attribute_not_exists(leases)",
+                                  ExpressionAttributeValues={":m": {job: now + LEASE_S}, ":exp": now + 86400})
+                return None
+            except ClientError as e:
+                if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                    raise                      # someone else made it first: take a slot below
+        expired = [k for k, v in (leases or {}).items() if int(v) <= now][:50]
+        if expired:
+            table.update_item(Key=key, UpdateExpression="REMOVE " + ", ".join(f"leases.#e{i}" for i in range(len(expired))),
+                              ExpressionAttributeNames={f"#e{i}": k for i, k in enumerate(expired)})
+        table.update_item(Key=key, UpdateExpression="SET leases.#j = :exp, expires = :ttl",
+                          ConditionExpression="size(leases) < :max",
+                          ExpressionAttributeNames={"#j": job},
+                          ExpressionAttributeValues={":exp": now + LEASE_S, ":max": limit, ":ttl": now + 86400})
+        return None
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _http(429, {"error": f"too many queries running at once: at most {limit} on this plan; "
+                                        "try again when some have finished"}, retry_after=2)
+        print(json.dumps({"inflight_unavailable": str(e)[:300]}))
+        return None
+
+
+def give_back_slot(tenant, job):
+    """Never raises (logged): a slot not given back expires after LEASE_S."""
+    try:
+        _tenants_table().update_item(Key={"pk": f"inflight#{tenant}"}, UpdateExpression="REMOVE leases.#j",
+                                     ExpressionAttributeNames={"#j": job})
+    except ClientError as e:
+        print(json.dumps({"inflight_not_released": job, "error": str(e)[:300]}))
 
 
 def run_job(event):
@@ -1161,15 +1212,14 @@ def kept_from():
     return datetime.combine((_now() - timedelta(days=RETENTION_DAYS)).date(), dt_time(0), tzinfo=timezone.utc)
 
 
-def _http(status, body):
-    return {"statusCode": status, "headers": {"Content-Type": "application/json"},
+def _http(status, body, retry_after=None):
+    headers = {"Content-Type": "application/json", **({"Retry-After": str(retry_after)} if retry_after else {})}
+    return {"statusCode": status, "headers": headers,
             "body": body if isinstance(body, str) else json.dumps(body), "isBase64Encoded": False}
 
 
 def _unavailable(e):
-    out = _http(503, {"error": str(e)})
-    out["headers"]["Retry-After"] = "30"
-    return out
+    return _http(503, {"error": str(e)}, retry_after=30)
 
 
 def run(q, invoke_worker=None):

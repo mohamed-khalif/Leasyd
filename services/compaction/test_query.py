@@ -721,6 +721,38 @@ def test_failed_jobs_say_so(data, monkeypatch, coordinator):
     assert get_job("acme", out["job"]) == (500, {"error": "the query failed; try a shorter time range"})
 
 
+def test_queries_running_at_once_are_limited_per_tenant(data, monkeypatch, coordinator):
+    """At most INFLIGHT_LIMITS[plan] queries of a tenant run at once (a slot from the API's start to
+    the coordinator's end); another tenant is unaffected; a slot left by a crash expires."""
+    boto3.client("dynamodb").create_table(
+        TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
+        AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+        KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
+    query._plans.clear()
+    monkeypatch.setitem(query.INFLIGHT_LIMITS, "standard", 2)
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
+    real, gate = query.answer, threading.Event()
+    monkeypatch.setattr(query, "answer", lambda t, q: (gate.wait(10), real(t, q))[1])
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}], "async": True}
+    ana = {"custom:tenant": "acme"}
+    assert [http_user(ana, q)[0] for _ in range(2)] == [202, 202]
+    status, out = http_user(ana, q)
+    assert status == 429 and "running at once" in out["error"]
+    assert http_user({"custom:tenant": "globex"}, q)[0] == 202          # another tenant: its own slots
+    gate.set()
+    coordinator.finish()
+    assert http_user(ana, q)[0] == 202                                  # slots given back
+    coordinator.finish()
+    # A slot whose run died is free again once it expires.
+    gate.clear()
+    assert [http_user(ana, q)[0] for _ in range(2)] == [202, 202]
+    assert http_user(ana, q)[0] == 429
+    later = time.time() + query.LEASE_S + 1
+    monkeypatch.setattr(query.time, "time", lambda: later)
+    assert http_user(ana, q)[0] == 202
+    gate.set()
+
+
 def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     """Per tenant and minute, by plan; another tenant is unaffected; jobs have a lower limit."""
     boto3.client("dynamodb").create_table(
