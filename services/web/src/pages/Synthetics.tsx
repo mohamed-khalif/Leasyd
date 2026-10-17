@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
 import { BrowserAction, BrowserStep, Check, CheckResult, checks, CheckSettings, Constraint, Extraction, notExcluded, records, Step, StepResult } from "../api";
 import type { Ctx } from "../App";
+import { useCheckList } from "../checkList";
 import { Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { fmtNum } from "../time";
@@ -50,23 +51,13 @@ export function Synthetics({ ctx, path }: { ctx: Ctx; path: string }) {
   return <CheckList ctx={ctx} />;
 }
 
-function useChecks(tick: number) {
-  const [state, setState] = useState<{ data: { checks: Check[]; limit: number } | null; error: string | null }>({ data: null, error: null });
-  useEffect(() => {
-    let live = true;
-    checks.list().then((data) => live && setState({ data, error: null }), (e: Error) => live && setState({ data: null, error: e.message }));
-    return () => { live = false; };
-  }, [tick]);
-  return state;
-}
-
 // ------------------------------------------------------------------ list
 
 function CheckList({ ctx }: { ctx: Ctx }) {
-  const list = useChecks(ctx.tick);
+  const list = useCheckList(ctx.tick);
   const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
-  const excluded = (list.data?.checks ?? []).flatMap((c) => c.excluded_runs ?? []);
+  const excluded = (list.checks ?? []).flatMap((c) => c.excluded_runs ?? []);
   const byCheck = { signal: "metrics" as const, ...w, services: ["synthetics"], group_by: ["attributes.check.id"], limit: 1000 };
   const ex = notExcluded(excluded), exKey = key + ":" + excluded.length;
   const uptime = useQuery({ ...byCheck, where: [{ field: "metric_name", op: "=", value: SUCCESS }, ...ex], aggs: [{ fn: "avg", field: "value" }, { fn: "count" }] }, "u" + exKey);
@@ -81,18 +72,18 @@ function CheckList({ ctx }: { ctx: Ctx }) {
     const id = String((r.attributes as Record<string, unknown>)?.["check.id"] ?? "");
     if (id && (!last.has(id) || String(r.ts) > String(last.get(id)!.ts))) last.set(id, r);
   }
-  const all = list.data?.checks ?? [];
+  const all = list.checks ?? [];
   return (
     <>
       <div className="toolbar">
         <span className="faint">Checks run from us-east-1 (N. Virginia). Their results are part of your data: filter by service <b>synthetics</b> anywhere.</span>
         <span className="spacer" style={{ flex: 1 }} />
         <button className="btn" onClick={() => ctx.go("/synthetics/windows")}>Maintenance windows</button>
-        <button className="btn primary" disabled={!!list.data && all.length >= list.data.limit} onClick={() => ctx.go("/synthetics/new")}>New check</button>
+        <button className="btn primary" disabled={list.limit !== null && all.length >= list.limit} onClick={() => ctx.go("/synthetics/new")}>New check</button>
       </div>
-      <Panel title="Synthetic checks" flush right={list.data && <span className="faint">{all.length} of {list.data.limit}</span>}>
+      <Panel title="Synthetic checks" flush right={list.limit !== null && <span className="faint">{all.length} of {list.limit}</span>}>
         {list.error ? <div className="state error">{list.error}</div>
-          : !list.data ? <div className="skeleton" style={{ height: 160 }} />
+          : !list.checks ? <div className="skeleton" style={{ height: 160 }} />
           : !all.length ? (
             <div className="state" style={{ minHeight: 180, flexDirection: "column", gap: 10 }}>
               <div>No checks yet. An HTTP check calls your site or API; a browser check opens your site in a real browser and clicks through it like a customer. Both run on a schedule and tell you when something fails or slows down.</div>

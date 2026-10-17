@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useState } from "react";
-import { AlertChannel, AlertRule, alerts, Check, checks, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { AlertChannel, AlertRule, alerts, Check, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
 import type { Ctx } from "../App";
+import { useCheckList } from "../checkList";
 import { ALERT_TEMPLATES, AlertTemplate } from "../infra/alertTemplates";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
@@ -36,13 +37,15 @@ export function Alerts({ ctx, path, params }: { ctx: Ctx; path: string; params: 
 }
 
 function useSettings(tick: number) {
-  const [s, setS] = useState<{ rules: AlertRule[]; channels: AlertChannel[]; checks: Check[]; slos: Slo[] } | null>(null);
+  const [s, setS] = useState<{ rules: AlertRule[]; channels: AlertChannel[]; slos: Slo[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const list = useCheckList(tick);
   useEffect(() => {
-    Promise.all([alerts.rules(), alerts.channels(), checks.list(), slos.list()])
-      .then(([r, c, k, s]) => setS({ rules: r.items, channels: c.items, checks: k.checks, slos: s.items }), (e: Error) => setError(e.message));
+    Promise.all([alerts.rules(), alerts.channels(), slos.list()])
+      .then(([r, c, s]) => setS({ rules: r.items, channels: c.items, slos: s.items }), (e: Error) => setError(e.message));
   }, [tick]);
-  return { s, error };
+  const all = useMemo(() => (s && list.checks ? { ...s, checks: list.checks } : null), [s, list.checks]);
+  return { s: all, error: error ?? list.error };
 }
 
 export function describeRule(r: AlertRule, all: { checks: Check[]; slos: Slo[] }): string {

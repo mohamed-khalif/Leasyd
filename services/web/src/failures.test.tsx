@@ -77,12 +77,13 @@ for (const route of ["/slos", "/synthetics/windows", "/"]) {
   });
 }
 
-test("dashboards: a failed check-name lookup is retried, not kept for the session", async () => {
-  const { checkNames } = await import("./pages/Dashboards");
-  failing.set("GET /v1/app/checks", 500);
-  assert.equal(await checkNames(), null);
-  failing.clear();
+test("dashboards: check names are asked on each visit; when they can't be read, series keep their ids", async () => {
+  const route = "/dashboards/builtin-synthetics";
   requests.length = 0;
-  await checkNames();
-  assert.ok(requests.includes("GET /v1/app/checks"), "asked again");
+  let text = await pageText(route, { "GET /v1/app/checks": 500 });
+  assert.equal(requests.filter((r) => r === "GET /v1/app/checks").length, 1);
+  assert.doesNotMatch(text, /deleted check/);
+  requests.length = 0;
+  text = await pageText(route, {});
+  assert.equal(requests.filter((r) => r === "GET /v1/app/checks").length, 1, "asked again on the next visit");
 });

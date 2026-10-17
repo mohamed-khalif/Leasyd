@@ -1,8 +1,9 @@
 // Dashboards: a list on the left (search, favorites, create), the chosen dashboard on the right:
 // its filters (e.g. Service Name), and a grid of panels, each one or more PromQL queries.
-import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { checks, Dashboard, dashboards, DashboardSummary, Panel, PanelType, promql, promqlAt, PromSeries, records } from "../api";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Dashboard, dashboards, DashboardSummary, Panel, PanelType, promql, promqlAt, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
+import { checkNameMap, useCheckList } from "../checkList";
 import { BUILTIN } from "../builtinDashboards";
 import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
@@ -87,6 +88,10 @@ function DashboardView({ ctx, id, edit, onChanged, initial }: { ctx: Ctx; id: st
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState(false);
   const [vars, setVars] = useState<Record<string, string[]>>(initial);
+  // Check names for series grouped by check_id: loaded once per visit (and on Refresh), shared by the panels.
+  const needsNames = !!(draft ?? saved)?.panels.some(namesNeeded);
+  const list = useCheckList(ctx.tick, needsNames);
+  const names: Names = useMemo(() => (list.checks ? checkNameMap(list.checks) : list.error ? null : undefined), [list.checks, list.error]);
   useEffect(() => {
     setError(null);
     const builtin = BUILTIN.find((d) => d.id === id);
@@ -177,7 +182,7 @@ function DashboardView({ ctx, id, edit, onChanged, initial }: { ctx: Ctx; id: st
       ) : (
         <div className="dash-grid">
           {d.panels.map((p, i) => (
-            <PanelCard key={p.id} ctx={ctx} panel={p} vars={vars} edit={edit}
+            <PanelCard key={p.id} ctx={ctx} panel={p} vars={vars} names={names} edit={edit}
                        tools={edit && (
                          <div className="panel-tools" onClick={(e) => e.stopPropagation()}>
                            <button title="Earlier" onClick={() => move(i, -1)}>◀</button>
@@ -193,7 +198,7 @@ function DashboardView({ ctx, id, edit, onChanged, initial }: { ctx: Ctx; id: st
           ))}
         </div>
       )}
-      {editing && <PanelEditor ctx={ctx} panel={editing} vars={vars} onCancel={() => setEditing(null)} onSave={upsert} />}
+      {editing && <PanelEditor ctx={ctx} panel={editing} vars={vars} names={names} onCancel={() => setEditing(null)} onSave={upsert} />}
     </>
   );
 }
@@ -302,8 +307,13 @@ export function limited<T>(f: (signal?: AbortSignal) => Promise<T>, signal?: Abo
 
 type Loaded = { series: (Series & { last: number })[]; error?: string } | null;
 
-function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range, tick: number): Loaded {
-  const [state, setState] = useState<Loaded>(null);
+type Results = { results: { q: { promql: string; legend?: string }; result: PromSeries[] }[]; error?: undefined } | { error: string } | null;
+/** Check names by id: undefined while loading, null when they can't be read (series keep their ids). */
+type Names = Map<string, string> | null | undefined;
+const namesNeeded = (p: Panel) => !!p.queries?.some((q) => q.promql.includes("check_id"));
+
+function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range, tick: number, names: Names): Loaded {
+  const [state, setState] = useState<Results>(null);
   const step = bucketSeconds(range);
   const key = JSON.stringify([panel.queries, vars, range.key, range.from, range.to, tick]);
   useEffect(() => {
@@ -317,39 +327,29 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
       ? promqlAt({ promql: fillQuery(q.promql, vars, step, rangeS), time: at }, { signal })
           .then((r) => r.data.result.map((x) => ({ metric: x.metric, values: [x.value] as [number, string][] })))
       : promql({ promql: fillQuery(q.promql, vars, step, rangeS), start: w.start, end: w.end, step }, { signal }).then((r) => r.data.result);
-    const names = panel.queries.some((q) => q.promql.includes("check_id")) ? checkNames() : Promise.resolve(null);
-    Promise.all([names, ...panel.queries.map((q) => limited(() => run(q).then((result) => ({ q, result })), signal))])
-      .then(([nm, ...all]) => {
-        const nameMap = nm as Map<string, string> | null;
-        if (signal.aborted) return;
-        const series: (Series & { last: number })[] = [];
-        (all as { q: { promql: string; legend?: string }; result: PromSeries[] }[]).forEach(({ q, result }, qi) => result.forEach((s0: PromSeries) => {
-          const s = { ...s0, metric: withCheckName(s0.metric, nameMap) };
-          const pts = s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1]));
-          if (!pts.length) return;
-          series.push({ label: legend(q.legend, s.metric, qi, panel.queries!.length), color: PALETTE[series.length % PALETTE.length], points: pts, last: pts[pts.length - 1][1] });
-        }));
-        setState({ series });
-      }, (e: Error) => !signal.aborted && setState({ series: [], error: e.message }));
+    Promise.all(panel.queries.map((q) => limited(() => run(q).then((result) => ({ q, result })), signal)))
+      .then((results) => !signal.aborted && setState({ results }), (e: Error) => !signal.aborted && setState({ error: e.message }));
     return () => ctl.abort();
   }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed: `key` encodes queries, variables, range and refresh
-  return state;
+  // Series are named here, not when the answers come, so they pick up check names whenever those arrive.
+  const waiting = namesNeeded(panel) && names === undefined;
+  const nq = panel.queries?.length ?? 0;
+  return useMemo(() => {
+    if (!state || waiting) return null;
+    if (state.error !== undefined) return { series: [], error: state.error };
+    const series: (Series & { last: number })[] = [];
+    state.results.forEach(({ q, result }, qi) => result.forEach((s0: PromSeries) => {
+      const s = { ...s0, metric: withCheckName(s0.metric, names ?? null) };
+      const pts = s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1]));
+      if (!pts.length) return;
+      series.push({ label: legend(q.legend, s.metric, qi, nq), color: PALETTE[series.length % PALETTE.length], points: pts, last: pts[pts.length - 1][1] });
+    }));
+    return { series };
+  }, [state, waiting, names, nq]);
 }
 
-/** Synthetic checks' current names by id: series grouped by check_id show the name a check has now
- *  (a renamed check stays one series); a deleted check says so. Loaded once per page load. */
-let checkNamesP: Promise<Map<string, string> | null> | null = null;
-/** Exported for tests. A failed lookup gives null (series keep their ids, not "deleted check") and
- *  is asked again next time. */
-export function checkNames(): Promise<Map<string, string> | null> {
-  if (!checkNamesP) {
-    checkNamesP = checks.list().then((r) => new Map(r.checks.map((c) => [c.id, c.name] as [string, string])), () => {
-      checkNamesP = null;
-      return null;
-    });
-  }
-  return checkNamesP;
-}
+/** A series grouped by check_id shows the name the check has now (a renamed check stays one series);
+ *  a deleted check says so; without names (they couldn't be read) the id stays. */
 function withCheckName(metric: Record<string, string>, names: Map<string, string> | null): Record<string, string> {
   if (!names || !metric.check_id || metric.check_name) return metric;
   return { ...metric, check_name: names.get(metric.check_id) ?? `deleted check (${metric.check_id})` };
@@ -361,8 +361,8 @@ function legend(template: string | undefined, metric: Record<string, string>, qi
   return labels.length ? labels.join(" · ") : nq > 1 ? `Query ${qi + 1}` : metric.__name__ ?? "value";
 }
 
-function PanelCard({ ctx, panel, vars, edit, tools }: { ctx: Ctx; panel: Panel; vars: Record<string, string[]>; edit: boolean; tools?: ReactNode }) {
-  const data = usePanelData(panel, vars, ctx.range, ctx.tick);
+function PanelCard({ ctx, panel, vars, names, edit, tools }: { ctx: Ctx; panel: Panel; vars: Record<string, string[]>; names: Names; edit: boolean; tools?: ReactNode }) {
+  const data = usePanelData(panel, vars, ctx.range, ctx.tick, names);
   const step = bucketSeconds(ctx.range);
   const fmt = (v: number) => fmtUnit(v, panel.unit ?? "", panel.decimals);
   const bodyH = panel.h * ROW_PX + (panel.h - 1) * 12 - 40;          // the grid row heights and gaps, less the header
@@ -425,7 +425,7 @@ function barsOf(series: Series[]) {
 
 // ------------------------------------------------------------------ panel editor
 
-function PanelEditor({ ctx, panel, vars, onCancel, onSave }: { ctx: Ctx; panel: Panel; vars: Record<string, string[]>;
+function PanelEditor({ ctx, panel, vars, names, onCancel, onSave }: { ctx: Ctx; panel: Panel; vars: Record<string, string[]>; names: Names;
                      onCancel: () => void; onSave: (p: Panel) => void }) {
   const [p, setP] = useState<Panel>(panel);
   const [preview, setPreview] = useState<Panel>(panel);
@@ -476,7 +476,7 @@ function PanelEditor({ ctx, panel, vars, onCancel, onSave }: { ctx: Ctx; panel: 
       <div className="drawer-section">
         <h4>Preview</h4>
         <div className="dash-grid" style={{ gridTemplateColumns: "1fr" }}>
-          <PanelCard ctx={ctx} panel={{ ...preview, title: p.title, description: p.description, unit: p.unit, type: p.type, text: p.text, w: 1, h: 2 }} vars={vars} edit={false} />
+          <PanelCard ctx={ctx} panel={{ ...preview, title: p.title, description: p.description, unit: p.unit, type: p.type, text: p.text, w: 1, h: 2 }} vars={vars} names={names} edit={false} />
         </div>
       </div>
     </Drawer>
