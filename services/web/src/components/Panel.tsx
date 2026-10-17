@@ -16,11 +16,15 @@ export function Panel(props: { title: string; span?: number; right?: ReactNode; 
   );
 }
 
-/** Loading / error / empty states around a loaded result. */
+/** Loading / error / empty states around a loaded result, and a notice when it was cut at the row cap. */
 export function Loads(props: { q: Loaded; empty?: boolean; height?: number; children: () => ReactNode }) {
   const h = props.height ?? 140;
   if (props.q.error) return <div className="state error" style={{ minHeight: h }}>{props.q.error}</div>;
   if (!props.q.data) return <div className="skeleton" style={{ height: h }} />;
   if (props.empty) return <div className="state" style={{ minHeight: h }}>No data in this time range</div>;
-  return <>{props.children()}</>;
+  return <>{props.children()}{props.q.data.truncated && <Truncated />}</>;
+}
+
+export function Truncated() {
+  return <div className="panel-foot faint">Not everything is shown: the result reached its row limit. Narrow the time range or filters to see all of it.</div>;
 }

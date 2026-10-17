@@ -8,7 +8,7 @@ import { records } from "../api";
 import type { Ctx } from "../App";
 import { Tabs } from "../components/Charts";
 import { Loads } from "../components/Panel";
-import { useSql } from "../useQuery";
+import { type Loaded, useSql } from "../useQuery";
 import { bucketSeconds, fmtMs, fmtNum } from "../time";
 import { useRangeWindow } from "../useNow";
 
@@ -96,7 +96,7 @@ export function ServiceMap({ ctx }: { ctx: Ctx }) {
           <input className="input grow" placeholder="Search services…" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Search services" />
           <span className="faint">{nodes.length ? `${nodes.length} services · ${edges.length} connections · requests a minute` : ""}</span>
         </div>
-        <Loads q={nq.error ? nq : eq} empty={!nodes.length} height={520}>
+        <Loads q={both(nq, eq)} empty={!nodes.length} height={520}>
           {() => <Graph nodes={nodes} edges={edges} minutes={minutes} selected={sel} filter={filter.trim().toLowerCase()} onPick={setSel} />}
         </Loads>
       </div>
@@ -287,4 +287,10 @@ function Tile({ label, value, sub, pts, bars, bad }: { label: string; value: str
       </svg>
     </div>
   );
+}
+
+/** Two results as one for <Loads>: the first error, data once both have come (cut if either was). */
+function both(a: Loaded, b: Loaded): Loaded {
+  return { error: a.error || b.error, loading: a.loading || b.loading,
+           data: a.data && b.data ? { ...b.data, truncated: a.data.truncated || b.data.truncated } : null };
 }

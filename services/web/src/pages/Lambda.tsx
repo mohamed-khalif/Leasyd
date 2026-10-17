@@ -60,7 +60,8 @@ function Functions({ ctx }: { ctx: Ctx }) {
     return [...by.values()].sort((a, b) => b.n - a.n);
   }, [traced.data, cw.data]);
   const shown = fns.filter((f) => f.name.toLowerCase().includes(filter.toLowerCase()));
-  const loading = { data: traced.data && cw.data ? traced.data : null, error: traced.error || cw.error, loading: traced.loading || cw.loading };
+  const loading = { data: traced.data && cw.data ? { ...traced.data, truncated: traced.data.truncated || cw.data.truncated } : null,
+                    error: traced.error || cw.error, loading: traced.loading || cw.loading };
 
   return (
     <div className="lambda">

@@ -6,7 +6,7 @@ import type { GpuPrice } from "./model";
 import { discovery, Q, Uses } from "./queries";
 
 export type Hint = Partial<Record<Uses, string[]>>;
-export type Rows<T> = { rows: T[]; error: string | null; loading: boolean };
+export type Rows<T> = { rows: T[]; error: string | null; loading: boolean; truncated?: true };   // truncated: cut at the row cap
 
 const DISCOVERY_MINUTES = 15;
 
@@ -44,7 +44,7 @@ export function useRows<T>(q: Q | null, w: { start: string; end: string }, key: 
     let live = true;
     setState((s) => ({ ...s, loading: true, error: null }));
     sql({ sql: q.sql, ...w, services: servicesFor(q, hint!) }).then(
-      (r) => live && setState({ rows: records(r) as unknown as T[], error: null, loading: false }),
+      (r) => live && setState({ rows: records(r) as unknown as T[], error: null, loading: false, ...(r.truncated ? { truncated: true as const } : {}) }),
       (e: Error) => live && setState({ rows: [], error: e.message, loading: false }));
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed: `key` encodes window and refresh; the hint is waited for via `ready`
@@ -63,4 +63,4 @@ export function useGpuPrices(tick: number): { prices: GpuPrice[]; error: string 
 }
 
 /** Adapts Rows to what <Loads> expects. */
-export const loads = <T,>(r: Rows<T>) => ({ data: r.loading ? null : ({} as never), error: r.error, loading: r.loading });
+export const loads = <T,>(r: Rows<T>) => ({ data: r.loading ? null : ({ truncated: r.truncated } as never), error: r.error, loading: r.loading });
