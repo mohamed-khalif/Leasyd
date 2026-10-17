@@ -1,33 +1,35 @@
-import { Ai } from "./pages/Ai";
-import { Settings } from "./pages/Settings";
 import type React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { ApiError, me } from "./api";
 import { idToken, signOut } from "./auth";
 import { getConfig } from "./config";
 import { CONTACT_EMAIL, Shell } from "./Shell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SignIn } from "./pages/SignIn";
-import { Insights } from "./pages/Insights";
-import { GetStarted } from "./pages/GetStarted";
-import { DropRules } from "./pages/DropRules";
-import { Usage } from "./pages/Usage";
-import { Logs } from "./pages/Logs";
-import { Traces } from "./pages/Traces";
-import { ServiceMap } from "./pages/ServiceMap";
-import { Lambda } from "./pages/Lambda";
-import { Web } from "./pages/Web";
-import { Gpus } from "./pages/Gpus";
-import { Kubernetes } from "./pages/Kubernetes";
-import { Metrics } from "./pages/Metrics";
-import { Synthetics } from "./pages/Synthetics";
-import { Slos } from "./pages/Slos";
-import { Alerts } from "./pages/Alerts";
-import { QueryBuilder } from "./pages/QueryBuilder";
-import { Sql } from "./pages/Sql";
-import { Dashboards } from "./pages/Dashboards";
 import { RANGES, Range, rangeFromKey } from "./time";
 import { hashParams, replaceHashParams } from "./hashParams";
+
+// Each page's code loads when it is first opened (one chunk per page).
+const Ai = lazy(() => import("./pages/Ai").then((m) => ({ default: m.Ai })));
+const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
+const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
+const GetStarted = lazy(() => import("./pages/GetStarted").then((m) => ({ default: m.GetStarted })));
+const DropRules = lazy(() => import("./pages/DropRules").then((m) => ({ default: m.DropRules })));
+const Usage = lazy(() => import("./pages/Usage").then((m) => ({ default: m.Usage })));
+const Logs = lazy(() => import("./pages/Logs").then((m) => ({ default: m.Logs })));
+const Traces = lazy(() => import("./pages/Traces").then((m) => ({ default: m.Traces })));
+const ServiceMap = lazy(() => import("./pages/ServiceMap").then((m) => ({ default: m.ServiceMap })));
+const Lambda = lazy(() => import("./pages/Lambda").then((m) => ({ default: m.Lambda })));
+const Web = lazy(() => import("./pages/Web").then((m) => ({ default: m.Web })));
+const Gpus = lazy(() => import("./pages/Gpus").then((m) => ({ default: m.Gpus })));
+const Kubernetes = lazy(() => import("./pages/Kubernetes").then((m) => ({ default: m.Kubernetes })));
+const Metrics = lazy(() => import("./pages/Metrics").then((m) => ({ default: m.Metrics })));
+const Synthetics = lazy(() => import("./pages/Synthetics").then((m) => ({ default: m.Synthetics })));
+const Slos = lazy(() => import("./pages/Slos").then((m) => ({ default: m.Slos })));
+const Alerts = lazy(() => import("./pages/Alerts").then((m) => ({ default: m.Alerts })));
+const QueryBuilder = lazy(() => import("./pages/QueryBuilder").then((m) => ({ default: m.QueryBuilder })));
+const Sql = lazy(() => import("./pages/Sql").then((m) => ({ default: m.Sql })));
+const Dashboards = lazy(() => import("./pages/Dashboards").then((m) => ({ default: m.Dashboards })));
 
 /** range: the time range; tick: bumped by Refresh; now: the page's one "now" (epoch ms) that its
  *  windows end at, set when the range changes, on Refresh and on opening a page. */
@@ -165,7 +167,7 @@ export function App() {
            onRange={(r) => { setRange(r); safeSet("leasyd.range", r.key); }}
            onRefresh={() => setTick((t) => t + 1)}
            onSignOut={() => { signOut(); setUser(null); }}>
-      <ErrorBoundary resetKey={hash}>{page}</ErrorBoundary>
+      <ErrorBoundary resetKey={hash}><Suspense fallback={<div className="skeleton" style={{ height: 300 }} />}>{page}</Suspense></ErrorBoundary>
     </Shell>
   );
 }

@@ -65,3 +65,16 @@ test("a page that throws shows an error with a way back, not a blank app", async
     console.error = original;
   }
 });
+
+test("a page whose code can't be loaded (an old tab after a deploy) offers Reload", async () => {
+  const Boom = () => { throw new TypeError("Failed to fetch dynamically imported module: https://app/assets/Logs-abc.js"); };
+  const original = console.error;
+  console.error = () => undefined;
+  try {
+    const view = await render(<ErrorBoundary resetKey="a"><Boom /></ErrorBoundary>);
+    assert.match(view.container.textContent ?? "", /couldn't be loaded.*newer version.*Reload/);
+    await view.unmount();
+  } finally {
+    console.error = original;
+  }
+});

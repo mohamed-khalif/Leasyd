@@ -22,6 +22,13 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.error) return this.props.children;
+    // A page's code that can't be loaded: most likely a newer version is out (or the network dropped).
+    if (/dynamically imported module|Importing a module script failed|error loading dynamically/i.test(this.state.error.message)) return (
+      <div className="state error" role="alert">
+        This page couldn't be loaded; a newer version of Leasyd may be out.{" "}
+        <button className="btn small" onClick={() => location.reload()}>Reload</button>
+      </div>
+    );
     return (
       <div className="state error" role="alert">
         Something went wrong on this page: {this.state.error.message}.{" "}
