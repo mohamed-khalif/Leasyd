@@ -13,6 +13,11 @@ const src = new URL("../src/", import.meta.url).pathname;
 const filter = process.argv[2] ?? "";
 const tests = readdirSync(src, { recursive: true }).map(String)
   .filter((f) => /\.test\.tsx?$/.test(f) && f.includes(filter)).map((f) => join(src, f));
+if (!tests.length) {
+  // node --test with no files would look for tests on its own, outside src/.
+  console.error(`no test file under src/ matches "${filter}"`);
+  process.exit(1);
+}
 const out = mkdtempSync(join(tmpdir(), "leasyd-web-tests-"));
 // The mock backend finds its files next to itself (import.meta.url); keep that pointing at mock/.
 const keepMockPaths = {
