@@ -126,12 +126,12 @@ function FunctionView({ ctx, fn }: { ctx: Ctx; fn: string }) {
        FROM spans WHERE service = ${q(fn)} AND ${ENTRY} GROUP BY 1 ORDER BY 1`
     : `SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t, ${CW_AGGS}
        FROM metrics WHERE service = ${q(fn)} AND ${CW} AND ${PER_FN} GROUP BY 1 ORDER BY 1`, w, "s" + key + known + traced);
-  const s = search.trim().replace(/'/g, "''");
+  const s = search.trim();
   const invocations = useSql(traced ? `SELECT ts, span_id, trace_id, name, duration_ns, status_code,
         coalesce(attributes['faas.invocation_id'], attributes['faas.execution'], span_id) AS request_id,
         attributes['faas.coldstart'] AS cold, attributes
       FROM spans WHERE service = ${q(fn)} AND ${ENTRY}
-        ${s ? `AND coalesce(attributes['faas.invocation_id'], attributes['faas.execution'], span_id) ILIKE '%${s}%'` : ""}
+        ${s ? `AND ${requestIdMatch(s)}` : ""}
       ORDER BY ts DESC LIMIT 100` : null, w, "v" + key + s + traced);
 
   const a = { ...rows(cwInfo.data)[0], ...Object.fromEntries(Object.entries(rows(info.data)[0] ?? {}).filter(([, v]) => v != null)) };
@@ -279,4 +279,10 @@ function InvocationPanel({ ctx, fn, inv, onClose }: { ctx: Ctx; fn: string; inv:
       </div>
     </aside>
   );
+}
+
+/** SQL: the invocation's request id contains `text` (any case). contains(), not ILIKE: _ and % in
+ *  a pasted id are characters, not wildcards. Exported for tests. */
+export function requestIdMatch(text: string): string {
+  return `contains(lower(coalesce(attributes['faas.invocation_id'], attributes['faas.execution'], span_id)), lower('${text.replace(/'/g, "''")}'))`;
 }
