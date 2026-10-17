@@ -1,6 +1,6 @@
 // Query Builder: one chart from one or more queries. Each query is built on Tracing, Logging or
 // Metrics (which write PromQL for you) or written as PromQL, and runs over all signals.
-import { KeyboardEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
 import { Drawer, StackedBars } from "../components/Charts";
@@ -12,7 +12,7 @@ import { useRangeWindow } from "../useNow";
 type Mode = "tracing" | "logging" | "metrics" | "promql";
 type Filter = { label: string; op: "=" | "!=" | "=~" | "!~"; value: string };
 type Builder = { measure: string; filters: Filter[]; groupBy: string[]; metric: string; agg: string };
-type Q = { id: number; name: string; mode: Mode; promql: string; b: Builder; hidden?: boolean };
+export type Q = { id: number; name: string; mode: Mode; promql: string; b: Builder; hidden?: boolean };
 type Settings = { chart: "line" | "area" | "bars"; unit: string; decimals: string; legend: boolean; threshold: string; sort: "name" | "value" };
 
 const PALETTE = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)",
@@ -436,22 +436,24 @@ function BuilderForm({ q, metrics, kind, onChange }: { q: Q; metrics: string[]; 
 type Res = { data: PromSeries[] | null; error: string | null; loading: boolean; stats?: Record<string, number> };
 
 /** Runs each query (with $__interval filled in) when its text, the range or the refresh tick changes. */
-function useResults(queries: Q[], texts: string[], w: { start: string; end: string }, step: number, tick: string): Res[] {
+export function useResults(queries: Q[], texts: string[], w: { start: string; end: string }, step: number, tick: string): Res[] {
   const [state, setState] = useState<Record<string, Res>>({});
   const keys = texts.map((t) => `${t}|${w.start}|${w.end}|${step}|${tick}`);
+  // Each answer goes to its own key's slot, so it is kept even when other queries change meanwhile
+  // (stopping it then left that query on "loading" for good: code-audit B1). Only unmounting stops it.
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);   // StrictMode mounts twice
   useEffect(() => {
-    let live = true;
     keys.forEach((k, i) => {
       if (state[k] || !texts[i]?.trim() || queries[i]?.hidden) return;
       setState((s) => ({ ...s, [k]: { data: null, error: null, loading: true } }));
       const text = texts[i].replace(/\$__rate_interval|\$__interval/g, `${step}s`);
       promql({ promql: text, start: w.start, end: w.end, step }).then(
-        (r) => live && setState((s) => ({ ...s, [k]: { data: r.data.result, error: null, loading: false, stats: r.stats } })),
-        (e: Error) => live && setState((s) => ({ ...s, [k]: { data: null, error: e.message, loading: false } })),
+        (r) => mounted.current && setState((s) => ({ ...s, [k]: { data: r.data.result, error: null, loading: false, stats: r.stats } })),
+        (e: Error) => mounted.current && setState((s) => ({ ...s, [k]: { data: null, error: e.message, loading: false } })),
       );
     });
-    return () => { live = false; };
-  }, [keys.join("\n"), queries.map((q) => q.hidden).join()]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed per query (text, window, step, tick); see code-audit B1
+  }, [keys.join("\n"), queries.map((q) => q.hidden).join()]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed per query (text, window, step, tick)
   return keys.map((k) => state[k]);
 }
 
