@@ -975,11 +975,13 @@ def _cancel_key(tenant, job):
 
 
 def _exists(key):
+    """Is this object of ours there? Without s3:ListBucket (the query role has none) S3 answers a key
+    that isn't there with 403, not 404: both mean absent (as for job answers in job_status)."""
     try:
         _s3().head_object(Bucket=lookup.BUCKET, Key=key)
         return True
     except ClientError as e:
-        if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound", "403", "AccessDenied", "Forbidden"):
             return False
         raise
 

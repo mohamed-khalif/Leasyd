@@ -892,3 +892,15 @@ def test_worker_out_of_file_descriptors_exits_for_a_fresh_container(monkeypatch)
     with pytest.raises(ValueError):
         query.worker({"query": {}}, None)
     assert exits == [1]
+
+
+def test_a_missing_marker_reads_as_absent_even_as_403(monkeypatch):
+    """Found on AWS 2026-10-17: without s3:ListBucket (the query role has none), S3 answers HeadObject
+    for a key that isn't there with 403, not 404; every job poll then failed (a Lambda error, 503)."""
+    from botocore.exceptions import ClientError
+
+    class S3:
+        def head_object(self, Bucket, Key):
+            raise ClientError({"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject")
+    monkeypatch.setattr(query, "_s3", lambda: S3())
+    assert query._exists("_results/jobs/acme/" + "0" * 32 + ".cancel") is False
