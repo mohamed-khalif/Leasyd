@@ -711,6 +711,9 @@ def test_a_query_past_the_deadline_runs_once(data, monkeypatch, coordinator):
     coordinator.finish()
     assert len(runs) == 1
     assert get_job("acme", out["job"])[1]["rows"] == [[len(data)]]
+    # B9: charged once, by that run (the API used to charge it again).
+    t = boto3.resource("dynamodb").Table("obs-tenants")
+    assert t.get_item(Key={"pk": f"usage#search#acme#{query._day()}"})["Item"]["n"] == 1
 
 
 def test_failed_jobs_say_so(data, monkeypatch, coordinator):
