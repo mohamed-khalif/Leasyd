@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtNum, fmtTime, Range } from "../time";
 
 export type Series = { label: string; color: string; points: [number, number][] }; // [epoch ms, value]
@@ -22,7 +22,8 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
 
   const h = props.height ?? 160, padR = 8, padT = 8, padB = 22;
   // Loops, not Math.min(...points): spreading a big result (~100k+ points) throws a RangeError.
-  const now = Date.now();
+  // "Now" when the data or range came, not per render: hovering re-renders, and the axis mustn't creep.
+  const now = useMemo(() => Date.now(), [props.series, props.range]);   // eslint-disable-line react-hooks/exhaustive-deps -- read again when the data or range changes
   const x1 = props.range.to ?? now;
   let x0 = props.range.from ?? x1 - props.range.minutes * 60_000;
   const lines = [...(props.threshold != null ? [{ value: props.threshold, color: "var(--sev-error)" }] : []), ...(props.thresholds ?? [])];
@@ -43,6 +44,23 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
     return s.points.reduce((a, b) => (Math.abs(b[0] - hoverT) < Math.abs(a[0] - hoverT) ? b : a));
   };
 
+  // The lines: sorted and drawn once per data and size, not on every hover.
+  const paths = useMemo(() => props.series.map((s) => {
+    const pts = [...s.points].sort((a, b) => a[0] - b[0]);
+    if (!pts.length) return null;
+    const line = pts.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
+    return (
+      <g key={s.label}>
+        {props.area !== false && (
+          <path d={`${line} L${X(pts[pts.length - 1][0]).toFixed(1)},${Y(0)} L${X(pts[0][0]).toFixed(1)},${Y(0)} Z`}
+                fill={s.color} opacity={0.14} />
+        )}
+        <path d={line} fill="none" stroke={s.color} strokeWidth={1.4} />
+        {props.dots && pts.length <= 120 && pts.map((p) => <circle key={p[0]} cx={X(p[0])} cy={Y(p[1])} r={1.6} fill={s.color} />)}
+      </g>
+    );
+  }), [props.series, props.area, props.dots, x0, x1, w, h, padL, ymax]);   // eslint-disable-line react-hooks/exhaustive-deps -- X and Y are made from these
+
   return (
     <div>
       {props.legend !== false && <div className="legend">{props.series.map((s) => <span key={s.label}><i style={{ background: s.color }} />{s.label}</span>)}</div>}
@@ -62,21 +80,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
               {fmtTime(new Date(t).toISOString(), props.range)}
             </text>
           ))}
-          {props.series.map((s) => {
-            const pts = [...s.points].sort((a, b) => a[0] - b[0]);
-            if (!pts.length) return null;
-            const line = pts.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
-            return (
-              <g key={s.label}>
-                {props.area !== false && (
-                  <path d={`${line} L${X(pts[pts.length - 1][0]).toFixed(1)},${Y(0)} L${X(pts[0][0]).toFixed(1)},${Y(0)} Z`}
-                        fill={s.color} opacity={0.14} />
-                )}
-                <path d={line} fill="none" stroke={s.color} strokeWidth={1.4} />
-                {props.dots && pts.length <= 120 && pts.map((p) => <circle key={p[0]} cx={X(p[0])} cy={Y(p[1])} r={1.6} fill={s.color} />)}
-              </g>
-            );
-          })}
+          {paths}
           {lines.map((l) => (
             <line key={`${l.value}${l.color}`} x1={padL} x2={w - padR} y1={Y(l.value)} y2={Y(l.value)} stroke={l.color} strokeDasharray="5 4" />
           ))}
