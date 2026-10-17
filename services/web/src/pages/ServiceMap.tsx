@@ -4,13 +4,14 @@
 // Clicking a service opens its panel: what it runs on, requests / errors / duration over time,
 // and its operations.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fmtMs, fmtNum } from "../lib/format";
 import { sqlString as q } from "../lib/sql";
 import { records } from "../api";
 import type { Ctx } from "../App";
 import { Tabs } from "../components/Charts";
 import { Loads } from "../components/Panel";
 import { type Loaded, useSql } from "../useQuery";
-import { bucketSeconds, fmtMs, fmtNum } from "../time";
+import { bucketSeconds } from "../time";
 import { useRangeWindow } from "../useNow";
 
 type Node = { service: string; requests: number; errors: number; avg_ms: number; attrs: Record<string, string>; x: number; y: number };

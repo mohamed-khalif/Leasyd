@@ -2,9 +2,10 @@
 // checks and alerts and answers with the evidence. The start page shows live insights (computed from
 // your data, no AI) to investigate; a conversation shows each step as it happens.
 import { FormEvent, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { ai, AiConversation, AiStep, checks, promqlAt } from "../api";
 import type { Ctx } from "../App";
-import { fmtNum, rangeWindow } from "../time";
+import { rangeWindow } from "../time";
 
 const SUGGESTIONS = [
   "What's broken right now?",

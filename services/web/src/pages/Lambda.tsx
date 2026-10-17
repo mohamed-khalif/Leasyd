@@ -5,6 +5,7 @@
 // (its entry spans); an invocation opens with its duration against the function's others, its
 // payload (the aws.lambda.event or faas.event attribute, when recorded), its logs and its trace.
 import { useMemo, useState } from "react";
+import { fmtMs, fmtNum, fmtTime } from "../lib/format";
 import { sqlString as q } from "../lib/sql";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
@@ -12,7 +13,7 @@ import { useDebounced } from "../useDebounced";
 import { StackedBars, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum, fmtTime } from "../time";
+import { bucketSeconds } from "../time";
 import { useSql } from "../useQuery";
 import { DurationCompare, KV, Span } from "../components/SpanDetails";
 import { isError } from "../lib/telemetry";

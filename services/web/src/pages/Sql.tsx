@@ -1,12 +1,13 @@
 // SQL: one read-only SELECT (DuckDB SQL) over the tables logs, spans and metrics, for the time
 // range at the top. Results as a table, or a chart when the first column is a time.
 import { KeyboardEvent, useMemo, useRef, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { sql as runSql, SqlResult } from "../api";
 import type { Ctx } from "../App";
 import { TimeSeries } from "../components/TimeSeries";
 import { downloadCsv } from "../csv";
 import { Capped } from "../components/Capped";
-import { fmtNum, rangeWindow } from "../time";
+import { rangeWindow } from "../time";
 
 const TABLES: [string, string, [string, string][]][] = [
   ["logs", "One row per log record", [["ts", "timestamp"], ["service", "text"], ["severity_number", "int"], ["severity_text", "text"], ["body", "text"],

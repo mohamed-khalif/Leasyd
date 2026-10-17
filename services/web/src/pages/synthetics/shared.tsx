@@ -1,8 +1,8 @@
 // What the synthetic-check pages share (the list and form in Synthetics.tsx, one check in
 // CheckDetail.tsx): how steps, constraints and results read.
 import { useState } from "react";
+import { fmtNum } from "../../lib/format";
 import { BrowserStep, CheckResult, Constraint, Step, StepResult } from "../../api";
-import { fmtNum } from "../../time";
 
 export const OK = "var(--ok, #3fb68b)";
 export const every = (f: number) => (f === 60 ? "1 hour" : `${f} min`);

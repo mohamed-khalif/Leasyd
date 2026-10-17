@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fmtNum, fmtTime, Range } from "../time";
+import { fmtNum, fmtTime } from "../lib/format";
+import { Range } from "../time";
 
 export type Series = { label: string; color: string; points: [number, number][] }; // [epoch ms, value]
 

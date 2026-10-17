@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { account, Meter, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Gauge, Stat } from "../components/Stat";
 import { PRICE, PRICE_LABEL, usd } from "../pricing";
-import { fmtNum } from "../time";
 import { Loaded, useQuery } from "../useQuery";
 import { useNow } from "../useNow";
 

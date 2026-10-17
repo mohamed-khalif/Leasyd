@@ -2,6 +2,7 @@
 // checks), volumes, then folding sections for tracing, logging, metrics and alerting, each with
 // a way into its explorer.
 import { useMemo } from "react";
+import { fmtMs, fmtNum } from "../lib/format";
 import { Check, Query, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { CheckListError, useCheckList } from "../checkList";
@@ -9,7 +10,7 @@ import { Bar, Card, Cell, Heatmap, Section, StackedBars, StackKey } from "../com
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum, Range } from "../time";
+import { bucketSeconds, Range } from "../time";
 import { useQuery } from "../useQuery";
 import { isError, SEVERITY_RANGES, severityRange } from "../lib/telemetry";
 import { useRangeWindow } from "../useNow";

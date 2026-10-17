@@ -5,12 +5,13 @@
 // percentile (as Google rates them) with the share of good ones, pages, JavaScript errors, failing
 // or slow API calls (each linked to its backend trace) and browsers; a visit opens with its events.
 import { useState } from "react";
+import { fmtNum, fmtTime } from "../lib/format";
 import { sqlString as q } from "../lib/sql";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
 import { Card, Drawer, StackedBars } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
-import { bucketSeconds, fmtNum, fmtTime } from "../time";
+import { bucketSeconds } from "../time";
 import { useSql } from "../useQuery";
 import { useRangeWindow } from "../useNow";
 

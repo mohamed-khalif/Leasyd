@@ -1,9 +1,9 @@
 // Pieces of the span view shared by Traces and Lambda: the span type, a key/value list, and a
 // span's duration against its operation's other spans.
 import { records } from "../api";
+import { fmtMs, fmtNum } from "../lib/format";
 import { bucketLow, LOG_STEPS } from "./Charts";
 import { Loads } from "./Panel";
-import { fmtMs, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
 
 export type SpanEvent = { at: number; name: string; attributes: Record<string, string> };   // at: ns since the epoch
@@ -20,7 +20,6 @@ export function KV({ entries, title }: { entries: [string, unknown][]; title?: s
     </div>
   );
 }
-
 
 /** This span's duration against the same operation's spans within half an hour either side. */
 export function DurationCompare({ span, noun = "span" }: { span: Span; noun?: string }) {

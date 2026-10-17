@@ -2,13 +2,13 @@
 // (endpoint + API keys, a new key shown once), and the team (invite, remove). Owners change keys
 // and people; members see them.
 import { FormEvent, useEffect, useState } from "react";
+import { fmtNum, fmtUnit } from "../lib/format";
 import { account, Account, KeyScope, rumSnippet } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
 import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
 import { DEFAULT_GPU_PRICES, GpuPrice } from "../infra/model";
-import { fmtNum, fmtUnit } from "../time";
 
 const SCOPES = { ingest: "Send data", read: "Read data (API)", browser: "Web monitoring (browser)" } as const;
 

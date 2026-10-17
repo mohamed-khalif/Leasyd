@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
 import { useHashParam } from "../hashParams";
@@ -6,7 +7,7 @@ import { Tabs, Treemap } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Series, TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtNum } from "../time";
+import { bucketSeconds } from "../time";
 import { useQuery } from "../useQuery";
 import { useRangeWindow } from "../useNow";
 

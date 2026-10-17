@@ -36,30 +36,6 @@ export function bucketSeconds(range: Range): number {
   return [10, 30, 60, 300, 900, 1800, 3600, 7200, 21600, 43200, 86400].find((b) => b >= target) ?? 86400;
 }
 
-export function fmtTime(iso: string, range?: Range): string {
-  const d = new Date(iso);
-  const opts: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit", hour12: false };
-  if (range && range.minutes <= 15) opts.second = "2-digit";
-  if (range && range.minutes > 1440) return d.toLocaleString([], { month: "short", day: "numeric", ...opts });
-  return d.toLocaleTimeString([], opts);
-}
-
-export function fmtNum(n: number): string {
-  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + "B";
-  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
-  if (n >= 1e4) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + "K";
-  if (Number.isInteger(n) || Math.abs(n) >= 100) return Math.round(n).toLocaleString();
-  return Number(n.toPrecision(3)).toLocaleString();   // e.g. 0.372, 12.5
-}
-
-export function fmtMs(ns: number): string {
-  const ms = ns / 1e6;
-  if (ms >= 1000) return (ms / 1000).toFixed(2) + " s";
-  if (ms >= 10) return ms.toFixed(0) + " ms";
-  if (ms >= 1) return ms.toFixed(1) + " ms";
-  return ms.toFixed(2) + " ms";
-}
-
 /** Data is kept this many full days plus today (UTC); the API never reads earlier. */
 export const RETENTION_DAYS = 30;
 /** The oldest moment kept: midnight UTC, RETENTION_DAYS days ago. */
@@ -67,35 +43,4 @@ export function keptFrom(now = Date.now()): number {
   const d = new Date(now - RETENTION_DAYS * 86_400_000);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
-export const fmtDay = (t: number) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 
-/** A value in a unit, as people read it: 1.2 s, 3 min, 2 days, 4 years; 300 MB; 99.5%. */
-export function fmtUnit(v: number, unit = "", decimals?: number): string {
-  const places = decimals == null || !isFinite(decimals) ? null : Math.min(20, Math.max(0, Math.round(decimals)));   // toFixed throws outside 0-100
-  const n = (x: number) => (places != null ? x.toFixed(places) : fmtNum(x));
-  const scaled = (x: number, steps: [number, string][]) => {
-    const [div, name] = steps.find(([d]) => Math.abs(x) >= d) ?? steps[steps.length - 1];
-    return `${n(x / div)} ${name}`;
-  };
-  if (!isFinite(v)) return String(v);
-  if (unit === "ms" || unit === "s" || unit === "ns") {
-    const ms = unit === "s" ? v * 1000 : unit === "ns" ? v / 1e6 : v;
-    if (ms === 0) return "0";
-    if (Math.abs(ms) < 0.001) return `${n(ms * 1e6)} ns`;
-    if (Math.abs(ms) < 1) return `${n(ms * 1000)} µs`;
-    return scaled(ms, [[31_536_000_000, "years"], [2_592_000_000, "months"], [86_400_000, "days"], [3_600_000, "h"], [60_000, "min"], [1000, "s"], [1, "ms"]]);
-  }
-  if (unit === "bytes") return v === 0 ? "0" : scaled(v, [[1e12, "TB"], [1e9, "GB"], [1e6, "MB"], [1e3, "KB"], [1, "bytes"]]);
-  if (unit === "%") return `${n(v)}%`;
-  if (unit === "percentunit") return `${n(v * 100)}%`;
-  if (unit === "/s") return `${n(v)}/s`;
-  return n(v);
-}
-
-/** A timestamp as local "YYYY-MM-DD hh:mm:ss.mmm" (the text itself when it isn't one). */
-export function fmtTs(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(+d)) return iso;
-  const p = (n: number, l = 2) => String(n).padStart(l, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
-}

@@ -1,11 +1,12 @@
 import { FormEvent, Fragment, useMemo, useState } from "react";
+import { fmtNum, fmtTs } from "../lib/format";
 import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
 import { useDebounced } from "../useDebounced";
 import { useHashParam, useHashSearch } from "../hashParams";
 import { Bar, ColumnPicker, StackedBars, StackKey, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
-import { bucketSeconds, fmtNum, fmtTs } from "../time";
+import { bucketSeconds } from "../time";
 import { SEVERITY_RANGES, severityRange } from "../lib/telemetry";
 import { useQuery } from "../useQuery";
 import { useRangeWindow } from "../useNow";

@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { fmtDay } from "./lib/format";
 import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu } from "./icons";
-import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
+import { customRange, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { useAccount } from "./useAccount";
 
 export const CONTACT_EMAIL = "support@leasyd.com";

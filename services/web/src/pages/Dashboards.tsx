@@ -1,13 +1,14 @@
 // Dashboards: a list on the left (search, favorites, create), the chosen dashboard on the right:
 // its filters (e.g. Service Name), and a grid of panels, each one or more PromQL queries.
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fmtUnit } from "../lib/format";
 import { Dashboard, dashboards, DashboardSummary, Panel, PanelType, promql, promqlAt, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
 import { checkNameMap, useCheckList } from "../checkList";
 import { BUILTIN } from "../builtinDashboards";
 import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtUnit, Range, rangeWindow } from "../time";
+import { bucketSeconds, Range, rangeWindow } from "../time";
 import { useQuery } from "../useQuery";
 import { useRangeWindow } from "../useNow";
 
@@ -283,7 +284,6 @@ export function fillQuery(text: string, vars: Record<string, string[]>, step: nu
 }
 
 // ------------------------------------------------------------------ panels
-
 
 type Loaded = { series: (Series & { last: number })[]; error?: string } | null;
 

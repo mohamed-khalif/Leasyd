@@ -1,12 +1,11 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { fmtNum, fmtTs } from "../lib/format";
 import { BrowserAction, BrowserStep, Check, CheckResult, checks, CheckSettings, Constraint, Extraction, notExcluded, records, Step } from "../api";
 import type { Ctx } from "../App";
 import { useCheckList } from "../checkList";
 import { Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
-import { fmtNum } from "../time";
 import { useQuery } from "../useQuery";
-import { fmtTs } from "../time";
 import { describeStep, every, isBrowser, OK, OPS, pct, ResultBox } from "./synthetics/shared";
 import { CheckDetail } from "./CheckDetail";
 import { Maintenance } from "./Maintenance";
@@ -17,7 +16,6 @@ import { useRangeWindow } from "../useNow";
 // all with attribute check.id. One check's page: CheckDetail.tsx.
 const SUCCESS = "synthetics.check.success", DURATION = "synthetics.check.duration";
 const FREQUENCIES = [1, 5, 15, 30, 45, 60];
-
 
 export function Synthetics({ ctx, path }: { ctx: Ctx; path: string }) {
   const [, , id, sub] = path.split("/");            // /synthetics[/new | /windows[/…] | /<id>[/edit]]
@@ -88,7 +86,6 @@ function Dot({ ok, title }: { ok: boolean | null; title: string }) {
   const color = ok == null ? "var(--text-3)" : ok ? OK : "var(--sev-error)";
   return <span title={title} aria-label={title} style={{ display: "inline-block", width: 9, height: 9, borderRadius: 9, background: color }} />;
 }
-
 
 // ------------------------------------------------------------------ create / edit
 
@@ -504,6 +501,5 @@ function ConstraintRow({ c, onChange, onRemove }: { c: Constraint; onChange: (c:
     <Remove onClick={onRemove} />
   </>);
 }
-
 
 

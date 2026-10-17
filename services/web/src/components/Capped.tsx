@@ -1,5 +1,5 @@
 import { ReactNode, useState } from "react";
-import { fmtNum } from "../time";
+import { fmtNum } from "../lib/format";
 
 /** Long lists draw their first PAGE_ROWS rows; "Show more" adds as many again. */
 export const PAGE_ROWS = 500;

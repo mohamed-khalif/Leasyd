@@ -4,17 +4,16 @@
 // heat) and Planning (daily peaks, never-needed GPUs, the demand trend). A GPU opens in a drawer.
 // Queries: infra/queries.ts; conclusions: infra/analysis.ts; contract: docs/gpu-kubernetes.md.
 import { useState } from "react";
+import { ago, fmtNum, hours, mib, money, pct, shortGpu } from "../lib/format";
 import type { Ctx } from "../App";
 import { Capped } from "../components/Capped";
 import { Card, Drawer, StackedBars, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
 import { byModel, byTeam, fleetSpend, forecast, now, recommendations } from "../infra/analysis";
-import { ago, hours, mib, money, pct, shortGpu } from "../infra/format";
 import { HOT_TEMP, IDLE_UTIL, priceFor, xidInfo, type GpuPrice } from "../infra/model";
 import * as Q from "../infra/queries";
 import { loads, useGpuPrices, useHint, useRows } from "../infra/useInfra";
-import { fmtNum } from "../time";
 import { useRangeWindow } from "../useNow";
 
 type Tab = "overview" | "workloads" | "health" | "planning";

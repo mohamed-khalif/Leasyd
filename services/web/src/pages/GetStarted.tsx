@@ -6,12 +6,12 @@
 // Install files (collector.sh, the Ruby runtime metrics, the AWS templates) are served by the web app
 // itself under /install/ (infra/deploy-phaseW1.sh copies them from examples/).
 import { ReactNode, useEffect, useMemo, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { account, query, records, rumSnippet } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
 import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
-import { fmtNum } from "../time";
 
 type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "web";
 const SOURCES: [Source, string, string][] = [
@@ -327,7 +327,6 @@ OTEL_EXPORTER_OTLP_HEADERS=x-api-key=${key}`}</Code>
       );
   }
 }
-
 
 /** Web monitoring: a public browser key for the site's origins (not the API key above), then one script tag. */
 function WebGuide() {

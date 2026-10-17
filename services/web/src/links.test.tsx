@@ -1,5 +1,6 @@
 // B5: a malformed or hand-edited link must not blank the app.
 import "./test/dom";
+import { fmtUnit } from "./lib/format";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { act } from "react";
@@ -7,7 +8,6 @@ import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { installMockBackend, inFlight } from "./test/mockBackend";
 import { render, settle } from "./test/dom";
-import { fmtUnit } from "./time";
 
 before(installMockBackend);
 

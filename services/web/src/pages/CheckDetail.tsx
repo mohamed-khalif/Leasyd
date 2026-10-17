@@ -1,15 +1,15 @@
 // One synthetic check: Overview (configuration, uptime, timings), Check runs (every run, with a
 // side panel showing the run's steps, requests and responses) and Settings.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fmtMs, fmtNum, fmtTs } from "../lib/format";
 import { BrowserStep, Check, CheckResult, checks, notExcluded, records, Step } from "../api";
 import type { Ctx } from "../App";
 import { Block, Card, Drawer, StatusStrip, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum } from "../time";
+import { bucketSeconds } from "../time";
 import { useQuery } from "../useQuery";
-import { fmtTs } from "../time";
 import { describeConstraint, describeStep, every, isBrowser, OK, pct, ResultBox } from "./synthetics/shared";
 import { useRangeWindow } from "../useNow";
 

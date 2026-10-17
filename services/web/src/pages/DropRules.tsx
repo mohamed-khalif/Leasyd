@@ -4,12 +4,12 @@
 // everyone sees them. A rule's preview counts what it would have matched in the last 24 hours of
 // stored data (a query with the same conditions), and what that would save a month.
 import { useEffect, useMemo, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { account, DropCondition, DropRule, Meter, query, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
 import { Panel } from "../components/Panel";
 import { PRICE, PRICE_LABEL, usd } from "../pricing";
-import { fmtNum } from "../time";
 
 const SIGNALS: Signal[] = ["logs", "traces", "metrics"];
 const SIGNAL_NAME: Record<Signal, string> = { logs: "Logs", traces: "Spans", metrics: "Metrics" };

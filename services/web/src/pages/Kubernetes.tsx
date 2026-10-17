@@ -4,16 +4,16 @@
 // drawer (?pod=namespace/name): its containers, usage against limits, events, logs and traces.
 // Queries: infra/queries.ts; contract: docs/gpu-kubernetes.md.
 import { useMemo, useState } from "react";
+import { ago, bytes, cores, fmtNum, pct } from "../lib/format";
 import type { Ctx } from "../App";
 import { Capped } from "../components/Capped";
 import { Card, Drawer, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
-import { ago, bytes, cores, pct } from "../infra/format";
 import { BAD_REASONS, PHASES } from "../infra/model";
 import * as Q from "../infra/queries";
 import { loads, useHint, useRows } from "../infra/useInfra";
-import { bucketSeconds, fmtNum } from "../time";
+import { bucketSeconds } from "../time";
 import { useRangeWindow } from "../useNow";
 
 type Tab = "overview" | "nodes" | "workloads" | "pods" | "events";

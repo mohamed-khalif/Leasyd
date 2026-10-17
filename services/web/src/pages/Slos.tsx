@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { Check, notExcluded, Query, Result, Slo, slos, Where } from "../api";
 import type { Ctx } from "../App";
 import { CheckListError, useCheckList } from "../checkList";
@@ -6,7 +7,7 @@ import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Stat } from "../components/Stat";
 import { TimeSeries } from "../components/TimeSeries";
-import { customRange, fmtNum } from "../time";
+import { customRange } from "../time";
 import { Loaded, useQuery } from "../useQuery";
 import { useNow } from "../useNow";
 

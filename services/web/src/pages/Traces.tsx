@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
+import { fmtMs, fmtNum, fmtTs } from "../lib/format";
 import { records, Where } from "../api";
 import type { Ctx } from "../App";
 import { useHashParam, useHashSearch } from "../hashParams";
 import { bucketLow, Cell, Column, ColumnPicker, Heatmap, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum } from "../time";
+import { bucketSeconds } from "../time";
 import { useQuery } from "../useQuery";
-import { fmtTs } from "../time";
 import { DurationCompare, KV, type Span, type SpanEvent } from "../components/SpanDetails";
 import { Capped } from "../components/Capped";
 import { isError } from "../lib/telemetry";
@@ -202,7 +202,6 @@ function Explorer({ ctx }: { ctx: Ctx }) {
     </div>
   );
 }
-
 
 /** A span's events (OTLP span events: name, time, attributes), oldest first. */
 function spanEvents(r: Record<string, unknown>, start: number): SpanEvent[] {
@@ -404,7 +403,6 @@ function SpanPanel({ span, logs }: { span: Span; logs: Record<string, unknown>[]
     </aside>
   );
 }
-
 
 
 

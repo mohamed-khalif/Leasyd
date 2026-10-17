@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { fmtNum, fmtTs } from "../lib/format";
 import { AlertChannel, AlertRule, alerts, Check, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
 import type { Ctx } from "../App";
 import { useDebounced } from "../useDebounced";
@@ -7,9 +8,7 @@ import { ALERT_TEMPLATES, AlertTemplate } from "../infra/alertTemplates";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Series, TimeSeries } from "../components/TimeSeries";
-import { fmtNum } from "../time";
 import { useQuery } from "../useQuery";
-import { fmtTs } from "../time";
 import { useRangeWindow } from "../useNow";
 
 // Alerts: rules (when) and channels (where). Every firing and resolution is also a log of the tenant

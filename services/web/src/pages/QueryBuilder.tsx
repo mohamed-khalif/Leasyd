@@ -1,6 +1,7 @@
 // Query Builder: one chart from one or more queries. Each query is built on Tracing, Logging or
 // Metrics (which write PromQL for you) or written as PromQL, and runs over all signals.
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { fmtNum } from "../lib/format";
 import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
 import { replaceHashParams } from "../hashParams";
@@ -8,7 +9,7 @@ import { useDebounced } from "../useDebounced";
 import { Capped } from "../components/Capped";
 import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtNum } from "../time";
+import { bucketSeconds } from "../time";
 import { useQuery } from "../useQuery";
 import { useRangeWindow } from "../useNow";
 

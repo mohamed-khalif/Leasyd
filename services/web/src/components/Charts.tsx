@@ -2,7 +2,8 @@
 // a tree map, a pass/fail strip, a views sidebar, tabs, a column picker, collapsible sections
 // and a side drawer. Plain SVG and CSS; sizes follow the container.
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { fmtMs, fmtNum, fmtTime, Range } from "../time";
+import { fmtMs, fmtNum, fmtTime } from "../lib/format";
+import { Range } from "../time";
 
 /** The element's width, kept current as it resizes. */
 export function useWidth(initial = 600) {
