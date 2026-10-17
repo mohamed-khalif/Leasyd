@@ -46,7 +46,23 @@ Parameters:
     Default: ""
     Description: obs-dns zone, where the ApiHostName record goes.
 
+  IngestReservedConcurrency:
+    Type: Number
+    Default: 1000
+    MinValue: 0
+    Description: >
+      Lambda concurrency reserved for obs-ingest, so queries can never starve ingest (0 = none).
+      Also its ceiling: 1000 covers the stage's 5,000 requests/s at ingest's p99 of 157 ms
+      (785 at once); the 60-day peak was 79. Needs an account limit of at least 3,300.
+  AuthorizerReservedConcurrency:
+    Type: Number
+    Default: 800
+    MinValue: 0
+    Description: Reserved for obs-ingest-authorizer (0 = none); 5,000 requests/s x p99 133 ms = 665; the 60-day peak was 55.
+
 Conditions:
+  ReserveIngest: !Not [!Equals [!Ref IngestReservedConcurrency, 0]]
+  ReserveAuthorizer: !Not [!Equals [!Ref AuthorizerReservedConcurrency, 0]]
   Logins: !Not [!Equals [!Ref UserPoolArn, ""]]
   CustomDomain: !Not [!Equals [!Ref CertificateArn, ""]]
 
@@ -91,6 +107,7 @@ Resources:
     DependsOn: AuthorizerLogGroup
     Properties:
       FunctionName: obs-ingest-authorizer
+      ReservedConcurrentExecutions: !If [ReserveAuthorizer, !Ref AuthorizerReservedConcurrency, !Ref "AWS::NoValue"]
       Description: API key -> tenant for the ingest API
       Runtime: python3.12
       Architectures: [arm64]
@@ -165,6 +182,7 @@ Resources:
     DependsOn: IngestLogGroup
     Properties:
       FunctionName: obs-ingest
+      ReservedConcurrentExecutions: !If [ReserveIngest, !Ref IngestReservedConcurrency, !Ref "AWS::NoValue"]
       Description: OTLP/HTTP -> the tenant's Firehose stream
       Runtime: python3.12
       Architectures: [arm64]

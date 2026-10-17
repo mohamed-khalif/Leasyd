@@ -30,6 +30,30 @@ Parameters:
     AllowedValues: [ranges, download]
     Description: ranges reads only the Parquet columns a query needs, in place; download fetches whole files.
 
+  WorkerConcurrency:
+    Type: Number
+    Default: 1000
+    MinValue: 0
+    Description: >
+      Most obs-query-worker instances at once, all tenants (0 = no cap). A query fans out to at
+      most MaxWorkers; the 60-day peak (a stress test) was 849. Reserved, so it is also kept
+      apart from ingest's share.
+  ApiConcurrency:
+    Type: Number
+    Default: 300
+    MinValue: 0
+    Description: Most obs-query-api instances at once (0 = no cap); the 60-day peak was 28.
+  CoordinatorConcurrency:
+    Type: Number
+    Default: 100
+    MinValue: 0
+    Description: Most obs-query (alerts, AI, MCP) instances at once (0 = no cap); the 60-day peak was 8.
+
+Conditions:
+  CapWorkers: !Not [!Equals [!Ref WorkerConcurrency, 0]]
+  CapApi: !Not [!Equals [!Ref ApiConcurrency, 0]]
+  CapCoordinator: !Not [!Equals [!Ref CoordinatorConcurrency, 0]]
+
 Resources:
   CoordinatorLogGroup:
     Type: AWS::Logs::LogGroup
@@ -48,6 +72,7 @@ Resources:
     DependsOn: CoordinatorLogGroup
     Properties:
       FunctionName: obs-query
+      ReservedConcurrentExecutions: !If [CapCoordinator, !Ref CoordinatorConcurrency, !Ref "AWS::NoValue"]
       Description: Runs a query over one tenant's data (lookup, fan out, merge)
       Runtime: python3.12
       Architectures: [arm64]
@@ -74,6 +99,7 @@ Resources:
     DependsOn: WorkerLogGroup
     Properties:
       FunctionName: obs-query-worker
+      ReservedConcurrentExecutions: !If [CapWorkers, !Ref WorkerConcurrency, !Ref "AWS::NoValue"]
       Description: Reads one chunk of a tenant's files and runs the query in DuckDB
       Runtime: python3.12
       Architectures: [arm64]
@@ -120,6 +146,7 @@ Resources:
     DependsOn: ApiLogGroup
     Properties:
       FunctionName: obs-query-api
+      ReservedConcurrentExecutions: !If [CapApi, !Ref ApiConcurrency, !Ref "AWS::NoValue"]
       Description: POST /v1/query - runs a query for the tenant of the caller's read key
       Runtime: python3.12
       Architectures: [arm64]
