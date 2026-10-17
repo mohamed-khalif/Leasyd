@@ -302,6 +302,37 @@ Resources:
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
       OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
 
+  IngestThrottledAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-ingest-throttled
+      AlarmDescription: >
+        obs-ingest or its authorizer was throttled: customers' data is being refused. Both have reserved
+        concurrency (obs-phaseT2 IngestReservedConcurrency / AuthorizerReservedConcurrency) sized for the
+        stage's 5,000 requests/s; raise it, or look for a sudden rise in ingest latency.
+      Metrics:
+        - Id: total
+          Expression: ingest + authorizer
+          ReturnData: true
+        - Id: ingest
+          ReturnData: false
+          MetricStat:
+            Metric: { Namespace: AWS/Lambda, MetricName: Throttles, Dimensions: [{ Name: FunctionName, Value: obs-ingest }] }
+            Period: 300
+            Stat: Sum
+        - Id: authorizer
+          ReturnData: false
+          MetricStat:
+            Metric: { Namespace: AWS/Lambda, MetricName: Throttles, Dimensions: [{ Name: FunctionName, Value: obs-ingest-authorizer }] }
+            Period: 300
+            Stat: Sum
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
   LimitsRefusedAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:

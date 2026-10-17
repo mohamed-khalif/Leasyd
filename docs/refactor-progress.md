@@ -43,11 +43,14 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] SQL checker: CTE names scoped (f2aad5c)
 - [x] Query timeout: DuckDB interrupt at 240 s (4dbd952)
 - [x] Reserved concurrency: ingest 1000 / authorizer 800 reserved; worker 1000, api 300, coordinator 100 capped (0ea2294) -- not deployed; checked against ingest (design §1)
-- [ ] **Design for review: docs/design-query-lifecycle.md** (no double run, per-tenant cap, cancel, fail-closed LKG, password-flow migration) -- WAITING FOR APPROVAL
-- [ ] No double run (design §2)
-- [ ] Per-tenant in-flight cap (§3)
-- [ ] Fail closed with last-known-good (§5)
-- [ ] Backend cancel (§4.2)
-- [ ] ingest-throttled alarm (T7)
+- [x] Reserved concurrency deployed 2026-10-17 and checked: all five set, ingest 0 throttles
+- [x] Design docs/design-query-lifecycle.md approved 2026-10-17
+- [x] No double run (§2) (494dc5a)
+- [x] Per-tenant in-flight cap at 25 (§3) (4a4ae04) -- tighten to 4/12 after the client limiter (Phase 6)
+- [x] Fail closed with last-known-good + obs-limits-refused alarm (§5) (ec1ce78)
+- [x] Backend cancel (§4.2) (bbe2055) -- client side (§4.1) lands in Phase 6 step 2
+- [x] obs-ingest-throttled alarm (T7)
+- [ ] Deploy + verify on AWS: phase0, phase4, phaseAI, T2, T7 (user)
+- [ ] Later, separate changes: password-flow migration (§6), optional TOTP MFA
 
 ## Phase 5 (safety net), bug fixes, Phase 4 (caching, STOP), Phase 6, Phase 7: not started
