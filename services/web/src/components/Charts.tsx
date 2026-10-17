@@ -39,17 +39,19 @@ export type Bar = { t: number; values: number[] };    // t: bucket start (epoch 
 export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bucketMs: number; height?: number; unit?: string;
                                  legend?: boolean; onBar?: (t: number) => void; format?: (v: number) => string }) {
   const fmt = p.format ?? ((v: number) => `${fmtNum(v)}${p.unit ?? ""}`);
+  // Old rows drawn while a new range loads have no valid time (their bucket column differs): skip them.
+  const bars = p.bars.filter((b) => Number.isFinite(b.t));
   const [ref, w] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
   const h = p.height ?? 150, padR = 6, padT = 6, padB = 20;
   const x1 = p.range.to ?? Date.now(), x0 = p.range.from ?? x1 - p.range.minutes * 60_000;
-  const ymax = niceMax(Math.max(1, ...p.bars.map((b) => b.values.reduce((a, v) => a + v, 0))));
+  const ymax = niceMax(Math.max(1, ...bars.map((b) => b.values.reduce((a, v) => a + v, 0))));
   const padL = Math.max(36, 10 + 6.2 * fmt(ymax).length);
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const Y = (v: number) => padT + (1 - v / ymax) * (h - padT - padB);
   const bw = Math.max(1, X(x0 + p.bucketMs) - X(x0) - 1);
   const nX = Math.max(2, Math.min(5, Math.floor((w - padL - padR) / 64)));   // time labels need ~64 px each
-  const hb = hover == null ? null : p.bars.find((b) => hover >= X(b.t) && hover <= X(b.t) + bw + 1);
+  const hb = hover == null ? null : bars.find((b) => hover >= X(b.t) && hover <= X(b.t) + bw + 1);
   return (
     <div>
       {p.legend !== false && <div className="legend">{p.keys.map((k) => <span key={k.label}><i style={{ background: k.color }} />{k.label}</span>)}</div>}
@@ -66,7 +68,7 @@ export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bu
           {Array.from({ length: nX }, (_, i) => x0 + ((x1 - x0) * (i + 0.5)) / nX).map((t) => (
             <text key={t} x={X(t)} y={h - 5} textAnchor="middle" fill="var(--text-3)" style={axis}>{fmtTime(new Date(t).toISOString(), p.range)}</text>
           ))}
-          {p.bars.map((b) => {
+          {bars.map((b) => {
             let acc = 0;
             return (
               <g key={b.t} opacity={hb && hb !== b ? 0.55 : 1}>
@@ -104,18 +106,19 @@ export const bucketLow = (b: number) => 2 ** (b / LOG_STEPS);
 /** Duration against time: each cell's shade is how many spans took that long then; red where they failed. */
 export function Heatmap(p: { cells: Cell[]; range: Range; bucketMs: number; height?: number;
                              onCell?: (c: { t: number; b: number }) => void; selected?: { t: number; b: number } | null }) {
+  const cells = p.cells.filter((c) => Number.isFinite(c.t));   // see StackedBars
   const [ref, w] = useWidth();
   const [hover, setHover] = useState<Cell | null>(null);
   const [hx, setHx] = useState(0);
   const h = p.height ?? 180, padL = 60, padR = 6, padT = 4, padB = 20;
   const x1 = p.range.to ?? Date.now(), x0 = p.range.from ?? x1 - p.range.minutes * 60_000;
-  const bs = p.cells.map((c) => c.b);
+  const bs = cells.map((c) => c.b);
   const lo = bs.length ? Math.min(...bs) : 0, hi = bs.length ? Math.max(...bs) : 1;
   const rows = Math.max(1, hi - lo + 1), rh = (h - padT - padB) / rows;
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const cw = Math.max(1.5, X(x0 + p.bucketMs) - X(x0) - 0.5);
   const Yb = (b: number) => padT + (hi - b) * rh;
-  const top = Math.max(1, ...p.cells.map((c) => c.count));
+  const top = Math.max(1, ...cells.map((c) => c.count));
   const shade = (c: Cell) => 0.12 + 0.88 * Math.sqrt(c.count / top);
   const ticks = rows <= 6 ? Array.from({ length: rows }, (_, i) => lo + i) : Array.from({ length: 5 }, (_, i) => Math.round(lo + (i * (rows - 1)) / 4));
   return (
@@ -128,7 +131,7 @@ export function Heatmap(p: { cells: Cell[]; range: Range; bucketMs: number; heig
           <text key={t} x={X(t)} y={h - 5} textAnchor="middle" fill="var(--text-3)" style={axis}>{fmtTime(new Date(t).toISOString(), p.range)}</text>
         ))}
         <line x1={padL} x2={w - padR} y1={h - padB} y2={h - padB} stroke="var(--border)" />
-        {p.cells.map((c) => {
+        {cells.map((c) => {
           const sel = p.selected && p.selected.t === c.t && p.selected.b === c.b;
           const x = Math.max(padL + 1, X(c.t)), cwx = Math.max(1, cw - (x - X(c.t))), ch = Math.max(1, rh - 1);
           const errShare = c.errors / c.count;      // red for the part of the cell's spans that failed
