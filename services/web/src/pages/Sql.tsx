@@ -4,6 +4,7 @@ import { KeyboardEvent, useMemo, useState } from "react";
 import { sql as runSql, SqlResult } from "../api";
 import type { Ctx } from "../App";
 import { TimeSeries } from "../components/TimeSeries";
+import { downloadCsv } from "../csv";
 import { fmtNum, rangeWindow } from "../time";
 
 const TABLES: [string, string, [string, string][]][] = [
@@ -124,7 +125,7 @@ export function Sql({ ctx }: { ctx: Ctx }) {
                 <span className="spacer" />
                 <span className="faint" style={{ fontSize: 12 }}>{fmtNum(result.rows.length)} rows{result.truncated ? " (first 10,000)" : ""} · {(ms / 1000).toFixed(1)} s
                   {result.stats?.files != null ? ` · ${result.stats.files} files` : ""}</span>
-                <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => download(result)}>CSV</button>
+                <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => downloadCsv("leasyd-query.csv", result.columns, result.rows)}>CSV</button>
               </div>
               {view === "chart" && chartable ? (
                 <div className="panel-body"><TimeSeries series={chartable} range={ctx.range} height={280} area={false} /></div>
@@ -169,11 +170,3 @@ function chartOf(r: SqlResult | null) {
   return [...lines].slice(0, 20).map(([label, points], i) => ({ label, color: COLORS[i % COLORS.length], points }));
 }
 
-function download(r: SqlResult) {
-  const esc = (v: unknown) => { const s = cell(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const csv = [r.columns.map(esc).join(","), ...r.rows.map((row) => row.map(esc).join(","))].join("\n");
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-  a.download = "leasyd-query.csv";
-  a.click();
-}
