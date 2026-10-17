@@ -249,15 +249,32 @@ function VariablePicker({ label, options, selected, onChange }: { label: string;
 }
 
 const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** A panel query with the dashboard's filters and the step filled in. */
-/** $__interval: the chart's step; $__range: the whole time range (number panels evaluate once, at its end). */
+const pqString = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');   // text -> inside a PromQL "string"
+const TOKEN = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;   // $name or ${name}, the whole name
+const MATCHER = /(=~|!~|!=|=)(\s*)"((?:[^"\\]|\\.)*)"/g;                     // op "value" in a label matcher
+
+/** A panel query with the dashboard's filters and the step filled in.
+ *  $__interval: the chart's step; $__range: the whole time range (number panels evaluate once, at its end).
+ *  A variable's values become a regex (a|b; none selected: .*). With = / != and one value the value is
+ *  matched as written; with several (or none) the matcher becomes =~ / !~. A $word that isn't a
+ *  variable is left alone, unless it is a matcher's whole value (a filter left at "is any": .*). */
 export function fillQuery(text: string, vars: Record<string, string[]>, step: number, rangeS = step): string {
-  let out = text.replace(/\$__rate_interval|\$__interval/g, `${step}s`).replace(/\$__range/g, `${rangeS}s`);
-  for (const [name, vals] of Object.entries(vars)) {
-    const re = vals.length ? vals.map(reEscape).join("|") : ".*";
-    out = out.replace(new RegExp(`\\$\\{?${name}\\}?`, "g"), re.replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
-  }
-  return out.replace(/\$\{?([a-z][a-z0-9_]*)\}?/g, ".*");   // filters left at "is any"
+  const out = text.replace(/\$__rate_interval|\$__interval/g, `${step}s`).replace(/\$__range/g, `${rangeS}s`);
+  const regexOf = (vals: string[]) => (vals.length ? vals.map(reEscape).join("|") : ".*");
+  const known = (name: string) => Object.prototype.hasOwnProperty.call(vars, name);
+  const filled = out.replace(MATCHER, (m, op: string, sp: string, body: string) => {
+    const whole = body.match(/^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$/);
+    if (whole) {
+      const name = whole[1] ?? whole[2], vals = known(name) ? vars[name] : [];
+      if (!known(name) && !/^[a-z]/.test(name)) return m;
+      const exact = op === "=" || op === "!=";
+      if (exact && vals.length === 1) return `${op}${sp}"${pqString(vals[0])}"`;
+      return `${exact ? (op === "=" ? "=~" : "!~") : op}${sp}"${pqString(regexOf(vals))}"`;
+    }
+    if (op !== "=~" && op !== "!~") return m;
+    return `${op}${sp}"${body.replace(TOKEN, (t, a?: string, b?: string) => (known(a ?? b!) ? pqString(regexOf(vars[a ?? b!])) : t))}"`;
+  });
+  return filled;
 }
 
 // ------------------------------------------------------------------ panels
