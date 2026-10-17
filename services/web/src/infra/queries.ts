@@ -5,13 +5,14 @@
 //
 // `uses` says which data a query reads; the page passes the services carrying that data as the
 // engine's "services" hint (see discovery()), so an account's app data isn't read for these pages.
+import { sqlString as q } from "../lib/sql";
 import { DCGM, IDLE_UTIL, K8S, K8S_SUFFIX, WORKLOAD_METRICS } from "./model";
+
 
 export type Uses = "gpu" | "k8s" | "events";
 export type Q = { sql: string; uses: Uses[] };
 export type Filter = { cluster?: string | null; namespace?: string | null };
 
-export const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
 const A = (k: string) => `attributes['${k}']`;
 const R = (k: string) => `resource_attributes['${k}']`;
 const list = (xs: readonly string[]) => xs.map(q).join(", ");

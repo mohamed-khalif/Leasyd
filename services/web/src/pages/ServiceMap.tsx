@@ -4,6 +4,7 @@
 // Clicking a service opens its panel: what it runs on, requests / errors / duration over time,
 // and its operations.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { sqlString as q } from "../lib/sql";
 import { records } from "../api";
 import type { Ctx } from "../App";
 import { Tabs } from "../components/Charts";
@@ -33,7 +34,6 @@ const EDGES_SQL = `SELECT p.service AS source, c.service AS target, count(*) AS 
   count(*) FILTER (WHERE c.status_code = 2) AS errors
 FROM spans c JOIN spans p ON c.trace_id = p.trace_id AND c.parent_span_id = p.span_id
 WHERE c.service <> p.service GROUP BY 1, 2`;
-const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
 const errPct = (n: { requests: number; errors: number }) => (n.requests ? (n.errors / n.requests) * 100 : 0);
 const health = (pct: number) => (pct >= 5 ? "critical" : pct >= 1 ? "warning" : "ok");

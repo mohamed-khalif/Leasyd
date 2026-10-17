@@ -5,6 +5,7 @@
 // (its entry spans); an invocation opens with its duration against the function's others, its
 // payload (the aws.lambda.event or faas.event attribute, when recorded), its logs and its trace.
 import { useMemo, useState } from "react";
+import { sqlString as q } from "../lib/sql";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
 import { StackedBars, Tabs } from "../components/Charts";
@@ -23,7 +24,6 @@ const CW = "metric_name IN ('aws.lambda.invocations', 'aws.lambda.errors', 'aws.
 const CW_AGGS = `sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,
   sum(sum) FILTER (WHERE metric_name = 'aws.lambda.errors') AS e,
   sum(sum) FILTER (WHERE metric_name = 'aws.lambda.duration') / nullif(sum(count) FILTER (WHERE metric_name = 'aws.lambda.duration'), 0) AS ms`;
-const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
 const rows = (r: Result | null) => (r ? records(r) : []);
 const pct = (e: number, n: number) => (n ? (e / n) * 100 : 0);
 
@@ -285,5 +285,5 @@ function InvocationPanel({ ctx, fn, inv, onClose }: { ctx: Ctx; fn: string; inv:
 /** SQL: the invocation's request id contains `text` (any case). contains(), not ILIKE: _ and % in
  *  a pasted id are characters, not wildcards. Exported for tests. */
 export function requestIdMatch(text: string): string {
-  return `contains(lower(coalesce(attributes['faas.invocation_id'], attributes['faas.execution'], span_id)), lower('${text.replace(/'/g, "''")}'))`;
+  return `contains(lower(coalesce(attributes['faas.invocation_id'], attributes['faas.execution'], span_id)), lower(${q(text)}))`;
 }

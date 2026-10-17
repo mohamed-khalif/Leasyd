@@ -5,6 +5,7 @@
 // percentile (as Google rates them) with the share of good ones, pages, JavaScript errors, failing
 // or slow API calls (each linked to its backend trace) and browsers; a visit opens with its events.
 import { useState } from "react";
+import { sqlString as q } from "../lib/sql";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
 import { Card, Drawer, StackedBars } from "../components/Charts";
@@ -16,7 +17,6 @@ import { useRangeWindow } from "../useNow";
 const RUM = "resource_attributes['telemetry.sdk.name'] = 'leasyd-rum'";
 const A = (k: string) => `attributes['${k}']`;
 const N = (k: string) => `TRY_CAST(attributes['${k}'] AS DOUBLE)`;
-const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
 const rows = (r: Result | null) => (r ? records(r) : []);
 // Google's thresholds (web.dev): good up to the first, poor above the second
 export const VITALS: [string, string, number, number, (v: number) => string][] = [
