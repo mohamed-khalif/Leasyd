@@ -6,6 +6,5 @@ export const PRICE = {
   logs: { ingest: 0.05, storage: 0.45 },
   metrics: { ingest: 0.015, storage: 0.15 },
 } as const;
-export const CHECK_PRICE_PER_THOUSAND = { http: 0.18, browser: 3.0 } as const;
 export const PRICE_LABEL = { traces: "spans", logs: "log records", metrics: "metric data points" } as const;
 export const usd = (v: number) => "US$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });

@@ -333,4 +333,3 @@ export const BUILTIN: Dashboard[] = [
   },
 ];
 
-export const isBuiltin = (id: string) => id.startsWith("builtin-");
