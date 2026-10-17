@@ -465,6 +465,28 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/GET/v1/query/*"
+  # DELETE /v1/query/{job}: cancel a long query (docs/design-query-lifecycle.md §4)
+  QueryJobCancelMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref QueryJobResource
+      HttpMethod: DELETE
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-api/invocations"
+        TimeoutInMillis: 29000
+  QueryJobCancelApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-api"
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/DELETE/v1/query/*"
 
   # Signed-in users (U1): the web app calls /v1/app/* with a Cognito ID
   # token (Authorization header). The user's tenant is the token's
@@ -641,6 +663,20 @@ Resources:
       RestApiId: !Ref Api
       ResourceId: !Ref AppQueryJobResource
       HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-api/invocations"
+        TimeoutInMillis: 29000
+  AppQueryJobCancelMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref AppQueryJobResource
+      HttpMethod: DELETE
       AuthorizationType: COGNITO_USER_POOLS
       AuthorizerId: !Ref UserAuthorizer
       Integration:
@@ -1026,21 +1062,21 @@ Resources:
       ResponseTemplates:
         application/json: '{"message": "Leasyd is temporarily unavailable; retry shortly"}'
 
-  DeploymentV20:
+  DeploymentV21:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, McpMethod, RumMethod, InvalidApiKeyResponse,
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, QueryJobCancelMethod, McpMethod, RumMethod, InvalidApiKeyResponse,
                 Default5xxResponse, IntegrationFailureResponse]
     Properties:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppQueryJobCancelMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV20
+      DeploymentId: !Ref DeploymentV21
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

@@ -41,6 +41,7 @@ query and returns partial aggregates or rows.
 """
 
 import base64
+import contextvars
 import errno
 import json
 import math
@@ -435,6 +436,7 @@ SQL_MAX_LENGTH = 20_000
 # Longest a worker lets DuckDB run (loading and the query itself): an endless query is interrupted
 # with a clear answer instead of holding a 3 GB worker until Lambda kills it at 300 s.
 QUERY_TIMEOUT_S = int(os.environ.get("QUERY_TIMEOUT_S", "240"))
+CANCEL_POLL_S = 5       # how often a worker of a job checks for its cancel marker
 
 
 def timed_out_message():
@@ -443,17 +445,31 @@ def timed_out_message():
 
 
 class _Deadline:
-    """Interrupts a DuckDB connection QUERY_TIMEOUT_S after it is entered."""
-    def __init__(self, con):
-        self.timer = threading.Timer(QUERY_TIMEOUT_S, con.interrupt)
-        self.timer.daemon = True
+    """Interrupts a DuckDB connection QUERY_TIMEOUT_S after it is entered, or as soon as the job's
+    cancel marker (cancel: its S3 key) appears; checked every CANCEL_POLL_S."""
+    def __init__(self, con, cancel=None):
+        self.con, self.cancel, self.cancelled = con, cancel, False
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._watch, daemon=True)
+
+    def _watch(self):
+        until = time.monotonic() + QUERY_TIMEOUT_S
+        while not self.stop.wait(min(CANCEL_POLL_S if self.cancel else QUERY_TIMEOUT_S, max(0, until - time.monotonic()))):
+            if time.monotonic() >= until:
+                break
+            if self.cancel and _exists(self.cancel):
+                self.cancelled = True
+                break
+        else:
+            return
+        self.con.interrupt()
 
     def __enter__(self):
-        self.timer.start()
+        self.thread.start()
         return self
 
     def __exit__(self, *exc):
-        self.timer.cancel()
+        self.stop.set()
 
 
 def check_sql(sql):
@@ -541,9 +557,12 @@ def run_sql(tenant, sql, start, end, invoke_worker=None, services=None):
         raise BadQuery(f"this time range has {count:,} files to read (at most {SQL_MAX_FILES:,}); choose a shorter time range")
     if size > SQL_MAX_BYTES:
         raise BadQuery(f"this would read {size / 2**30:.1f} GB (at most {SQL_MAX_BYTES / 2**30:.0f} GB); choose a shorter time range")
+    cancel = _stop_if_cancelled()
     used_units(tenant, max(1, math.ceil(size / TARGET_BYTES_PER_WORKER)) if count else 0)
-    event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files}
+    event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files, "cancel": cancel}
     out = (invoke_worker or _invoke_worker)(event)
+    if out.get("cancelled"):
+        raise Cancelled()
     out["stats"] = {**out.get("stats", {}), "files": sum(len(v) for v in files.values()), "total_ms": round((time.perf_counter() - t0) * 1000)}
     return out
 
@@ -570,7 +589,7 @@ def run_sql_worker(event):
         t_dl = time.perf_counter()
         con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
         try:
-            deadline = _Deadline(con).__enter__()
+            deadline = _Deadline(con, event.get("cancel")).__enter__()
             for table, signal in SQL_TABLES.items():
                 mine = [(f, local) for t, f, local in todo if t == table]
                 pq = [local for f, local in mine if _is_parquet(f)]
@@ -606,7 +625,7 @@ def run_sql_worker(event):
                 cols = [d[0] for d in cur.description]
                 rows = cur.fetchmany(SQL_MAX_ROWS + 1)
             except duckdb_interrupt():
-                return {"error": timed_out_message()}
+                return {"cancelled": True} if deadline.cancelled else {"error": timed_out_message()}
             except duckdb_error() as e:
                 return {"error": str(e).split("\n")[0][:500]}
         finally:
@@ -661,7 +680,7 @@ def run_worker(event):
         t_dl = time.perf_counter()
         con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
         ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for f in in_place})
-        deadline = _Deadline(con).__enter__()
+        deadline = _Deadline(con, event.get("cancel")).__enter__()
         try:
             parts = []
             pq = [p for f, p in local if _is_parquet(f)]
@@ -700,7 +719,8 @@ def run_worker(event):
                          "rows": [[_jsonable(v) for v in r] for r in cur.fetchall()]}
             scanned = con.execute("SELECT count(*) FROM t").fetchone()[0] if event.get("count_scanned") else None
         except duckdb_interrupt():
-            return {"kind": kind, "timed_out": True, "rows": [], "columns": [], "stats": {"files": len(files)}}
+            return {"kind": kind, "rows": [], "columns": [], "stats": {"files": len(files)},
+                    **({"cancelled": True} if deadline.cancelled else {"timed_out": True})}
         finally:
             deadline.__exit__()
             con.close()
@@ -816,6 +836,7 @@ def api(event, context):
       POST /v1/query            read key (API key authorizer)
       POST /v1/app/query        signed-in user (Cognito authorizer, ID token)
       GET  /v1/query/{job}, /v1/app/query/{job}   a long query's answer (see below)
+      DELETE /v1/query/{job}, /v1/app/query/{job} cancel it (cancel_job)
       GET  /v1/app/me           who the signed-in user is
     Every query runs in obs-query (the coordinator; up to 5 minutes), which this function waits
     for up to SYNC_DEADLINE_S. Past that, or when the query asks for it ("async": true), the
@@ -836,6 +857,8 @@ def api(event, context):
         return _http(200, {"tenant": tenant, "email": claims.get("email")})
     if event.get("httpMethod") == "GET":
         return job_status(tenant, ((event.get("pathParameters") or {}).get("job") or ""))
+    if event.get("httpMethod") == "DELETE":
+        return cancel_job(tenant, ((event.get("pathParameters") or {}).get("job") or ""))
     if (refused := over_limit(tenant, "query")):
         return refused
     body = event.get("body") or ""
@@ -910,14 +933,18 @@ def answer_job(job):
     tenant = layout.check_tenant(job["tenant"])
     if not _JOB_ID.match(job["id"]):
         raise ValueError("bad job id")
+    context = _job.set((_cancel_key(tenant, job["id"]), job.get("store_after", 0)))   # reset below: Lambda reuses the thread
     try:
         out = answer(tenant, job["query"])
+    except Cancelled:
+        out = CANCELLED_ANSWER
     except Unavailable as e:
         out = _unavailable(e)
     except Exception:
         _store_answer(tenant, job["id"], _http(500, {"error": "the query failed; try a shorter time range"}))
         raise
     finally:
+        _job.reset(context)
         charge_units(tenant)
         give_back_slot(tenant, job["id"])
     if time.time() >= job.get("store_after", 0):
@@ -928,6 +955,60 @@ def answer_job(job):
 def _store_answer(tenant, job, out):
     _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job), ContentType="application/json",
                      Body=json.dumps({"status": "done", "answer": out}))
+
+
+# Cancelling a job: DELETE .../query/{job} leaves a marker next to its answer; the coordinator
+# checks it before each fan-out (once the API has handed out the job id), and each worker every
+# CANCEL_POLL_S (interrupting DuckDB). Units for the work done are still charged.
+_job = contextvars.ContextVar("job", default=None)    # (cancel marker key, when the API answers 202)
+
+
+class Cancelled(Exception):
+    """The query's job was cancelled."""
+
+
+CANCELLED_ANSWER = None   # set below, once _http exists
+
+
+def _cancel_key(tenant, job):
+    return f"_results/jobs/{tenant}/{job}.cancel"
+
+
+def _exists(key):
+    try:
+        _s3().head_object(Bucket=lookup.BUCKET, Key=key)
+        return True
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+
+
+def _stop_if_cancelled():
+    """-> the cancel marker key workers should watch (None outside a job); raises Cancelled when it is
+    there already. Not checked before the API has handed out the job id (nobody can cancel yet)."""
+    job = _job.get()
+    if job is None:
+        return None
+    if time.time() >= job[1] and _exists(job[0]):
+        raise Cancelled()
+    return job[0]
+
+
+def cancel_job(tenant, job):
+    """DELETE .../query/{job} -> 202 (cancelling), 409 if it has finished, 404 if unknown."""
+    if not _JOB_ID.match(job):
+        return _http(404, {"error": "no such query job"})
+    try:
+        state = json.loads(_s3().get_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job))["Body"].read())
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404", "AccessDenied"):
+            return _http(404, {"error": "no such query job (answers are kept a day)"})
+        raise
+    if state["status"] == "done":
+        return _http(409, {"job": job, "status": "done"})
+    _s3().put_object(Bucket=lookup.BUCKET, Key=_cancel_key(tenant, job), Body=b"")
+    return _http(202, {"job": job, "status": "cancelling"})
 
 
 def answer(tenant, q):
@@ -1190,6 +1271,8 @@ def job_status(tenant, job):
         raise
     if state["status"] == "done":
         return state["answer"]
+    if _exists(_cancel_key(tenant, job)):
+        return CANCELLED_ANSWER
     started = lookup._parse(state["started"])
     if (_now() - started).total_seconds() > JOB_TIMEOUT_S:
         return _http(504, {"error": "the query took longer than 5 minutes; try a shorter time range or aggregate more"})
@@ -1290,6 +1373,9 @@ def _unavailable(e):
     return _http(503, {"error": str(e)}, retry_after=30)
 
 
+CANCELLED_ANSWER = _http(410, {"error": "the query was cancelled"})
+
+
 def run(q, invoke_worker=None):
     t0 = time.perf_counter()
     compile_query(q)  # reject bad queries before any work
@@ -1300,14 +1386,17 @@ def run(q, invoke_worker=None):
     # stretch of time: otherwise the rise over a stretch another worker holds is counted twice.
     contiguous = any(a.get("fn") in ("increase", "buckets") for a in q.get("aggs") or [])
     chunks = plan_chunks(found["files"], int(q.get("workers", MAX_WORKERS)), contiguous)
+    cancel = _stop_if_cancelled()
     used_units(q["tenant"], len(chunks))
     invoke_worker = invoke_worker or _invoke_worker
     if len(chunks) <= 1:
-        partials = [run_worker({"query": q, "files": chunks[0] if chunks else []})]
+        partials = [run_worker({"query": q, "files": chunks[0] if chunks else [], "cancel": cancel})]
     else:
         with ThreadPoolExecutor(len(chunks)) as pool:
-            partials = list(pool.map(lambda c: invoke_worker({"query": q, "files": c}), chunks))
+            partials = list(pool.map(lambda c: invoke_worker({"query": q, "files": c, "cancel": cancel}), chunks))
     t_scan = time.perf_counter()
+    if any(p.get("cancelled") for p in partials):
+        raise Cancelled()
     if any(p.get("timed_out") for p in partials):
         raise BadQuery(timed_out_message())
     result = merge(q, partials)

@@ -67,6 +67,7 @@ def test_read_key_may_only_query_and_use_the_mcp_server(auth):
     assert out["policyDocument"]["Statement"][0]["Resource"] == [
         "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/POST/v1/query",
         "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/GET/v1/query/*",   # a long query's answer
+        "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/DELETE/v1/query/*",  # ... or cancelling it
         "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest/*/v1/mcp"]
 
 

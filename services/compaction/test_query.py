@@ -721,6 +721,57 @@ def test_failed_jobs_say_so(data, monkeypatch, coordinator):
     assert get_job("acme", out["job"]) == (500, {"error": "the query failed; try a shorter time range"})
 
 
+def cancel_job(tenant, job, resource="/v1/app/query/{job}"):
+    out = query.api({"httpMethod": "DELETE", "resource": resource, "pathParameters": {"job": job},
+                     "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant}}}}, None)
+    return out["statusCode"], json.loads(out["body"])
+
+
+def test_a_running_job_can_be_cancelled(data, monkeypatch, coordinator):
+    """DELETE .../query/{job}: GET answers 410 at once; the run stops before fanning out (no worker
+    starts); a finished job can't be cancelled (409); another tenant's job is unknown (404)."""
+    invoked = []
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: invoked.append(e) or query.worker(e, None))
+    real, gate = query.answer, threading.Event()
+    monkeypatch.setattr(query, "answer", lambda t, q: (gate.wait(10), real(t, q))[1])
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}],
+         "workers": 4, "async": True}
+    ana = {"custom:tenant": "acme"}
+    status, out = http_user(ana, q)
+    job = out["job"]
+    assert cancel_job("globex", job)[0] == 404 and cancel_job("acme", "../x")[0] == 404
+    assert cancel_job("acme", job) == (202, {"job": job, "status": "cancelling"})
+    assert cancel_job("acme", job)[0] == 202                       # again: still fine
+    assert get_job("acme", job) == (410, {"error": "the query was cancelled"})
+    gate.set()
+    coordinator.finish()
+    assert invoked == [] and get_job("acme", job)[0] == 410
+    # Finished jobs stay as they are.
+    status, out = http_user(ana, q)
+    coordinator.finish()
+    assert get_job("acme", out["job"])[0] == 200
+    assert cancel_job("acme", out["job"]) == (409, {"job": out["job"], "status": "done"})
+    # The job's context doesn't outlive it: a later direct query in the same thread isn't "cancelled".
+    query.answer_job({"id": job, "tenant": "acme", "query": {k: v for k, v in q.items() if k != "async"}})
+    assert query._job.get() is None
+
+
+def test_a_cancelled_job_interrupts_its_workers(data, monkeypatch):
+    """A worker of a cancelled job stops within CANCEL_POLL_S (DuckDB interrupted) and says so."""
+    monkeypatch.setattr(query, "CANCEL_POLL_S", 0.2)
+    real = query.compile_query
+    endless = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT count(*) FROM r, t"
+    monkeypatch.setattr(query, "compile_query", lambda q, **kw: (endless, [], "aggregate") if not kw else real(q, **kw))
+    marker = query._cancel_key("acme", "f" * 32)
+    threading.Timer(1.0, lambda: query._s3().put_object(Bucket=query.lookup.BUCKET, Key=marker, Body=b"")).start()
+    t0 = time.time()
+    found = query.lookup.lookup(tenant="acme", start=f"{DAY}T00:00:00Z", end=f"{DAY}T23:59:59Z", signal="logs")
+    out = query.run_worker({"query": {"tenant": "acme", "signal": "logs", "start": f"{DAY}T00:00:00Z",
+                                      "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]},
+                            "files": found["files"], "cancel": marker})
+    assert out.get("cancelled") and time.time() - t0 < 10
+
+
 def test_queries_running_at_once_are_limited_per_tenant(data, monkeypatch, coordinator):
     """At most INFLIGHT_LIMITS[plan] queries of a tenant run at once (a slot from the API's start to
     the coordinator's end); another tenant is unaffected; a slot left by a crash expires."""
