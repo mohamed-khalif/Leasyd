@@ -848,6 +848,15 @@ def conftest_in_process():
     return conftest._InProcess()
 
 
+def test_each_slot_taken_logs_how_many_are_running(data, capsys):
+    """Real concurrency data for revisiting INFLIGHT_LIMITS: one log line per query started."""
+    query._plans.clear()
+    assert query.take_slot("acme", "a" * 32) is None
+    assert query.take_slot("acme", "b" * 32) is None
+    lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.startswith('{"inflight"')]
+    assert [(x["inflight"], x["tenant"], x["limit"]) for x in lines][-2:] == [(1, "acme", 25), (2, "acme", 25)]
+
+
 def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     """Per tenant and minute, by plan; another tenant is unaffected; jobs have a lower limit."""
     boto3.resource("dynamodb").Table("obs-tenants").put_item(Item={"pk": "tenant#acme", "plan": "free"})

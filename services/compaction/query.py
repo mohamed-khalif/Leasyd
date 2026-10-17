@@ -1272,6 +1272,7 @@ def take_slot(tenant, job):
                 table.update_item(Key=key, UpdateExpression="SET leases = :m, expires = :exp",
                                   ConditionExpression="attribute_not_exists(leases)",
                                   ExpressionAttributeValues={":m": {job: now + LEASE_S}, ":exp": now + 86400})
+                _log_inflight(tenant, plan, 1, limit)
                 return None
             except ClientError as e:
                 if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
@@ -1280,15 +1281,23 @@ def take_slot(tenant, job):
         if expired:
             table.update_item(Key=key, UpdateExpression="REMOVE " + ", ".join(f"leases.#e{i}" for i in range(len(expired))),
                               ExpressionAttributeNames={f"#e{i}": k for i, k in enumerate(expired)})
-        table.update_item(Key=key, UpdateExpression="SET leases.#j = :exp, expires = :ttl",
-                          ConditionExpression="size(leases) < :max",
-                          ExpressionAttributeNames={"#j": job},
-                          ExpressionAttributeValues={":exp": now + LEASE_S, ":max": limit, ":ttl": now + 86400})
+        got = table.update_item(Key=key, UpdateExpression="SET leases.#j = :exp, expires = :ttl",
+                                ConditionExpression="size(leases) < :max",
+                                ExpressionAttributeNames={"#j": job}, ReturnValues="ALL_NEW",
+                                ExpressionAttributeValues={":exp": now + LEASE_S, ":max": limit, ":ttl": now + 86400})
+        _log_inflight(tenant, plan, len(got["Attributes"].get("leases", {})), limit)
         return None
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             return _too_many_running(limit)
         return _take_slot_from_memory(tenant, job, e)
+
+
+def _log_inflight(tenant, plan, n, limit):
+    """How many of the tenant's queries run now (this one included): the data for revisiting
+    INFLIGHT_LIMITS. Logs Insights on /aws/lambda/obs-query-api:
+      filter ispresent(inflight) | stats max(inflight) as peak, pct(inflight, 99) as p99 by tenant, bin(1h)"""
+    print(json.dumps({"inflight": n, "tenant": tenant, "plan": plan, "limit": limit}))
 
 
 def _take_slot_from_memory(tenant, job, error):
