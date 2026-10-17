@@ -88,5 +88,6 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] All 15 done. Deploy: phase4 (B7, B10, B14 + template), phaseAI (B10), web.
 ## Phase 4 (caching)
 - [x] Recommendation written: docs/caching-decision.md (recommends (b), in-house layer, 30 s freshness)
-- [ ] STOP: waiting for the choice (a/b/c) and the freshness time
-## Phase 6, Phase 7: not started
+- [x] Decided: (a) no cache. Keep: shared "now" per page, one check-list / account loader each (no reuse), one SQL quoting helper. Dropped: cross-page discovery sharing, in-flight de-dup
+## Phase 6: next (step 4 becomes: shared loaders without caching)
+## Phase 7: not started

@@ -1,6 +1,14 @@
 # Phase 4: caching decision
 
-Status: **recommendation, waiting for your choice.** Nothing here is built yet.
+Status: **decided 2026-10-17: (a), no cache.** Every page visit and every panel asks the server.
+
+What still happens without a cache (none of it reuses an answer):
+- One shared "now" per page, so all panels on a page cover the same window.
+- The check-list and `account.get` loaders become one shared hook each. Each mount still fetches.
+- One SQL quoting helper in place of the four copies.
+- K8s and GPU pages each keep running their own discovery query; sharing it across pages would be caching.
+
+The analysis below is kept for reference.
 
 ## What the measurements say (code-audit.md §1)
 
