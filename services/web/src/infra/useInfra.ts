@@ -1,7 +1,8 @@
 // React side of the Kubernetes and GPU pages: run queries.ts's queries with the services hint, and
 // load the account's GPU prices. Rows come back typed as the queries declare them.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { account, records, sql } from "../api";
+import { useLoad } from "../useQuery";
 import type { GpuPrice } from "./model";
 import { discovery, Q, Uses } from "./queries";
 
@@ -11,22 +12,16 @@ export type Rows<T> = { rows: T[]; error: string | null; loading: boolean; trunc
 const DISCOVERY_MINUTES = 15;
 
 /** Which services carry GPU, Kubernetes and event data, from the last 15 minutes of the window
- *  (cheap). undefined while loading; {} when unknown, so queries read everything. */
+ *  (cheap). undefined while loading; {} when unknown, so queries read everything. On a new key the
+ *  previous hint stays until the new one comes (code-audit C6). */
 export function useHint(w: { start: string; end: string }, key: string): Hint | undefined {
-  const [hint, setHint] = useState<Hint | undefined>(undefined);
-  useEffect(() => {
-    let live = true;
-    const end = Date.parse(w.end), start = Math.max(Date.parse(w.start), end - DISCOVERY_MINUTES * 60_000);
-    sql({ sql: discovery().sql, start: new Date(start).toISOString(), end: w.end }).then((r) => {
-      if (!live) return;
-      const out: Hint = {};
-      for (const row of records(r)) (out[row.kind as Uses] ??= []).push(String(row.service));
-      setHint(out);
-    }, () => live && setHint({}));
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed: `key` encodes the window and refresh
-  }, [key]);
-  return hint;
+  const end = Date.parse(w.end), start = Math.max(Date.parse(w.start), end - DISCOVERY_MINUTES * 60_000);
+  const got = useLoad(() => sql({ sql: discovery().sql, start: new Date(start).toISOString(), end: w.end }).then((r) => {
+    const out: Hint = {};
+    for (const row of records(r)) (out[row.kind as Uses] ??= []).push(String(row.service));
+    return out;
+  }, () => ({}) as Hint), key);
+  return got.data ?? undefined;
 }
 
 /** The services a query should read, or undefined (all) when any data it uses wasn't found. */
@@ -37,19 +32,11 @@ export function servicesFor(q: Q, hint: Hint): string[] | undefined {
 
 /** Runs a query (null: none) over the window once the hint is known; reruns when `key` changes. */
 export function useRows<T>(q: Q | null, w: { start: string; end: string }, key: string, hint: Hint | undefined): Rows<T> {
-  const [state, setState] = useState<Rows<T>>({ rows: [], error: null, loading: true });
   const ready = hint !== undefined;
-  useEffect(() => {
-    if (!q || !ready) return;
-    let live = true;
-    setState((s) => ({ ...s, loading: true, error: null }));
-    sql({ sql: q.sql, ...w, services: servicesFor(q, hint!) }).then(
-      (r) => live && setState({ rows: records(r) as unknown as T[], error: null, loading: false, ...(r.truncated ? { truncated: true as const } : {}) }),
-      (e: Error) => live && setState({ rows: [], error: e.message, loading: false }));
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed: `key` encodes window and refresh; the hint is waited for via `ready`
-  }, [key, ready, q?.sql]);
-  return state;
+  const got = useLoad(q && ready ? () => sql({ sql: q.sql, ...w, services: servicesFor(q, hint!) }) : null,
+                      `${key}|${ready}|${q?.sql}`, true);
+  const rows = useMemo(() => (got.data ? records(got.data) : []) as unknown as T[], [got.data]);   // same array until new data
+  return { rows, error: got.error, loading: got.loading, ...(got.data?.truncated ? { truncated: true as const } : {}) };
 }
 
 /** The account's own GPU prices ([] when none are set), and why they couldn't be read (costs then

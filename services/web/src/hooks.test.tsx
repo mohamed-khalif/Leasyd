@@ -115,6 +115,9 @@ test("useHint + useRows: data waits for discovery on first load and reads only t
   await settle();
   assert.deepEqual(calls[1].body, { sql: data.sql, ...W, services: ["dcgm-exporter"] });
   assert.deepEqual(last<{ rows: unknown[] }>(seen).rows, [{ n: 7 }]);
+  const before = last<{ rows: unknown[] }>(seen).rows;
+  await view.rerender(<Page k="a" />);                   // a re-render without new data
+  assert.equal(last<{ rows: unknown[] }>(seen).rows, before, "the same rows array, so memos keyed on it hold");
   // today (code-audit C6): on a new key the data query runs at once with the previous hint,
   // alongside the new discovery, instead of waiting for it.
   calls.length = 0;
