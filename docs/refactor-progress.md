@@ -86,5 +86,7 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] B14 refused invokes free their slot; obs-query async events never retried, dropped after 60 s; late jobs not run; no overwrite after 504 (44c809c) -- deploy phase4
 - [x] B15 one SQL run at a time; check re-read timer cleared (other two items done in B5/B13)
 - [x] All 15 done. Deploy: phase4 (B7, B10, B14 + template), phaseAI (B10), web.
-## Phase 4 (caching): recommendation next, then STOP for the choice
+## Phase 4 (caching)
+- [x] Recommendation written: docs/caching-decision.md (recommends (b), in-house layer, 30 s freshness)
+- [ ] STOP: waiting for the choice (a/b/c) and the freshness time
 ## Phase 6, Phase 7: not started
