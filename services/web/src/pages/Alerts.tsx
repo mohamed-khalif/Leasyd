@@ -277,7 +277,7 @@ function Channels({ ctx }: { ctx: Ctx }) {
 }
 
 function History({ ctx }: { ctx: Ctx }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const q = useQuery({ signal: "logs", ...w, services: ["alerts"], search: { limit: 500 } }, "h" + ctx.range.key + ctx.tick);
   const rows = q.data ? records(q.data).sort((a, b) => String(b.ts).localeCompare(String(a.ts))) : [];
   return (

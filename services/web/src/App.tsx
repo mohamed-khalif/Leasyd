@@ -28,7 +28,9 @@ import { Sql } from "./pages/Sql";
 import { Dashboards } from "./pages/Dashboards";
 import { RANGES, Range, rangeFromKey } from "./time";
 
-export type Ctx = { range: Range; tick: number; go: (hash: string) => void };
+/** range: the time range; tick: bumped by Refresh; now: the page's one "now" (epoch ms) that its
+ *  windows end at, set when the range changes, on Refresh and on opening a page. */
+export type Ctx = { range: Range; tick: number; now: number; go: (hash: string) => void };
 
 function useHash(): string {
   const [hash, setHash] = useState(location.hash.slice(1) || "/");
@@ -45,6 +47,12 @@ export function App() {
   const [range, setRange] = useState<Range>(() => rangeFromKey(safeGet("leasyd.range")) ?? RANGES[1]);
   const [tick, setTick] = useState(0);
   const hash = useHash();
+  const [now, setNow] = useState(() => Date.now());
+  const [nowFor, setNowFor] = useState({ path: hash.split("?")[0], range, tick });
+  if (nowFor.path !== hash.split("?")[0] || nowFor.range !== range || nowFor.tick !== tick) {
+    setNowFor({ path: hash.split("?")[0], range, tick });   // adjusting state on a change, during render
+    setNow(Date.now());
+  }
   const go = useCallback((h: string) => { location.hash = h; }, []);
 
   const [notice, setNotice] = useState<string | null>(null);
@@ -71,7 +79,7 @@ export function App() {
 
   const [path, query] = hash.split("?");
   const params = new URLSearchParams(query || "");
-  const ctx: Ctx = { range, tick, go };
+  const ctx: Ctx = { range, tick, now, go };
   let page: React.ReactElement, crumb: [string, string];
   if (path.startsWith("/traces")) {
     const id = path.split("/")[2];

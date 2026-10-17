@@ -36,7 +36,7 @@ export function Lambda({ ctx, fn }: { ctx: Ctx; fn?: string }) {
 // ------------------------------------------------------------------ all functions
 
 function Functions({ ctx }: { ctx: Ctx }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const traced = useSql(`SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,
       any_value(resource_attributes['cloud.region']) AS region, any_value(resource_attributes['cloud.account.id']) AS account
@@ -107,7 +107,7 @@ type Invocation = { ts: string; span_id: string; trace_id: string; name: string;
                     cold: string; attrs: Record<string, unknown> };
 
 function FunctionView({ ctx, fn }: { ctx: Ctx; fn: string }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const b = bucketSeconds(ctx.range);
   const key = fn + ctx.range.key + ctx.tick;
   const [search, setSearch] = useState("");

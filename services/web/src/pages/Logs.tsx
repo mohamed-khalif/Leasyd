@@ -61,7 +61,7 @@ export function Logs({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
   const [shown, setShown] = useColumns("logs", COLUMNS);
 
   const v = VIEWS.find((x) => x.key === view) ?? VIEWS[0];
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const where: Where[] = [...v.where, ...filters.map((f) => ({ field: f.field, op: "=", value: f.value }))];
   if (applied.trim()) where.push({ field: "body", op: "contains", value: applied.trim() });
   const services = v.services ?? (service ? [service] : undefined);

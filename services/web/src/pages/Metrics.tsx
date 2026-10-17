@@ -42,7 +42,7 @@ function MetricList({ ctx }: { ctx: Ctx }) {
   const [filter, setFilter] = useState("");
   const [size, setSize] = useState<"cardinality" | "points">("cardinality");
   const [folded, setFolded] = useState<Record<string, boolean>>({});
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const list = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "metric_type", "temporality", "is_monotonic", "unit"],
                           aggs: [{ fn: "count" }], limit: 2000 }, "l" + key);
@@ -150,7 +150,7 @@ function MetricDetail({ ctx, name, params }: { ctx: Ctx; name: string; params: U
   const [service, setService] = useState(params.get("service") ?? "");
   const [split, setSplit] = useState(params.get("by") ?? "service");
   const [agg, setAgg] = useState("avg");
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = name + ctx.range.key + ctx.tick;
   const where: Where[] = [{ field: "metric_name", op: "=", value: name }];
 

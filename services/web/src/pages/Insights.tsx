@@ -20,7 +20,7 @@ const SUCCESS = "synthetics.check.success";
 
 /** One query, re-run when the time range or refresh tick changes (null: not needed). */
 function usePanel(ctx: Ctx, signal: Signal, extra: Omit<Query, "signal" | "start" | "end"> | null) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   return useQuery(extra && { signal, ...w, ...extra }, JSON.stringify(extra) + signal + ctx.range.key + ctx.tick);
 }
 

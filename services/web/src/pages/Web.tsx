@@ -33,7 +33,7 @@ export const rate = (name: string, v: number) => {
 const TONE = { good: "ok", "needs-improvement": "warn", poor: "bad", "": undefined } as const;
 
 export function Web({ ctx }: { ctx: Ctx }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const apps = useSql(`SELECT service, count(*) FILTER (WHERE ${A("rum.type")} = 'page_view') AS views
     FROM logs WHERE ${RUM} GROUP BY 1 ORDER BY 2 DESC`, w, "apps" + key);

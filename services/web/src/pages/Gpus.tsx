@@ -22,7 +22,7 @@ const USE_KEYS = [{ label: "busy", color: "var(--accent)" }, { label: "held, idl
                   { label: "unallocated", color: "var(--series-6)" }];
 
 export function Gpus({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const hint = useHint(w, key);
   const [tab, setTab] = useState<Tab>((params.get("tab") as Tab) || "overview");

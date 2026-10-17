@@ -202,7 +202,7 @@ function DashboardView({ ctx, id, edit, onChanged, initial }: { ctx: Ctx; id: st
 
 function Variables({ ctx, variables, values, onChange }: { ctx: Ctx; variables: Dashboard["variables"];
                     values: Record<string, string[]>; onChange: (v: Record<string, string[]>) => void }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const opts = { group_by: ["service"], aggs: [{ fn: "count" }], limit: 500, ...w };
   const t = useQuery({ signal: "traces", ...opts }, "vt" + ctx.range.key + ctx.tick);
   const l = useQuery({ signal: "logs", ...opts }, "vl" + ctx.range.key + ctx.tick);

@@ -20,7 +20,7 @@ const TABS: [Tab, string][] = [["overview", "Overview"], ["nodes", "Nodes"], ["w
 const COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
 
 export function Kubernetes({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const hint = useHint(w, key);
   const [tab, setTab] = useState<Tab>((params.get("tab") as Tab) || "overview");

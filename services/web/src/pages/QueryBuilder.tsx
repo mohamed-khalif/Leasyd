@@ -120,7 +120,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
   const [nonce, setNonce] = useState(0);
   const [copied, setCopied] = useState(false);
   const [adding, setAdding] = useState(false);
-  const w = useRangeWindow(ctx.range, ctx.tick, nonce);
+  const w = useRangeWindow(ctx, nonce);
   const step = bucketSeconds(ctx.range);
   const metricList = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "metric_type", "is_monotonic"], aggs: [{ fn: "count" }], limit: 2000 },
                               "ml" + ctx.range.key + ctx.tick);

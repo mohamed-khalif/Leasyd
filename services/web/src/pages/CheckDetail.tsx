@@ -54,7 +54,7 @@ export function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const later = useRef<ReturnType<typeof setTimeout>>(undefined);   // the re-read after Run now
   useEffect(() => () => clearTimeout(later.current), []);
 
-  const w = useRangeWindow(ctx.range, ctx.tick, nonce);
+  const w = useRangeWindow(ctx, nonce);
   const exRuns = (check?.exclusions ?? []).map((e) => e.run_id);
   const key = id + ctx.range.key + ctx.tick + nonce + ":" + exRuns.join(",").length;
   const runs = useQuery({ signal: "traces", ...w, services: ["synthetics"], search: { limit: RUNS },

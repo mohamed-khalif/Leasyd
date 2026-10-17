@@ -13,6 +13,8 @@ const middlewares: Middleware[] = [];
 
 export let inFlight = 0;
 export const requests: string[] = [];
+/** The JSON body of each POST, in order. */
+export const bodies: { path: string; body: unknown }[] = [];
 /** "METHOD /path" (no query string) -> the status to fail it with, for error-path tests. */
 export const failing = new Map<string, number>();
 
@@ -51,6 +53,7 @@ export async function installMockBackend() {
     if (!url.pathname.startsWith("/v1/")) return new Response("{}", { status: 404 });
     const method = init?.method ?? "GET";
     requests.push(`${method} ${url.pathname}`);
+    if (method === "POST" && typeof init?.body === "string") bodies.push({ path: url.pathname, body: JSON.parse(init.body) });
     const fail = failing.get(`${method} ${url.pathname}`);
     if (fail) return new Response(JSON.stringify({ error: `forced ${fail}` }), { status: fail });
     inFlight++;

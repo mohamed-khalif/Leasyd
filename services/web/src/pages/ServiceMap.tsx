@@ -71,7 +71,7 @@ const curve = (x1: number, y1: number, x2: number, y2: number) => {
 };
 
 export function ServiceMap({ ctx }: { ctx: Ctx }) {
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const nq = useSql(NODES_SQL, w, "n" + key), eq = useSql(EDGES_SQL, w, "e" + key);
   const [sel, setSel] = useState<string | null>(null);
@@ -188,7 +188,7 @@ const RUNTIME_DASHBOARDS: Record<string, [string, string]> = { java: ["builtin-j
 
 function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: Node; minutes: number; edges: Edge[]; onClose: () => void }) {
   const [tab, setTab] = useState<"overview" | "operations">("overview");
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const b = bucketSeconds(ctx.range);
   const key = node.service + ctx.range.key + ctx.tick;
   const series = useSql(`SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t, count(*) AS n,

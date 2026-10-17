@@ -65,7 +65,7 @@ function Explorer({ ctx, service: initialService }: { ctx: Ctx; service?: string
   const [shown, setShown] = useColumns("spans", COLUMNS);
 
   const v = VIEWS.find((x) => x.key === view) ?? VIEWS[0];
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const b = bucketSeconds(ctx.range);
   const where: Where[] = [...v.where, ...(applied.trim() ? [{ field: "name", op: "contains", value: applied.trim() }] : [])];
   const services = v.services ?? (service ? [service] : undefined);

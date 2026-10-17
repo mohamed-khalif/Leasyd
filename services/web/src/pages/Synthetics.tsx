@@ -64,7 +64,7 @@ function useChecks(tick: number) {
 
 function CheckList({ ctx }: { ctx: Ctx }) {
   const list = useChecks(ctx.tick);
-  const w = useRangeWindow(ctx.range, ctx.tick);
+  const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const excluded = (list.data?.checks ?? []).flatMap((c) => c.excluded_runs ?? []);
   const byCheck = { signal: "metrics" as const, ...w, services: ["synthetics"], group_by: ["attributes.check.id"], limit: 1000 };
