@@ -7,6 +7,7 @@ scrape), not the lab's own bootstrap logs.
 """
 import gzip
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -47,6 +48,7 @@ def main(bucket, tenant, minutes, out_path):
                                 docs.append({key: items})
                     if docs:
                         files.append({"signal": signal, "dt": day, "hour": hour, "docs": docs})
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     data = {"captured": datetime.now(timezone.utc).isoformat(), "tenant": tenant, "minutes": int(minutes), "files": files}
     with gzip.open(out_path, "wt") as f:
         json.dump(data, f, separators=(",", ":"))
