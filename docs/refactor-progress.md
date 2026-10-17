@@ -60,5 +60,14 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] obs-query cap needed --parameter-overrides CoordinatorConcurrency=400 (deploy keeps previous parameter values)
 - [ ] Later, separate changes: password-flow migration (§6), optional TOTP MFA
 
-## Phase 5 (safety net): next
-## Bug fixes, Phase 4 (caching, STOP), Phase 6, Phase 7: not started
+## Phase 5 (safety net)
+- [x] ESLint (flat config, typescript-eslint + react-hooks), `npm run lint` clean (37bb67a)
+- [x] eslint-disable: 25 -> 20, each with a `-- reason`; shared "now" per page via useNow/useRangeWindow (37bb67a)
+- [x] Test runner: node:test + esbuild, happy-dom (dev only) (4233908)
+- [x] api.ts tests: auth, error mapping, 202 polling, give-up, transient 503 (4233908)
+- [x] Hook tests: useQuery / useSql / useRows / useHint, current quirks pinned (21a6de4)
+- [x] Page smoke tests: 22 routes against the mock backend
+- [x] 45 tests pass; tsc and lint clean
+
+## Bug fixes: next (order B12, B10, B3, B4/B5, B1, then the rest)
+## Phase 4 (caching, STOP), Phase 6, Phase 7: not started
