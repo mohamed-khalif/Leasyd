@@ -31,5 +31,5 @@ await build({
   banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
 });
 const files = readdirSync(out, { recursive: true }).map(String).filter((f) => f.endsWith(".mjs")).map((f) => join(out, f));
-const r = spawnSync(process.execPath, ["--test", "--test-concurrency=1", ...files], { stdio: "inherit" });
+const r = spawnSync(process.execPath, ["--test", "--test-concurrency=1", "--test-force-exit", ...files], { stdio: "inherit" });
 process.exit(r.status ?? 1);
