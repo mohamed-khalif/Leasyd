@@ -1,7 +1,7 @@
 // Shared building blocks of the explorer pages: stacked bars over time, a duration heat map,
 // a tree map, a pass/fail strip, a views sidebar, tabs, a column picker, collapsible sections
 // and a side drawer. Plain SVG and CSS; sizes follow the container.
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { fmtMs, fmtNum, fmtTime, Range } from "../time";
 
 /** The element's width, kept current as it resizes. */
@@ -106,21 +106,36 @@ export const bucketLow = (b: number) => 2 ** (b / LOG_STEPS);
 /** Duration against time: each cell's shade is how many spans took that long then; red where they failed. */
 export function Heatmap(p: { cells: Cell[]; range: Range; bucketMs: number; height?: number;
                              onCell?: (c: { t: number; b: number }) => void; selected?: { t: number; b: number } | null }) {
-  const cells = p.cells.filter((c) => Number.isFinite(c.t));   // see StackedBars
+  const cells = useMemo(() => p.cells.filter((c) => Number.isFinite(c.t)), [p.cells]);   // see StackedBars
   const [ref, w] = useWidth();
   const [hover, setHover] = useState<Cell | null>(null);
   const [hx, setHx] = useState(0);
   const h = p.height ?? 180, padL = 60, padR = 6, padT = 4, padB = 20;
-  const x1 = p.range.to ?? Date.now(), x0 = p.range.from ?? x1 - p.range.minutes * 60_000;
+  const now = useMemo(() => Date.now(), [p.cells, p.range]);   // eslint-disable-line react-hooks/exhaustive-deps -- read again with new data or range, not per hover
+  const x1 = p.range.to ?? now, x0 = p.range.from ?? x1 - p.range.minutes * 60_000;
   const bs = cells.map((c) => c.b);
-  const lo = bs.length ? Math.min(...bs) : 0, hi = bs.length ? Math.max(...bs) : 1;
+  const lo = bs.length ? bs.reduce((a, b) => Math.min(a, b)) : 0, hi = bs.length ? bs.reduce((a, b) => Math.max(a, b)) : 1;
   const rows = Math.max(1, hi - lo + 1), rh = (h - padT - padB) / rows;
   const X = (t: number) => padL + ((t - x0) / (x1 - x0 || 1)) * (w - padL - padR);
   const cw = Math.max(1.5, X(x0 + p.bucketMs) - X(x0) - 0.5);
   const Yb = (b: number) => padT + (hi - b) * rh;
-  const top = Math.max(1, ...cells.map((c) => c.count));
+  const top = cells.reduce((a, c) => Math.max(a, c.count), 1);
   const shade = (c: Cell) => 0.12 + 0.88 * Math.sqrt(c.count / top);
   const ticks = rows <= 6 ? Array.from({ length: rows }, (_, i) => lo + i) : Array.from({ length: 5 }, (_, i) => Math.round(lo + (i * (rows - 1)) / 4));
+  const { onCell, selected } = p;
+  // The cells (up to 10,000): drawn once per data, size and selection; a hover only moves the tip.
+  const layer = useMemo(() => cells.map((c) => {
+    const sel = selected && selected.t === c.t && selected.b === c.b;
+    const x = Math.max(padL + 1, X(c.t)), cwx = Math.max(1, cw - (x - X(c.t))), ch = Math.max(1, rh - 1);
+    const errShare = c.errors / c.count;      // red for the part of the cell's spans that failed
+    return (
+      <g key={`${c.t}:${c.b}`} onMouseMove={(e) => { setHover(c); setHx(e.nativeEvent.offsetX); }} onClick={() => onCell?.({ t: c.t, b: c.b })}>
+        <rect x={x} y={Yb(c.b) + 0.5} width={cwx} height={ch} rx={1} fill="var(--accent)" opacity={shade(c)}
+              stroke={sel ? "var(--text)" : undefined} />
+        {c.errors > 0 && <rect x={x} y={Yb(c.b) + 0.5} width={cwx} height={ch} rx={1} fill="var(--sev-error)" opacity={0.35 + 0.65 * Math.min(1, errShare * 2)} />}
+      </g>
+    );
+  }), [cells, selected, onCell, x0, x1, w, h, lo, hi, top]);   // eslint-disable-line react-hooks/exhaustive-deps -- X, Yb, cw, rh and shade are made from these
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <svg width={w} height={h} style={{ display: "block", cursor: p.onCell ? "crosshair" : undefined }} onMouseLeave={() => setHover(null)}>
@@ -131,18 +146,7 @@ export function Heatmap(p: { cells: Cell[]; range: Range; bucketMs: number; heig
           <text key={t} x={X(t)} y={h - 5} textAnchor="middle" fill="var(--text-3)" style={axis}>{fmtTime(new Date(t).toISOString(), p.range)}</text>
         ))}
         <line x1={padL} x2={w - padR} y1={h - padB} y2={h - padB} stroke="var(--border)" />
-        {cells.map((c) => {
-          const sel = p.selected && p.selected.t === c.t && p.selected.b === c.b;
-          const x = Math.max(padL + 1, X(c.t)), cwx = Math.max(1, cw - (x - X(c.t))), ch = Math.max(1, rh - 1);
-          const errShare = c.errors / c.count;      // red for the part of the cell's spans that failed
-          return (
-            <g key={`${c.t}:${c.b}`} onMouseMove={(e) => { setHover(c); setHx(e.nativeEvent.offsetX); }} onClick={() => p.onCell?.({ t: c.t, b: c.b })}>
-              <rect x={x} y={Yb(c.b) + 0.5} width={cwx} height={ch} rx={1} fill="var(--accent)" opacity={shade(c)}
-                    stroke={sel ? "var(--text)" : undefined} />
-              {c.errors > 0 && <rect x={x} y={Yb(c.b) + 0.5} width={cwx} height={ch} rx={1} fill="var(--sev-error)" opacity={0.35 + 0.65 * Math.min(1, errShare * 2)} />}
-            </g>
-          );
-        })}
+        {layer}
       </svg>
       {hover && (
         <Tip x={hx} w={w}>

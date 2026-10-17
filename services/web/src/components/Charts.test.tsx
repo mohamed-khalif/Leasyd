@@ -16,3 +16,4 @@ test("bars without a valid time are skipped", async () => {
   assert.equal(view.container.querySelectorAll("rect").length, 1);
   await view.unmount();
 });
+
