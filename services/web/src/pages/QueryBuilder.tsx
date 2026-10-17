@@ -130,7 +130,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
       if (!pts.length) continue;
       const vals = pts.map((p) => p[1]);
       series.push({ label: legendName(q, qi, s, queries.length), color: PALETTE[series.length % PALETTE.length], points: pts, q: qi,
-                    last: vals[vals.length - 1], avg: vals.reduce((a, v) => a + v, 0) / vals.length, max: Math.max(...vals) });
+                    last: vals[vals.length - 1], avg: vals.reduce((a, v) => a + v, 0) / vals.length, max: vals.reduce((a, v) => Math.max(a, v), -Infinity) });   // no spread: big series overflow it
     }
   });
   const sorted = [...series].sort((a, b) => (settings.sort === "name" ? a.label.localeCompare(b.label) : b.avg - a.avg));

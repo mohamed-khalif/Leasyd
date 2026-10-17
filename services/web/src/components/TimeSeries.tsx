@@ -21,12 +21,13 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
   }, []);
 
   const h = props.height ?? 160, padR = 8, padT = 8, padB = 22;
-  const xs = props.series.flatMap((s) => s.points.map((p) => p[0]));
+  // Loops, not Math.min(...points): spreading a big result (~100k+ points) throws a RangeError.
   const now = Date.now();
   const x1 = props.range.to ?? now;
-  const x0 = Math.min(props.range.from ?? x1 - props.range.minutes * 60_000, ...(xs.length ? xs : [x1]));
+  let x0 = props.range.from ?? x1 - props.range.minutes * 60_000;
   const lines = [...(props.threshold != null ? [{ value: props.threshold, color: "var(--sev-error)" }] : []), ...(props.thresholds ?? [])];
-  const top = Math.max(0, ...lines.map((l) => l.value), ...props.series.flatMap((s) => s.points.map((p) => p[1])));
+  let top = Math.max(0, ...lines.map((l) => l.value));
+  for (const s of props.series) for (const [t, v] of s.points) { if (t < x0) x0 = t; if (v > top) top = v; }
   const ymax = niceMax(top > 0 ? top : 1);   // small values (ratios, rates) get their own scale
   // Room for the longest axis label ("6,000 ms"): about 6 px per character of the 10 px mono font.
   const padL = Math.max(44, 10 + 6.2 * Math.max(...[0, ymax / 2, ymax].map((v) => fmt(v).length)));

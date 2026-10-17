@@ -224,7 +224,8 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
 
   const tree = useMemo(() => (spans.data ? layout(records(spans.data)) : []), [spans.data]);
   const logRows = useMemo(() => (logs.data ? records(logs.data) : []).sort((a, b) => Number(a.ts_unix_nano) - Number(b.ts_unix_nano)), [logs.data]);
-  const t0 = Math.min(...tree.map((s) => s.start)), t1 = Math.max(...tree.map((s) => s.start + s.dur));
+  // reduce, not Math.min(...spans): a trace with ~100k+ spans overflows the spread.
+  const t0 = tree.reduce((a, s) => Math.min(a, s.start), Infinity), t1 = tree.reduce((a, s) => Math.max(a, s.start + s.dur), -Infinity);
   const services = [...new Set(tree.map((s) => s.service))];
   const color = (svc: string) => SERVICE_COLORS[services.indexOf(svc) % SERVICE_COLORS.length];
   const kids = useMemo(() => {

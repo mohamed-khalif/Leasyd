@@ -314,7 +314,7 @@ function Chart(p: { title: string; lines: Line[]; colors: Map<string, string>; c
 function GroupTable(p: { lines: Line[]; split: string; unit: string }) {
   const rows = rank(p.lines).map((l) => {
     const pts = [...l.points].sort((a, b) => a[0] - b[0]), vals = pts.map((x) => x[1]);
-    return [l.label, fmtNum(vals[vals.length - 1]) + p.unit, fmtNum(Math.max(...vals)) + p.unit,
+    return [l.label, fmtNum(vals[vals.length - 1]) + p.unit, fmtNum(vals.reduce((a, v) => Math.max(a, v), -Infinity)) + p.unit,
             fmtNum(vals.reduce((a, v) => a + v, 0) / vals.length) + p.unit];
   });
   return <RankTable head={[p.split ? p.split.replace(/^attributes\./, "") : "series", "latest", "max", "average"]} rows={rows} numCols={3} maxHeight={320} />;
