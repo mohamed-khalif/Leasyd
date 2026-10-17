@@ -1,6 +1,7 @@
 import { FormEvent, Fragment, useMemo, useState } from "react";
 import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
+import { useDebounced } from "../useDebounced";
 import { useHashParam, useHashSearch } from "../hashParams";
 import { Bar, ColumnPicker, StackedBars, StackKey, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
@@ -58,7 +59,8 @@ export function Logs({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
   const base: Omit<Query, "group_by" | "aggs" | "search" | "limit"> = { signal: "logs", ...w, where, ...(services ? { services } : {}) };
   const key = JSON.stringify(base) + ctx.tick;
   const b = bucketSeconds(ctx.range);
-  const g = groupBy === "custom" ? (custom.trim() ? `attributes.${custom.trim()}` : "") : groupBy;
+  const [customKey, customNow] = useDebounced(custom.trim());   // 400 ms after typing stops; Enter at once
+  const g = groupBy === "custom" ? (customKey ? `attributes.${customKey}` : "") : groupBy;
 
   const hist = useQuery({ ...base, group_by: [`ts:${b}`, "severity_number"], aggs: [{ fn: "count" }], limit: 10000 }, "h" + key);
   const byGroup = useQuery(g ? { ...base, group_by: [`ts:${b}`, g], aggs: [{ fn: "count" }], limit: 10000 } : null, "g" + key + g);
@@ -117,7 +119,8 @@ export function Logs({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
             {GROUPS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             <option value="custom">Attribute…</option>
           </select>
-          {groupBy === "custom" && <input className="input mono" style={{ width: 170 }} placeholder="attribute key" value={custom} onChange={(e) => setCustom(e.target.value)} aria-label="Attribute key" />}
+          {groupBy === "custom" && <input className="input mono" style={{ width: 170 }} placeholder="attribute key" value={custom} onChange={(e) => setCustom(e.target.value)}
+                                         onKeyDown={(e) => e.key === "Enter" && customNow()} aria-label="Attribute key" />}
           <button className="btn primary">Search</button>
         </form>
         {(filters.length > 0 || service) && !v.services && (

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AlertChannel, AlertRule, alerts, Check, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
 import type { Ctx } from "../App";
+import { useDebounced } from "../useDebounced";
 import { useCheckList } from "../checkList";
 import { ALERT_TEMPLATES, AlertTemplate } from "../infra/alertTemplates";
 import { Loads, Panel } from "../components/Panel";
@@ -317,13 +318,16 @@ function QueryRuleFields({ r, set, ctx }: { r: Omit<AlertRule, "id">; set: (p: P
       (e: Error) => setChart({ series: [], error: e.message }));
   };
   useEffect(() => { if (r.promql) run(r.promql); }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- a prefilled rule's preview runs once, on opening
+  // The thresholds' preview runs 400 ms after typing in them stops.
+  const [thresholds] = useDebounced(JSON.stringify([r.op ?? ">", r.critical, r.degraded ?? null]));
   useEffect(() => {
-    if (!shown.trim() || r.critical == null || Number.isNaN(r.critical)) return;
+    const [op, critical, degraded] = JSON.parse(thresholds) as [AlertRule["op"], number | undefined, number | null];
+    if (!shown.trim() || critical == null || Number.isNaN(critical)) return;
     let live = true;
-    alerts.preview({ promql: shown, op: r.op ?? ">", critical: r.critical, degraded: r.degraded ?? null })
+    alerts.preview({ promql: shown, op: op ?? ">", critical, degraded })
       .then((p) => live && setNow(p), (e: Error) => live && setNow({ error: e.message }));
     return () => { live = false; };
-  }, [shown, r.op, r.critical, r.degraded]);
+  }, [shown, thresholds]);
   const num = (v: string) => (v === "" ? undefined : Number(v));
   const range = { key: "3h", label: "Last 3 hours", minutes: 180 };
   const applyTemplate = (t: AlertTemplate) => {

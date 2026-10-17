@@ -4,6 +4,7 @@ import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "
 import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
 import { replaceHashParams } from "../hashParams";
+import { useDebounced } from "../useDebounced";
 import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtNum } from "../time";
@@ -130,15 +131,16 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
   const texts = queries.map((q) => toPromQL(q, kinds.get(q.b.metric)));
   const [ran, setRan] = useState<string[]>(texts);
 
-  // Keep the link current, so the page can be bookmarked or shared.
+  // Keep the link current, so the page can be bookmarked or shared (once typing pauses).
+  const [link] = useDebounced(JSON.stringify({ queries, settings }));
   useEffect(() => {
-    const blob = btoa(unescape(encodeURIComponent(JSON.stringify({ queries, settings }))));
-    replaceHashParams({ q: blob });   // keeps the range parameter
-  }, [queries, settings]);
-  // Builder queries re-run as they change; PromQL runs on Run (Ctrl+Enter).
+    replaceHashParams({ q: btoa(unescape(encodeURIComponent(link))) });   // keeps the range parameter
+  }, [link]);
+  // Builder queries re-run as they change, 400 ms after typing stops (Enter: at once); PromQL runs on Run (Ctrl+Enter).
+  const [builderKey, runBuilderNow] = useDebounced(JSON.stringify(queries.map((q, i) => (q.mode === "promql" ? q.id : texts[i]))));
   useEffect(() => {
     setRan((old) => queries.map((q, i) => (q.mode === "promql" ? old[i] ?? texts[i] : texts[i])));
-  }, [JSON.stringify(queries.map((q) => (q.mode === "promql" ? q.id : texts))), kinds.size]);   // eslint-disable-line react-hooks/exhaustive-deps -- builder queries re-run when their text changes or metric kinds arrive
+  }, [builderKey, kinds.size]);   // eslint-disable-line react-hooks/exhaustive-deps -- builder queries re-run when their (settled) text changes or metric kinds arrive
   const runPromQL = () => { setRan(texts); setNonce((n) => n + 1); };
 
   const results = useResults(queries, ran, w, step, ctx.tick + ":" + nonce);
@@ -260,8 +262,10 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
                   </div>
                 </div>
               ) : (
-                <BuilderForm q={cur} metrics={[...kinds.keys()].sort()} kind={kinds.get(cur.b.metric)}
-                             onChange={(b) => update(cur.id, (q) => ({ ...q, b }))} />
+                <div onKeyDown={(e) => e.key === "Enter" && runBuilderNow()}>
+                  <BuilderForm q={cur} metrics={[...kinds.keys()].sort()} kind={kinds.get(cur.b.metric)}
+                               onChange={(b) => update(cur.id, (q) => ({ ...q, b }))} />
+                </div>
               )}
               {cur.mode !== "promql" && texts[idx] && (
                 <div className="qb-row top"><span>PromQL</span>

@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { sqlString as q } from "../lib/sql";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
+import { useDebounced } from "../useDebounced";
 import { StackedBars, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
@@ -128,7 +129,8 @@ function FunctionView({ ctx, fn }: { ctx: Ctx; fn: string }) {
        FROM spans WHERE service = ${q(fn)} AND ${ENTRY} GROUP BY 1 ORDER BY 1`
     : `SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t, ${CW_AGGS}
        FROM metrics WHERE service = ${q(fn)} AND ${CW} AND ${PER_FN} GROUP BY 1 ORDER BY 1`, w, "s" + key + known + traced);
-  const s = search.trim();
+  const [settled, searchNow] = useDebounced(search);   // queries 400 ms after typing stops; Enter at once
+  const s = settled.trim();
   const invocations = useSql(traced ? `SELECT ts, span_id, trace_id, name, duration_ns, status_code,
         coalesce(attributes['faas.invocation_id'], attributes['faas.execution'], span_id) AS request_id,
         attributes['faas.coldstart'] AS cold, attributes
@@ -186,7 +188,8 @@ function FunctionView({ ctx, fn }: { ctx: Ctx; fn: string }) {
           </p>
         ) : (
           <>
-            <input className="input" placeholder="Search by request ID…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search invocations" />
+            <input className="input" placeholder="Search by request ID…" value={search} onChange={(e) => setSearch(e.target.value)}
+                   onKeyDown={(e) => e.key === "Enter" && searchNow()} aria-label="Search invocations" />
             <Panel title={`Latest ${list.length}`} flush>
               <Loads q={invocations} empty={!list.length} height={160}>
                 {() => (
