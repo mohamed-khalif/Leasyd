@@ -235,7 +235,7 @@ class Tools:
         return out
 
     def query(self, payload):
-        out = self.invoke({**payload, "tenant": self.tenant})
+        out = self.invoke({**payload, "tenant": self.tenant, "bill": True})   # uses the daily search allowance
         if isinstance(out, dict) and out.get("error"):
             raise ValueError(out["error"])
         return out

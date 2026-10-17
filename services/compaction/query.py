@@ -802,9 +802,24 @@ def handler(event, context):
       a JSON query;
       {"tenant", "promql", "time"}: one PromQL evaluation (the Prometheus API's vector result);
       {"tenant", "promql", "start", "end", "step"}: a PromQL range (matrix);
-      {"tenant", "sql", "start", "end"}: read-only SQL."""
+      {"tenant", "sql", "start", "end"}: read-only SQL.
+    "bill": true (the AI SRE and MCP) uses the tenant's daily search allowance like the API does;
+    without it (alert evaluation) the query is neither charged nor refused."""
     if "answer_job" in event:
         return answer_job(event["answer_job"])
+    bill = event.get("bill")
+    if bill and (refused := over_daily(layout.check_tenant(event["tenant"]))):
+        return {"error": refused, **({"retryable": True} if refused == limits.UNAVAILABLE else {})}
+    try:
+        return _direct({k: v for k, v in event.items() if k != "bill"})
+    finally:
+        if bill:
+            charge_units(event["tenant"])
+        else:
+            _units.pop(event.get("tenant"), None)   # not this tenant's to pay for
+
+
+def _direct(event):
     try:
         if "promql" in event:
             import promql
@@ -1149,6 +1164,31 @@ def over_limit(tenant, kind):
         return _over_limit_from_memory(tenant, kind, daily, limit, minute, e)
 
 
+def over_daily(tenant):
+    """None, or why the tenant can't query now: today's search allowance is used up, or it can't be
+    checked (the store unreadable and nothing fresh in memory; see LIMITS_FRESH_S / UNITS_FRESH_S)."""
+    table = _tenants_table()
+    try:
+        _, daily = _plan(table, tenant)
+    except ClientError as e:
+        if (cached := _plans.get(tenant)) is None or time.time() - cached[1] > UNITS_FRESH_S:
+            limits.log_fallback("plan", tenant, False, e)
+            return limits.UNAVAILABLE
+        daily = cached[0][1]
+    if not daily:
+        return None
+    try:
+        used = int((table.get_item(Key={"pk": f"usage#search#{tenant}#{_day()}"}).get("Item") or {}).get("n", 0))
+        _daily.remember((tenant, _day()), used)
+    except ClientError as e:
+        if (got := _daily.recall((tenant, _day()))) is None:
+            limits.log_fallback("units", tenant, False, e)
+            return limits.UNAVAILABLE
+        used = got[0]
+        limits.log_fallback("units", tenant, True, e)
+    return _allowance_text(daily) if used >= daily else None
+
+
 def _over_limit_from_memory(tenant, kind, daily, limit, minute, error):
     """over_limit when obs-tenants can't be read: from what was last read here, while it is fresh."""
     if _rates.recall(("contact", tenant)) is None:
@@ -1171,9 +1211,13 @@ def _limits_unavailable():
     return _http(503, {"error": limits.UNAVAILABLE}, retry_after=5)
 
 
+def _allowance_text(daily):
+    return (f"today's search allowance is used up ({daily:,} search units); "
+            "it resets at 00:00 UTC. Shorter time ranges use less of it.")
+
+
 def _allowance_used_up(daily):
-    return _http(429, {"error": f"today's search allowance is used up ({daily:,} search units); "
-                                "it resets at 00:00 UTC. Shorter time ranges use less of it."})
+    return _http(429, {"error": _allowance_text(daily)})
 
 
 def _too_many(kind, limit):

@@ -210,7 +210,7 @@ def test_tools_always_query_the_tenant_and_shape_results(sre):
     assert q["series"][0]["points"] == 100 and len(q["series"][0]["sample"]) == 24 and q["series"][0]["max"] == 99
     logs = t.run("search_logs", {"service": "checkout", "min_severity": "ERROR", "text": "boom"})
     assert len(logs["records"][0]["body"]) == 601                      # long bodies cut
-    assert all(p["tenant"] == "acme" for p in seen)
+    assert all(p["tenant"] == "acme" and p["bill"] is True for p in seen)   # B10: uses the daily allowance
     w = seen[-1]["where"]
     assert {"field": "severity_number", "op": ">=", "value": 17} in w and {"field": "body", "op": "contains", "value": "boom"} in w
     with pytest.raises(ValueError):

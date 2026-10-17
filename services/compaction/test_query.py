@@ -873,6 +873,27 @@ def test_daily_search_allowance(data, monkeypatch):
     assert "Item" not in t.get_item(Key={"pk": f"usage#search#initech#{query._day()}"})
 
 
+def test_ai_and_mcp_queries_use_the_daily_allowance(data, monkeypatch):
+    """B10: direct calls marked "bill" (the AI SRE and MCP, through obs-query) are charged and refused
+    past today's allowance like the API; unmarked internal calls (alert evaluation) are neither."""
+    t = boto3.resource("dynamodb").Table("obs-tenants")
+    t.put_item(Item={"pk": "tenant#acme", "plan": "standard", "search_units_per_day": 2})
+    query._plans.clear()
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    def usage():
+        return (t.get_item(Key={"pk": f"usage#search#acme#{query._day()}"}).get("Item") or {}).get("n", 0)
+    assert "error" not in query.handler({**q, "tenant": "acme"}, None)    # an alert: not charged
+    assert usage() == 0
+    assert ["error" in query.handler({**q, "tenant": "acme", "bill": True}, None) for _ in range(2)] == [False, False]
+    assert usage() == 2
+    out = query.handler({**q, "tenant": "acme", "bill": True}, None)
+    assert "allowance is used up (2 search units)" in out["error"] and usage() == 2
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
+    out = query.handler({"tenant": "acme", "bill": True, "sql": "SELECT count(*) FROM logs", "start": q["start"], "end": q["end"]}, None)
+    assert "allowance is used up" in out["error"]
+    assert "error" not in query.handler({**q, "tenant": "acme"}, None)    # alerts still run
+
+
 def test_worker_out_of_file_descriptors_exits_for_a_fresh_container(monkeypatch):
     import errno as _errno
     exits = []
