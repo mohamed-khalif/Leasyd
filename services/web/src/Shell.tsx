@@ -1,15 +1,14 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu } from "./icons";
 import { customRange, fmtDay, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
-import { account } from "./api";
+import { useAccount } from "./useAccount";
 
 export const CONTACT_EMAIL = "support@leasyd.com";
 
 /** A free trial's days left, or that it (or the subscription) ended: shown above every page. Once
  * billing is set up the way out is adding payment details in Settings; before that, an email. */
 function TrialBanner() {
-  const [acc, setAcc] = useState<Awaited<ReturnType<typeof account.get>> | null>(null);
-  useEffect(() => { account.get().then(setAcc, () => undefined); }, []);
+  const { account: acc } = useAccount();   // once per page load; a failure shows no banner
   if (!acc) return null;
   const pay = acc.billing?.enabled;
   const fix = pay ? <><a href="#/settings">add payment details in Settings</a></> : <>email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></>;

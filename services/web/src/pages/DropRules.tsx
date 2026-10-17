@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { account, DropCondition, DropRule, Meter, query, records, Signal } from "../api";
 import type { Ctx } from "../App";
+import { useAccount } from "../useAccount";
 import { Panel } from "../components/Panel";
 import { PRICE, PRICE_LABEL, usd } from "../pricing";
 import { fmtNum } from "../time";
@@ -42,8 +43,8 @@ type Preview = { matched: number; total: number } | "error" | "loading";
 export function DropRules({ ctx }: { ctx: Ctx }) {
   const [rules, setRules] = useState<DropRule[] | null>(null);
   const [saved, setSaved] = useState<string>("[]");
-  const [owner, setOwner] = useState(false);
-  const [roleError, setRoleError] = useState<string | null>(null);
+  const { account: acc, error: roleError } = useAccount(ctx.tick);
+  const owner = acc?.you.role === "owner";
   const [limits, setLimits] = useState({ rules: 50, conditions: 5 });
   const [today, setToday] = useState<Meter | null>(null);
   const [editing, setEditing] = useState<{ index: number; rule: DropRule } | null>(null);
@@ -55,7 +56,6 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
   useEffect(() => {
     account.dropRules().then((r) => { setRules(r.rules); setSaved(JSON.stringify(r.rules)); setLimits(r.limits); },
       (e: Error) => setError(e.message));
-    account.get().then((a) => { setOwner(a.you.role === "owner"); setRoleError(null); }, (e: Error) => setRoleError(e.message));
     account.meters(1).then((r) => setToday(r.days?.[0] ?? null), () => undefined);
   }, [ctx.tick]);
 

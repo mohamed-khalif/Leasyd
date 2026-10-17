@@ -4,6 +4,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { account, Account, KeyScope, rumSnippet } from "../api";
 import type { Ctx } from "../App";
+import { useAccount } from "../useAccount";
 import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
 import { DEFAULT_GPU_PRICES, GpuPrice } from "../infra/model";
@@ -12,7 +13,7 @@ import { fmtNum, fmtUnit } from "../time";
 const SCOPES = { ingest: "Send data", read: "Read data (API)", browser: "Web monitoring (browser)" } as const;
 
 export function Settings({ ctx }: { ctx: Ctx }) {
-  const [acc, setAcc] = useState<Account | null>(null);
+  const { account: acc, error: loadError, reload: load } = useAccount(ctx.tick);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newKey, setNewKey] = useState<{ key_id: string; scope: string; api_key: string; origins?: string[] } | null>(null);
@@ -21,8 +22,6 @@ export function Settings({ ctx }: { ctx: Ctx }) {
   const [invite, setInvite] = useState({ email: "", role: "member" as "member" | "owner" });
   const [note, setNote] = useState<string | null>(null);
 
-  const load = () => account.get().then(setAcc, (e) => setError((e as Error).message));
-  useEffect(() => { load(); }, [ctx.tick]);    
   // Back from Stripe Checkout: the subscription starts when Stripe tells us (seconds); look again shortly.
   const back = /[?&]billing=(done|cancelled)/.exec(window.location.hash)?.[1];
   useEffect(() => {
@@ -32,14 +31,14 @@ export function Settings({ ctx }: { ctx: Ctx }) {
       return () => t.forEach(window.clearTimeout);
     }
     return undefined;
-  }, [back]);    
+  }, [back, load]);   // load (reload) is stable
   const toStripe = (f: () => Promise<{ url: string }>) => act(async () => { window.location.assign((await f()).url); });
   const act = async (f: () => Promise<unknown>, done?: string) => {
     setBusy(true); setError(null); setNote(null);
     try { await f(); if (done) setNote(done); await load(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
 
-  if (!acc) return error ? <div className="state error">{error}</div> : <div className="skeleton" style={{ height: 300 }} />;
+  if (!acc) return error ?? loadError ? <div className="state error">{error ?? loadError}</div> : <div className="skeleton" style={{ height: 300 }} />;
   const owner = acc.you.role === "owner";
   const cap = acc.daily_cap_bytes ?? null, used = acc.today?.bytes ?? 0;
   const share = cap ? Math.min(1, used / cap) : 0;
@@ -51,7 +50,7 @@ export function Settings({ ctx }: { ctx: Ctx }) {
 
   return (
     <div className="settings">
-      {error && <div className="form-error" role="alert">{error}</div>}
+      {(error ?? loadError) && <div className="form-error" role="alert">{error ?? loadError}</div>}
       {note && <div className="form-note" role="status">{note}</div>}
 
       <Panel title="Plan" right={<span className="faint">{acc.company} · <span className="mono">{acc.tenant}</span></span>}>

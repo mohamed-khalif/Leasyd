@@ -6,8 +6,9 @@
 // Install files (collector.sh, the Ruby runtime metrics, the AWS templates) are served by the web app
 // itself under /install/ (infra/deploy-phaseW1.sh copies them from examples/).
 import { ReactNode, useEffect, useMemo, useState } from "react";
-import { account, Account, query, records, rumSnippet } from "../api";
+import { account, query, records, rumSnippet } from "../api";
 import type { Ctx } from "../App";
+import { useAccount } from "../useAccount";
 import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
 import { fmtNum } from "../time";
@@ -29,8 +30,9 @@ const SIGNALS = ["traces", "logs", "metrics"] as const;
 const POLL_MS = 10_000;
 
 export function GetStarted({ ctx, initial }: { ctx: Ctx; initial?: string | null }) {
-  const [acc, setAcc] = useState<Account | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { account: acc, error: accError } = useAccount(0, POLL_MS);   // what Leasyd has received today, every POLL_MS
+  const [actionError, setError] = useState<string | null>(null);
+  const error = actionError ?? accError;
   const [key, setKey] = useState("");
   const [created, setCreated] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -42,18 +44,7 @@ export function GetStarted({ ctx, initial }: { ctx: Ctx; initial?: string | null
   const site = location.origin;
   const k = key.trim() || "<your API key>";
 
-  // What Leasyd has received today: the account's meter, every POLL_MS.
-  useEffect(() => {
-    let live = true;
-    const load = () => account.get().then((a) => {
-      if (!live) return;
-      setAcc(a);
-      setBaseline((b) => (b == null ? a.today?.records ?? 0 : b));
-    }, (e: Error) => live && setError(e.message));
-    load();
-    const t = setInterval(load, POLL_MS);
-    return () => { live = false; clearInterval(t); };
-  }, []);
+  if (baseline === null && acc) setBaseline(acc.today?.records ?? 0);   // the count when the page opened
 
   // Which services are searchable: the last 15 minutes, by signal, until some show up.
   const found = SIGNALS.some((s) => services[s]?.length);
