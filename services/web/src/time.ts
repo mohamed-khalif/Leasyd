@@ -71,7 +71,8 @@ export const fmtDay = (t: number) => new Date(t).toLocaleDateString(undefined, {
 
 /** A value in a unit, as people read it: 1.2 s, 3 min, 2 days, 4 years; 300 MB; 99.5%. */
 export function fmtUnit(v: number, unit = "", decimals?: number): string {
-  const n = (x: number) => (decimals != null ? x.toFixed(decimals) : fmtNum(x));
+  const places = decimals == null || !isFinite(decimals) ? null : Math.min(20, Math.max(0, Math.round(decimals)));   // toFixed throws outside 0-100
+  const n = (x: number) => (places != null ? x.toFixed(places) : fmtNum(x));
   const scaled = (x: number, steps: [number, string][]) => {
     const [div, name] = steps.find(([d]) => Math.abs(x) >= d) ?? steps[steps.length - 1];
     return `${n(x / div)} ${name}`;

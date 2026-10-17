@@ -6,6 +6,7 @@ import { ApiError, me } from "./api";
 import { idToken, signOut } from "./auth";
 import { getConfig } from "./config";
 import { CONTACT_EMAIL, Shell } from "./Shell";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SignIn } from "./pages/SignIn";
 import { Insights } from "./pages/Insights";
 import { GetStarted } from "./pages/GetStarted";
@@ -90,8 +91,9 @@ export function App() {
     crumb = ["Infrastructure", "Kubernetes"];
   } else if (path.startsWith("/lambda")) {
     const fn = path.split("/")[2];
-    page = <Lambda key={fn ?? ""} ctx={ctx} fn={fn ? decodeURIComponent(fn) : undefined} />;
-    crumb = ["AWS Lambda", fn ? decodeURIComponent(fn) : "Functions"];
+    const name = fn ? decoded(fn) : undefined;
+    page = <Lambda key={fn ?? ""} ctx={ctx} fn={name} />;
+    crumb = ["AWS Lambda", name ?? "Functions"];
   } else if (path.startsWith("/synthetics")) {
     page = <Synthetics ctx={ctx} path={path} />;
     const sub = path.split("/")[2];
@@ -144,10 +146,19 @@ export function App() {
            onRange={(r) => { setRange(r); safeSet("leasyd.range", r.key); }}
            onRefresh={() => setTick((t) => t + 1)}
            onSignOut={() => { signOut(); setUser(null); }}>
-      {page}
+      <ErrorBoundary resetKey={hash}>{page}</ErrorBoundary>
     </Shell>
   );
 }
 
 function safeGet(k: string): string | null { try { return localStorage.getItem(k); } catch { return null; } }
 function safeSet(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }
+
+/** A link's %-escaped part, or the text as is when it isn't valid (a hand-edited link). */
+function decoded(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}

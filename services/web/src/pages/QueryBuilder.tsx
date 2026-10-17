@@ -80,12 +80,36 @@ function load(params: URLSearchParams): { queries: Q[]; settings: Settings } {
     const raw = params.get("q");
     if (raw) {
       const s = JSON.parse(decodeURIComponent(escape(atob(raw))));
-      if (Array.isArray(s.queries) && s.queries.length) return { queries: s.queries, settings: { ...DEFAULT_SETTINGS, ...s.settings } };
+      const queries = Array.isArray(s?.queries) ? s.queries.map(fromLink).filter((q: Q | null): q is Q => q !== null) : [];
+      if (queries.length) return { queries, settings: settingsFromLink(s.settings) };
     }
   } catch { /* a bad link: start fresh */ }
   const promqlParam = params.get("promql");
   if (promqlParam) return { queries: [{ ...newQuery(1, "promql"), promql: promqlParam }], settings: DEFAULT_SETTINGS };
   return { queries: [newQuery(1)], settings: DEFAULT_SETTINGS };
+}
+
+// A link's state is checked field by field: a hand-edited or old link drops what doesn't fit.
+const str = (v: unknown, d: string) => (typeof v === "string" ? v : d);
+const strs = (v: unknown, d: string[]) => (Array.isArray(v) && v.every((x) => typeof x === "string") ? v : d);
+const MODES: Mode[] = ["tracing", "logging", "metrics", "promql"];
+
+function fromLink(v: unknown, i: number): Q | null {
+  if (!v || typeof v !== "object") return null;
+  const q = v as Record<string, unknown>, b = (q.b && typeof q.b === "object" ? q.b : {}) as Record<string, unknown>;
+  const base = newQuery(typeof q.id === "number" && isFinite(q.id) ? q.id : i + 1, MODES.includes(q.mode as Mode) ? (q.mode as Mode) : "tracing");
+  const filters = Array.isArray(b.filters) ? b.filters.filter((f): f is Filter => !!f && typeof f === "object" && typeof f.label === "string"
+                                                                 && ["=", "!=", "=~", "!~"].includes(f.op) && typeof f.value === "string") : [];
+  return { ...base, name: str(q.name, ""), promql: str(q.promql, ""), hidden: q.hidden === true,
+           b: { measure: str(b.measure, EMPTY_B.measure), filters, groupBy: strs(b.groupBy, base.b.groupBy), metric: str(b.metric, ""), agg: str(b.agg, EMPTY_B.agg) } };
+}
+
+function settingsFromLink(v: unknown): Settings {
+  const s = (v && typeof v === "object" ? v : {}) as Record<string, unknown>, d = DEFAULT_SETTINGS;
+  return { chart: (["line", "area", "bars"] as const).find((c) => c === s.chart) ?? d.chart, unit: str(s.unit, d.unit),
+           decimals: ["", "0", "1", "2", "3"].includes(s.decimals as string) ? (s.decimals as string) : d.decimals,
+           legend: typeof s.legend === "boolean" ? s.legend : d.legend, threshold: str(s.threshold, d.threshold),
+           sort: s.sort === "name" ? "name" : d.sort };
 }
 
 export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
