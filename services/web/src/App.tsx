@@ -1,5 +1,5 @@
 import type React from "react";
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, me } from "./api";
 import { idToken, signOut } from "./auth";
 import { getConfig } from "./config";
@@ -83,6 +83,8 @@ export function App() {
   }, []);
   useEffect(() => { loadUser(); }, [loadUser]);
 
+  const ctx: Ctx = useMemo(() => ({ range, tick, now, go }), [range, tick, now, go]);   // the same object until one changes
+
   if (meError) return (
     <div className="state error" style={{ height: "100%" }}>
       Couldn't reach Leasyd: {meError} <button className="btn small" onClick={() => { setUser(undefined); loadUser(); }}>Retry</button>
@@ -92,7 +94,6 @@ export function App() {
 
   const [path, query] = hash.split("?");
   const params = new URLSearchParams(query || "");
-  const ctx: Ctx = { range, tick, now, go };
   let page: React.ReactElement, crumb: [string, string];
   if (path.startsWith("/traces")) {
     const id = path.split("/")[2];
