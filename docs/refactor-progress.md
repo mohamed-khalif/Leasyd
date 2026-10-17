@@ -69,8 +69,22 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Page smoke tests: 22 routes against the mock backend
 - [x] 45 tests pass; tsc and lint clean
 
-## Bug fixes (order B12, B10, B3, B4/B5, B1, then the rest)
+## Bug fixes (order B12, B10, B3, B4/B5, B1, then the rest): done
 - [x] B12 CSV export: formula-like text cells made inert, object URL revoked (fd64373)
 - [x] B10 AI SRE + MCP queries use the daily allowance; alert queries' units no longer leak into the next API charge (da6a87f) -- deploy phase4 + phaseAI
 - [x] B3 failures shown as errors (AI insights, who-am-I, GPU prices, drop-rules role, check lists, dashboard check names); shared useCheckList for 3 of the check-list loaders
-## Phase 4 (caching, STOP), Phase 6, Phase 7: not started
+- [x] B4 big results: chart/legend/waterfall bounds by loops, not spreads (e894cc8)
+- [x] B5 bad links: safe decode, Query Builder link checked, decimals clamped; error boundary per page (f43e3a4)
+- [x] B1 Query Builder stuck on loading (592af5b)
+- [x] B2 over-nested SQL -> 400 (a9ea195, security step)
+- [x] B6 dashboard variables: whole names, = with one value as written, user regex left alone (1a03d26)
+- [x] B7 negative search.limit and RE2-invalid regex -> 400 (18088dd) -- deploy phase4
+- [x] B8 transient poll failures retried, 3 in a row end the wait (78abcf9)
+- [x] B9 charged once past the deadline: fixed by 494dc5a, now pinned by a test (39c4be8)
+- [x] B11 Lambda request-id search: contains(), not ILIKE (80e97de)
+- [x] B13 truncated results say so (Loads, K8s/GPU rows, service map, Lambda list) (11d1853)
+- [x] B14 refused invokes free their slot; obs-query async events never retried, dropped after 60 s; late jobs not run; no overwrite after 504 (44c809c) -- deploy phase4
+- [x] B15 one SQL run at a time; check re-read timer cleared (other two items done in B5/B13)
+- [x] All 15 done. Deploy: phase4 (B7, B10, B14 + template), phaseAI (B10), web.
+## Phase 4 (caching): recommendation next, then STOP for the choice
+## Phase 6, Phase 7: not started
