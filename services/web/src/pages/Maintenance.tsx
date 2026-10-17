@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Check, checks, MaintenanceWindow, windows, WindowSchedule } from "../api";
+import { MaintenanceWindow, windows, WindowSchedule } from "../api";
 import type { Ctx } from "../App";
+import { CheckListError, useCheckList } from "../checkList";
 import { Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 
@@ -15,12 +16,6 @@ export function Maintenance({ ctx, sub }: { ctx: Ctx; sub?: string }) {
   if (sub === "new") return <WindowForm ctx={ctx} />;
   if (sub) return <EditWindow ctx={ctx} id={sub} />;
   return <WindowList ctx={ctx} />;
-}
-
-function useChecks() {
-  const [list, setList] = useState<Check[]>([]);
-  useEffect(() => { checks.list().then((d) => setList(d.checks), () => setList([])); }, []);
-  return list;
 }
 
 /** "Every Tue, Thu 22:00 for 1 h (Europe/London)" or "1 Oct 22:00 – 23:30". */
@@ -53,11 +48,12 @@ export function isOpen(s: WindowSchedule, now = new Date()): boolean {
 function WindowList({ ctx }: { ctx: Ctx }) {
   const [items, setItems] = useState<MaintenanceWindow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const all = useChecks();
+  const list = useCheckList(ctx.tick);
   useEffect(() => { windows.list().then((d) => setItems(d.items), (e: Error) => setError(e.message)); }, [ctx.tick]);
-  const names = new Map(all.map((c) => [c.id, c.name]));
+  const names = new Map((list.checks ?? []).map((c) => [c.id, c.name]));
   return (
     <>
+      <CheckListError error={list.error} />
       <div className="toolbar">
         <a href="#/synthetics" className="btn" onClick={(e) => { e.preventDefault(); ctx.go("/synthetics"); }}>← All checks</a>
         <span className="faint">While a window is open, its checks still run, but their results don't count against uptime or SLOs.</span>
@@ -75,7 +71,7 @@ function WindowList({ ctx }: { ctx: Ctx }) {
           ) : (
             <RankTable head={["window", "when", "checks", "now"]} maxHeight={600} onRow={(i) => ctx.go(`/synthetics/windows/${items[i].id}`)}
                        rows={items.map((w) => [<span className="link">{w.name} ›</span>, describeSchedule(w.schedule),
-                                               w.checks[0] === "*" ? "all checks" : w.checks.map((id) => names.get(id) ?? "(deleted check)").join(", "),
+                                               w.checks[0] === "*" ? "all checks" : w.checks.map((id) => names.get(id) ?? (list.checks ? "(deleted check)" : id)).join(", "),
                                                isOpen(w.schedule) ? <b>open</b> : <span className="faint">closed</span>])} />
           )}
       </Panel>
@@ -96,7 +92,8 @@ const toLocal = (iso: string) => { const d = new Date(iso); return new Date(d.ge
 const toUtc = (local: string) => new Date(local).toISOString();
 
 function WindowForm({ ctx, existing }: { ctx: Ctx; existing?: MaintenanceWindow }) {
-  const all = useChecks();
+  const list = useCheckList();
+  const all = list.checks ?? [];
   const inHour = new Date(Math.ceil(Date.now() / 3_600_000) * 3_600_000);
   const [name, setName] = useState(existing?.name ?? "");
   const [scope, setScope] = useState<string[]>(existing?.checks ?? ["*"]);
@@ -130,6 +127,7 @@ function WindowForm({ ctx, existing }: { ctx: Ctx; existing?: MaintenanceWindow 
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   return (
     <form onSubmit={submit}>
+      <CheckListError error={list.error} />
       <div className="toolbar">
         <a href="#/synthetics/windows" className="btn" onClick={(e) => { e.preventDefault(); ctx.go("/synthetics/windows"); }}>← Cancel</a>
         <span className="spacer" style={{ flex: 1 }} />

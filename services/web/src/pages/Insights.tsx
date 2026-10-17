@@ -1,9 +1,10 @@
 // Home: what is running and whether it is healthy, at a glance. Top cards (services, failing
 // checks), volumes, then folding sections for tracing, logging, metrics and alerting, each with
 // a way into its explorer.
-import { useEffect, useMemo, useState } from "react";
-import { Check, checks, Query, records, Signal } from "../api";
+import { useMemo } from "react";
+import { Check, Query, records, Signal } from "../api";
 import type { Ctx } from "../App";
+import { CheckListError, useCheckList } from "../checkList";
 import { Bar, Card, Cell, Heatmap, Section, StackedBars, StackKey } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
@@ -40,16 +41,6 @@ function stack(rows: Record<string, unknown>[], ts: string, key: string, top = 6
   return { keys, bars: [...at].map(([t, values]) => ({ t, values })) as Bar[] };
 }
 
-function useChecks(tick: number) {
-  const [list, setList] = useState<Check[] | null>(null);
-  useEffect(() => {
-    let live = true;
-    checks.list().then((r) => live && setList(r.checks), () => live && setList([]));
-    return () => { live = false; };
-  }, [tick]);
-  return list;
-}
-
 export function Insights({ ctx }: { ctx: Ctx }) {
   const b = bucketSeconds(ctx.range), ts = `ts:${b}`;
   const services = usePanel(ctx, "traces", { group_by: ["service"], aggs: [{ fn: "count" }], limit: 1000 });
@@ -58,7 +49,7 @@ export function Insights({ ctx }: { ctx: Ctx }) {
   const errorSpans = usePanel(ctx, "traces", { where: [{ field: "status_code", op: "=", value: 2 }], aggs: [{ fn: "count" }] });
   const logs = usePanel(ctx, "logs", { aggs: [{ fn: "count" }] });
   const points = usePanel(ctx, "metrics", { aggs: [{ fn: "count" }] });
-  const checkList = useChecks(ctx.tick);
+  const checks = useCheckList(ctx.tick), checkList = checks.checks;
   const runs = usePanel(ctx, "traces", { services: ["synthetics"], where: [{ field: "attributes.check.result", op: "exists" }], search: { limit: 1000 } });
   const byCheck = usePanel(ctx, "metrics", { services: ["synthetics"], where: [{ field: "metric_name", op: "=", value: SUCCESS }, { field: "attributes.check.excluded", op: "not_exists" }],
                                              group_by: ["attributes.check.id"], aggs: [{ fn: "avg", field: "value" }, { fn: "count" }], limit: 1000 });
@@ -106,6 +97,7 @@ export function Insights({ ctx }: { ctx: Ctx }) {
           <div className="panel" style={{ height: "100%" }}>
             <header className="panel-head"><span>Alerting: synthetic checks</span><span className="spacer" />
               <button className="btn small" onClick={() => ctx.go("/synthetics")}>View in Synthetics</button></header>
+            <CheckListError error={checks.error} />
             <div className="cards" style={{ padding: 12, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
               <Card label="Critical" value={checkList && runs.data ? fmtNum(critical.length) : "…"} tone={critical.length ? "bad" : "ok"}
                     sub={critical.length ? critical.map((c) => c.name).slice(0, 2).join(", ") + (critical.length > 2 ? "…" : "") : "latest run failed"}

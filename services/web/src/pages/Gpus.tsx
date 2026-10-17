@@ -10,7 +10,7 @@ import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
 import { byModel, byTeam, fleetSpend, forecast, now, recommendations } from "../infra/analysis";
 import { ago, hours, mib, money, pct, shortGpu } from "../infra/format";
-import { HOT_TEMP, IDLE_UTIL, priceFor, xidInfo } from "../infra/model";
+import { HOT_TEMP, IDLE_UTIL, priceFor, xidInfo, type GpuPrice } from "../infra/model";
 import * as Q from "../infra/queries";
 import { loads, useGpuPrices, useHint, useRows } from "../infra/useInfra";
 import { fmtNum } from "../time";
@@ -31,7 +31,7 @@ export function Gpus({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
   const f: Q.Filter = { cluster: cluster || null };
   const k = key + cluster;
   const fleet = useRows<Q.GpuRow>(Q.gpuFleet(ctx.range.minutes, f), w, "fleet" + k, hint);
-  const prices = useGpuPrices(ctx.tick);
+  const { prices, error: pricesError } = useGpuPrices(ctx.tick);
   const clusters = [...new Set(fleet.rows.map((g) => g.cluster))].filter(Boolean).sort();
 
   if (!fleet.loading && !fleet.error && !fleet.rows.length && !cluster) return <Empty />;
@@ -43,6 +43,7 @@ export function Gpus({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
             <option value="">All clusters</option>
             {clusters.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>) : null} />
+      {pricesError && <div className="form-error" role="alert">Couldn't read your GPU prices ({pricesError}): costs below use list prices.</div>}
       {tab === "overview" && <Overview ctx={ctx} w={w} k={k} hint={hint} f={f} fleet={fleet} prices={prices} onGpu={setGpu} onTab={setTab} />}
       {tab === "workloads" && <Workloads ctx={ctx} w={w} k={k} hint={hint} f={f} fleet={fleet} prices={prices} />}
       {tab === "health" && <Health ctx={ctx} w={w} k={k} hint={hint} f={f} onGpu={setGpu} />}
@@ -72,7 +73,7 @@ function Empty() {
 // ------------------------------------------------------------------ overview
 
 function Overview({ ctx, w, k, hint, f, fleet, prices, onGpu, onTab }: Props & { fleet: ReturnType<typeof useRows<Q.GpuRow>>;
-  prices: ReturnType<typeof useGpuPrices>; onGpu: (g: string) => void; onTab: (t: Tab) => void }) {
+  prices: GpuPrice[]; onGpu: (g: string) => void; onTab: (t: Tab) => void }) {
   const series = useRows<Q.GpuSeriesRow>(Q.gpuSeries(ctx.range.minutes, f), w, "series" + k, hint);
   const health = useRows<Q.GpuHealthRow>(Q.gpuHealth(f), w, "health" + k, hint);
   const gs = fleet.rows;
@@ -183,7 +184,7 @@ function weightedUtil(gs: Q.GpuRow[]) {
 
 // ------------------------------------------------------------------ workloads & cost
 
-function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: ReturnType<typeof useRows<Q.GpuRow>>; prices: ReturnType<typeof useGpuPrices> }) {
+function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: ReturnType<typeof useRows<Q.GpuRow>>; prices: GpuPrice[] }) {
   const wl = useRows<Q.GpuWorkloadRow>(Q.gpuWorkloads(ctx.range.minutes, f), w, "wl" + k, hint);
   const stalled = useRows<Q.StalledRow>(Q.gpuStalled(f), w, "stalled" + k, hint);
   const rangeHours = (Date.parse(w.end) - Date.parse(w.start)) / 3_600_000;
@@ -357,7 +358,7 @@ const fmtSeconds = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(1)} h` : s 
 
 // ------------------------------------------------------------------ planning
 
-function Planning({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: ReturnType<typeof useRows<Q.GpuRow>>; prices: ReturnType<typeof useGpuPrices> }) {
+function Planning({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: ReturnType<typeof useRows<Q.GpuRow>>; prices: GpuPrice[] }) {
   const days = useRows<Q.GpuDayRow>(Q.gpuDays(ctx.range.minutes, f), w, "days" + k, hint);
   const fc = forecast(days.rows);
   // GPUs no workload held in the whole range, at their own prices

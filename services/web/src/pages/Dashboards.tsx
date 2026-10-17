@@ -310,9 +310,16 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
 
 /** Synthetic checks' current names by id: series grouped by check_id show the name a check has now
  *  (a renamed check stays one series); a deleted check says so. Loaded once per page load. */
-let checkNamesP: Promise<Map<string, string>> | null = null;
-function checkNames(): Promise<Map<string, string>> {
-  if (!checkNamesP) checkNamesP = checks.list().then((r) => new Map(r.checks.map((c) => [c.id, c.name] as [string, string])), () => new Map<string, string>());
+let checkNamesP: Promise<Map<string, string> | null> | null = null;
+/** Exported for tests. A failed lookup gives null (series keep their ids, not "deleted check") and
+ *  is asked again next time. */
+export function checkNames(): Promise<Map<string, string> | null> {
+  if (!checkNamesP) {
+    checkNamesP = checks.list().then((r) => new Map(r.checks.map((c) => [c.id, c.name] as [string, string])), () => {
+      checkNamesP = null;
+      return null;
+    });
+  }
   return checkNamesP;
 }
 function withCheckName(metric: Record<string, string>, names: Map<string, string> | null): Record<string, string> {

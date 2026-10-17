@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Check, checks, notExcluded, Query, Result, Slo, slos, Where } from "../api";
+import { Check, notExcluded, Query, Result, Slo, slos, Where } from "../api";
 import type { Ctx } from "../App";
+import { CheckListError, useCheckList } from "../checkList";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Stat } from "../components/Stat";
@@ -25,12 +26,6 @@ export function Slos({ ctx, path }: { ctx: Ctx; path: string }) {
   if (id && sub === "edit") return <EditSlo ctx={ctx} id={id} />;
   if (id) return <SloDetail ctx={ctx} id={id} />;
   return <SloList ctx={ctx} />;
-}
-
-function useChecks(tick: number) {
-  const [list, setList] = useState<Check[] | null>(null);
-  useEffect(() => { checks.list().then((d) => setList(d.checks), () => setList([])); }, [tick]);
-  return list;
 }
 
 // ------------------------------------------------------------------ evaluation
@@ -98,7 +93,7 @@ function BudgetBar({ left }: { left: number | null }) {
 function SloList({ ctx }: { ctx: Ctx }) {
   const [items, setItems] = useState<Slo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const all = useChecks(ctx.tick);
+  const list = useCheckList(ctx.tick), all = list.checks;
   useEffect(() => { slos.list().then((d) => setItems(d.items), (e: Error) => setError(e.message)); }, [ctx.tick]);
   return (
     <>
@@ -109,6 +104,7 @@ function SloList({ ctx }: { ctx: Ctx }) {
       </div>
       <Panel title="Service level objectives" flush>
         {error ? <div className="state error">{error}</div>
+          : list.error ? <div className="state error">Couldn't read your synthetic checks: {list.error}</div>
           : !items || !all ? <div className="skeleton" style={{ height: 160 }} />
           : !items.length ? (
             <div className="state" style={{ minHeight: 180, flexDirection: "column", gap: 10 }}>
@@ -151,7 +147,7 @@ function describe(slo: Slo, all: Check[]) {
 function SloDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const [slo, setSlo] = useState<Slo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const all = useChecks(ctx.tick);
+  const list = useCheckList(ctx.tick), all = list.checks;
   useEffect(() => { slos.get(id).then(setSlo, (e: Error) => setError(e.message)); }, [id, ctx.tick]);
   const excluded = (all ?? []).filter((c) => slo?.checks.includes(c.id)).flatMap((c) => c.excluded_runs ?? []);
   const { status, loaded, now } = useSlo(slo, excluded, ctx.tick);
@@ -160,6 +156,7 @@ function SloDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const dGood = useQuery(daily?.good ?? null, "dg" + key), dTotal = useQuery(daily && daily.total !== daily.good ? daily.total : null, "dt" + key);
 
   if (error) return <div className="state error">{error}</div>;
+  if (list.error) return <div className="state error">Couldn't read your synthetic checks: {list.error}</div>;
   if (!slo || !all) return <div className="skeleton" style={{ height: 240 }} />;
   const range = customRange(now - slo.window_days * DAY, now);
   // Per day: attainment, and the budget left at the end of each day (cumulative over the window).
@@ -246,7 +243,7 @@ function EditSlo({ ctx, id }: { ctx: Ctx; id: string }) {
 }
 
 function SloForm({ ctx, existing }: { ctx: Ctx; existing?: Slo }) {
-  const all = useChecks(0);
+  const list = useCheckList(), all = list.checks;
   const [s, setS] = useState<Omit<Slo, "id">>(existing ?? { name: "", description: "", type: "availability", checks: [], target: 99.9, window_days: 30, threshold_ms: 1000 });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -293,7 +290,7 @@ function SloForm({ ctx, existing }: { ctx: Ctx; existing?: Slo }) {
         </section>
         <section className="form-section">
           <h3>Checks</h3>
-          {!all ? <div className="skeleton" style={{ height: 40 }} /> : (
+          {list.error ? <CheckListError error={list.error} /> : !all ? <div className="skeleton" style={{ height: 40 }} /> : (
             <div className="checks">
               {all.map((c) => (
                 <label key={c.id} className="check"><input type="checkbox" checked={s.checks.includes(c.id)}

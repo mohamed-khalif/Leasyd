@@ -52,11 +52,14 @@ export function useRows<T>(q: Q | null, w: { start: string; end: string }, key: 
   return state;
 }
 
-/** The account's own GPU prices ([] when none are set or they can't be read). */
-export function useGpuPrices(tick: number): GpuPrice[] {
-  const [prices, setPrices] = useState<GpuPrice[]>([]);
-  useEffect(() => { account.gpuPrices().then((r) => setPrices(r.prices ?? []), () => setPrices([])); }, [tick]);
-  return prices;
+/** The account's own GPU prices ([] when none are set), and why they couldn't be read (costs then
+ *  use the list prices, which the page must say). */
+export function useGpuPrices(tick: number): { prices: GpuPrice[]; error: string | null } {
+  const [state, setState] = useState<{ prices: GpuPrice[]; error: string | null }>({ prices: [], error: null });
+  useEffect(() => {
+    account.gpuPrices().then((r) => setState({ prices: r.prices ?? [], error: null }), (e: Error) => setState({ prices: [], error: e.message }));
+  }, [tick]);
+  return state;
 }
 
 /** Adapts Rows to what <Loads> expects. */

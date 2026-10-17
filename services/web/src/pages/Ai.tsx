@@ -101,10 +101,12 @@ type Insight = { service: string; level: "bad" | "warn"; title: string; detail: 
 
 function Insights({ ctx, onAsk }: { ctx: Ctx; onAsk: (q: string, page?: unknown) => void }) {
   const [items, setItems] = useState<Insight[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     setItems(null);
+    setError(null);
     const w = rangeWindow(ctx.range);
     const at = Math.floor(Date.parse(w.end) / 60_000) * 60;
     const r = Math.max(300, Math.round((Date.parse(w.end) - Date.parse(w.start)) / 60_000) * 60);
@@ -116,7 +118,7 @@ function Insights({ ctx, onAsk }: { ctx: Ctx; onAsk: (q: string, page?: unknown)
     const off = ` offset ${r}s`;
     Promise.all([q(errPct("")), q(errPct(off)), q(p95("")), q(p95(off)), q(rate("")), q(rate(off)),
                  q(`100 * sum by (check_id) (sum_over_time(${S}[${r}s])) / sum by (check_id) (count_over_time(${S}[${r}s]))`),
-                 checks.list().then((c) => new Map(c.checks.map((x) => [x.id, x.name])), () => new Map<string, string>())])
+                 checks.list().then((c) => new Map(c.checks.map((x) => [x.id, x.name])))])
       .then(([err, err0, lat, lat0, rps, rps0, up, names]) => {
         if (!live) return;
         const out: Insight[] = [];
@@ -143,7 +145,7 @@ function Insights({ ctx, onAsk }: { ctx: Ctx; onAsk: (q: string, page?: unknown)
         out.sort((a, b) => (a.level === b.level ? 0 : a.level === "bad" ? -1 : 1));
         setItems(out);
         setSel(out[0]?.service ?? null);
-      }, () => live && setItems([]));
+      }, (e: Error) => live && setError(e.message));
     return () => { live = false; };
   }, [ctx.range.key, ctx.range.from, ctx.range.to, ctx.tick]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the range's parts and the refresh tick
 
@@ -156,7 +158,8 @@ function Insights({ ctx, onAsk }: { ctx: Ctx; onAsk: (q: string, page?: unknown)
   return (
     <section className="ai-insights">
       <div className="ai-section">Live insights <span className="faint">· {ctx.range.label.toLowerCase()} compared with the period before</span></div>
-      {items === null ? <div className="skeleton" style={{ height: 160 }} />
+      {error ? <div className="state error">Couldn't compute insights: {error}</div>
+        : items === null ? <div className="skeleton" style={{ height: 160 }} />
         : items.length === 0 ? <div className="panel" style={{ padding: 16 }}><span className="muted">Nothing unusual: no error, latency, traffic or check changes stand out.</span></div>
         : (
           <div className="panel ai-insight-grid">

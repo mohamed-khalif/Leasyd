@@ -2,7 +2,7 @@ import { Ai } from "./pages/Ai";
 import { Settings } from "./pages/Settings";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
-import { me } from "./api";
+import { ApiError, me } from "./api";
 import { idToken, signOut } from "./auth";
 import { getConfig } from "./config";
 import { CONTACT_EMAIL, Shell } from "./Shell";
@@ -47,17 +47,24 @@ export function App() {
   const go = useCallback((h: string) => { location.hash = h; }, []);
 
   const [notice, setNotice] = useState<string | null>(null);
+  const [meError, setMeError] = useState<string | null>(null);
   const loadUser = useCallback(async () => {
+    setMeError(null);
     // #/demo: the old live demo's link (closed); point to booking one
     if (location.hash.startsWith("#/demo")) {
       setNotice(`Our self-serve demo has closed. Book a demo and we'll walk you through Leasyd: ${CONTACT_EMAIL}`);
       location.hash = "/";
     }
     if (!(await idToken())) return setUser(null);
-    me().then(setUser, () => setUser(null));
+    // Signed out only when the API says so; any other failure is shown, with Retry.
+    me().then(setUser, (e: Error) => (e instanceof ApiError && (e.status === 401 || e.status === 403) ? setUser(null) : setMeError(e.message)));
   }, []);
   useEffect(() => { loadUser(); }, [loadUser]);
 
+  if (meError) return (
+    <div className="state error" style={{ height: "100%" }}>
+      Couldn't reach Leasyd: {meError} <button className="btn small" onClick={() => { setUser(undefined); loadUser(); }}>Retry</button>
+    </div>);
   if (user === undefined) return <div className="state" style={{ height: "100%" }}>Loading…</div>;
   if (user === null || (getConfig().mock && location.search.includes("signin"))) return <SignIn onSignedIn={loadUser} notice={notice} />;
 

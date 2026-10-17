@@ -13,6 +13,8 @@ const middlewares: Middleware[] = [];
 
 export let inFlight = 0;
 export const requests: string[] = [];
+/** "METHOD /path" (no query string) -> the status to fail it with, for error-path tests. */
+export const failing = new Map<string, number>();
 
 function serve(method: string, url: string, body: string): Promise<Response> {
   return new Promise((resolve) => {
@@ -49,6 +51,8 @@ export async function installMockBackend() {
     if (!url.pathname.startsWith("/v1/")) return new Response("{}", { status: 404 });
     const method = init?.method ?? "GET";
     requests.push(`${method} ${url.pathname}`);
+    const fail = failing.get(`${method} ${url.pathname}`);
+    if (fail) return new Response(JSON.stringify({ error: `forced ${fail}` }), { status: fail });
     inFlight++;
     try {
       return await serve(method, url.pathname + url.search, typeof init?.body === "string" ? init.body : "");

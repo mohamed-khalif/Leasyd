@@ -193,7 +193,10 @@ function GpuPrices({ owner }: { owner: boolean }) {
   const [own, setOwn] = useState<GpuPrice[] | null>(null);
   const [draft, setDraft] = useState({ pattern: "", label: "", usd: "" });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => { account.gpuPrices().then((r) => setOwn(r.prices ?? []), () => setOwn([])); }, []);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  useEffect(() => { account.gpuPrices().then((r) => setOwn(r.prices ?? []), (e: Error) => setLoadError(e.message)); }, []);
+  // Edits save the whole list, so only once the current one is known (else they would overwrite it).
+  const canEdit = owner && own !== null;
   const save = (next: GpuPrice[]) => account.saveGpuPrices(next).then((r) => { setOwn(r.prices); setMsg({ ok: true, text: "Saved: the GPU pages use these prices now." }); },
     (e: Error) => setMsg({ ok: false, text: e.message }));
   return (
@@ -211,7 +214,8 @@ function GpuPrices({ owner }: { owner: boolean }) {
           ))}
         </tbody>
       </table>
-      {owner ? (
+      {loadError && <div className="panel-foot error">Couldn't read your GPU prices: {loadError}. The GPU pages use the defaults until they can.</div>}
+      {canEdit ? (
         <form className="panel-foot" onSubmit={(e: FormEvent) => {
           e.preventDefault();
           save([...(own ?? []), { pattern: draft.pattern.trim(), label: draft.label.trim() || draft.pattern.trim(), usd_per_hour: Number(draft.usd) }])
@@ -222,7 +226,7 @@ function GpuPrices({ owner }: { owner: boolean }) {
           <input className="input" required type="number" min="0.01" step="0.01" placeholder="1.50" value={draft.usd} onChange={(e) => setDraft({ ...draft, usd: e.target.value })} aria-label="US$ per GPU hour" style={{ width: 110 }} />
           <button className="btn primary">Add price</button>
         </form>
-      ) : <div className="panel-foot faint">Only owners can change prices.</div>}
+      ) : !owner ? <div className="panel-foot faint">Only owners can change prices.</div> : null}
       {msg && <div className={`panel-foot ${msg.ok ? "ok" : "error"}`}>{msg.text}</div>}
       <div className="panel-foot faint">The pattern is matched against the GPU model dcgm-exporter reports (e.g. "NVIDIA A100-SXM4-80GB"); yours come first, then the defaults.</div>
     </Panel>

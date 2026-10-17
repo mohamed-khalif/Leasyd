@@ -43,6 +43,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
   const [rules, setRules] = useState<DropRule[] | null>(null);
   const [saved, setSaved] = useState<string>("[]");
   const [owner, setOwner] = useState(false);
+  const [roleError, setRoleError] = useState<string | null>(null);
   const [limits, setLimits] = useState({ rules: 50, conditions: 5 });
   const [today, setToday] = useState<Meter | null>(null);
   const [editing, setEditing] = useState<{ index: number; rule: DropRule } | null>(null);
@@ -54,7 +55,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
   useEffect(() => {
     account.dropRules().then((r) => { setRules(r.rules); setSaved(JSON.stringify(r.rules)); setLimits(r.limits); },
       (e: Error) => setError(e.message));
-    account.get().then((a) => setOwner(a.you.role === "owner"), () => undefined);
+    account.get().then((a) => { setOwner(a.you.role === "owner"); setRoleError(null); }, (e: Error) => setRoleError(e.message));
     account.meters(1).then((r) => setToday(r.days?.[0] ?? null), () => undefined);
   }, [ctx.tick]);
 
@@ -154,7 +155,8 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
           </div>
         </Panel>
       )}
-      {!owner && <p className="faint">Only the account's owners can change drop rules.</p>}
+      {roleError ? <div className="form-error" role="alert">Couldn't check your role ({roleError}), so changes are off until it can be.</div>
+        : !owner && <p className="faint">Only the account's owners can change drop rules.</p>}
 
       {editing && (
         <Editor rule={editing.rule} maxConditions={limits.conditions} busy={busy} preview={previewOf(editing.rule)}
