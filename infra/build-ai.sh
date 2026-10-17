@@ -6,5 +6,5 @@ cd "$(dirname "$0")/../services/ai"
 rm -rf build && mkdir build
 pip install -q --target build --only-binary=:all: --implementation cp --python-version 3.12 \
   --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 -r requirements.txt
-cp sre.py mcp.py build/
+cp sre.py mcp.py ../shared/limits.py build/
 echo "built $(du -sh build | cut -f1) in services/ai/build"

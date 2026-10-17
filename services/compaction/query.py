@@ -64,6 +64,7 @@ from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
 
 import compact
 import layout
+import limits
 import lookup
 
 WORKER_FUNCTION = os.environ.get("QUERY_WORKER_FUNCTION", "obs-query-worker")
@@ -979,6 +980,13 @@ LEASE_S = 330           # a slot whose run died (the coordinator's timeout is 30
 DAILY_SEARCH_UNITS = {"free": 2_000, "standard": 20_000}
 _plans = {}   # tenant -> ((plan, daily units), read at)
 _units = {}   # tenant -> search units used by queries not yet charged
+# When obs-tenants can't be read, limits are decided from what this container last read (and has
+# counted itself since) for LIMITS_FRESH_S, then refused: fail closed, but a blip stops nothing.
+LIMITS_FRESH_S = 60
+UNITS_FRESH_S = 600     # daily units change slowly
+_rates = limits.LastKnownGood(LIMITS_FRESH_S)   # ("rate", kind, tenant, minute) -> count; ("contact", tenant) -> True
+_daily = limits.LastKnownGood(UNITS_FRESH_S)    # (tenant, day) -> units used
+_local_slots = {}       # tenant -> {job: expiry}: slots taken here while obs-tenants couldn't be written
 
 
 def _plan(table, tenant):
@@ -1021,33 +1029,73 @@ def charge_units(tenant):
 
 def over_limit(tenant, kind):
     """None, or the 429 answer when the tenant is over this minute's limit or (queries) today's
-    search allowance. Fails open (logged): a counting problem must not stop customers' queries."""
+    search allowance, or 503 when the limits can't be checked (see LIMITS_FRESH_S)."""
+    table = _tenants_table()
     try:
-        table = _tenants_table()
         plan, daily = _plan(table, tenant)
+    except ClientError as e:
+        if (cached := _plans.get(tenant)) is None or time.time() - cached[1] > UNITS_FRESH_S:
+            limits.log_fallback("plan", tenant, False, e)
+            return _limits_unavailable()
+        plan, daily = cached[0]
+    limit = RATE_LIMITS[kind].get(plan, RATE_LIMITS[kind]["standard"])
+    minute = int(time.time() // 60)
+    try:
         if kind == "query" and daily:
             used = (table.get_item(Key={"pk": f"usage#search#{tenant}#{_day()}"}).get("Item") or {}).get("n", 0)
+            _daily.remember((tenant, _day()), int(used))
             if used >= daily:
-                return _http(429, {"error": f"today's search allowance is used up ({daily:,} search units); "
-                                            "it resets at 00:00 UTC. Shorter time ranges use less of it."})
-        limit = RATE_LIMITS[kind].get(plan, RATE_LIMITS[kind]["standard"])
-        minute = int(time.time() // 60)
-        table.update_item(Key={"pk": f"rate#{kind}#{tenant}#{minute}"}, UpdateExpression="ADD n :one SET expires = :exp",
-                          ConditionExpression="attribute_not_exists(n) OR n < :max",
-                          ExpressionAttributeValues={":one": 1, ":max": limit, ":exp": minute * 60 + 3600})
+                return _allowance_used_up(daily)
+        n = table.update_item(Key={"pk": f"rate#{kind}#{tenant}#{minute}"}, UpdateExpression="ADD n :one SET expires = :exp",
+                              ConditionExpression="attribute_not_exists(n) OR n < :max", ReturnValues="UPDATED_NEW",
+                              ExpressionAttributeValues={":one": 1, ":max": limit, ":exp": minute * 60 + 3600})["Attributes"]["n"]
+        _rates.remember(("rate", kind, tenant, minute), int(n))
+        _rates.remember(("contact", tenant), True)
         return None
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            what = "queries" if kind == "query" else "long-running queries"
-            return _http(429, {"error": f"too many {what}: at most {limit} a minute on this plan; try again in a minute"})
-        print(json.dumps({"rate_limit_unavailable": str(e)[:300]}))
-        return None
+            return _too_many(kind, limit)
+        return _over_limit_from_memory(tenant, kind, daily, limit, minute, e)
+
+
+def _over_limit_from_memory(tenant, kind, daily, limit, minute, error):
+    """over_limit when obs-tenants can't be read: from what was last read here, while it is fresh."""
+    if _rates.recall(("contact", tenant)) is None:
+        limits.log_fallback(kind, tenant, False, error)
+        return _limits_unavailable()
+    if kind == "query" and daily and (used := _daily.recall((tenant, _day()))) and used[0] >= daily:
+        return _allowance_used_up(daily)
+    key = ("rate", kind, tenant, minute)
+    if (got := _rates.recall(key)) is None:
+        _rates.remember(key, 0)     # a new minute since the last read
+        got = (0, 0)
+    if got[0] + got[1] >= limit:
+        return _too_many(kind, limit)
+    _rates.count(key)
+    limits.log_fallback(kind, tenant, True, error)
+    return None
+
+
+def _limits_unavailable():
+    return _http(503, {"error": limits.UNAVAILABLE}, retry_after=5)
+
+
+def _allowance_used_up(daily):
+    return _http(429, {"error": f"today's search allowance is used up ({daily:,} search units); "
+                                "it resets at 00:00 UTC. Shorter time ranges use less of it."})
+
+
+def _too_many(kind, limit):
+    what = "queries" if kind == "query" else "long-running queries"
+    return _http(429, {"error": f"too many {what}: at most {limit} a minute on this plan; try again in a minute"})
 
 
 def take_slot(tenant, job):
     """None, or the 429 answer when the tenant already has INFLIGHT_LIMITS[plan] queries running.
-    Expired slots (runs that died) are cleared first. Fails open (logged), like over_limit."""
+    Expired slots (runs that died) are cleared first. When obs-tenants can't be written: see
+    _take_slot_from_memory (fail closed after LIMITS_FRESH_S)."""
     table, key, now = _tenants_table(), {"pk": f"inflight#{tenant}"}, int(time.time())
+    limit = INFLIGHT_LIMITS["standard"]
     try:
         plan, _ = _plan(table, tenant)
         limit = INFLIGHT_LIMITS.get(plan, INFLIGHT_LIMITS["standard"])
@@ -1072,10 +1120,30 @@ def take_slot(tenant, job):
         return None
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            return _http(429, {"error": f"too many queries running at once: at most {limit} on this plan; "
-                                        "try again when some have finished"}, retry_after=2)
-        print(json.dumps({"inflight_unavailable": str(e)[:300]}))
-        return None
+            return _too_many_running(limit)
+        return _take_slot_from_memory(tenant, job, e)
+
+
+def _take_slot_from_memory(tenant, job, error):
+    """take_slot when obs-tenants can't be written: count this container's own slots, while what it
+    last read is fresh."""
+    if _rates.recall(("contact", tenant)) is None or (cached := _plans.get(tenant)) is None:
+        limits.log_fallback("inflight", tenant, False, error)
+        return _limits_unavailable()
+    limit = INFLIGHT_LIMITS.get(cached[0][0], INFLIGHT_LIMITS["standard"])
+    now = time.time()
+    mine = {j: t for j, t in _local_slots.get(tenant, {}).items() if t > now}
+    if len(mine) >= limit:
+        return _too_many_running(limit)
+    mine[job] = now + LEASE_S
+    _local_slots[tenant] = mine
+    limits.log_fallback("inflight", tenant, True, error)
+    return None
+
+
+def _too_many_running(limit):
+    return _http(429, {"error": f"too many queries running at once: at most {limit} on this plan; "
+                                "try again when some have finished"}, retry_after=2)
 
 
 def give_back_slot(tenant, job):

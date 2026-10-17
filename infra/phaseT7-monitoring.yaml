@@ -302,6 +302,25 @@ Resources:
       AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
       OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
 
+  LimitsRefusedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-limits-refused
+      AlarmDescription: >
+        Queries or MCP calls refused because the query limits in obs-tenants couldn't be read for over a
+        minute (fail closed; services/shared/limits.py). Customers get 503 until obs-tenants answers again:
+        check DynamoDB throttling or errors on obs-tenants and the query role's permissions.
+      Namespace: obs
+      MetricName: LimitsRefused
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+      OKActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
   QueryWorkerErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:

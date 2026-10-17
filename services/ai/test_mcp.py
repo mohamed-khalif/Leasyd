@@ -93,3 +93,21 @@ def test_calls_are_limited_per_tenant(mcp, monkeypatch):
     r = call("acme")
     assert r["isError"] and "at most 2 a minute" in r["content"][0]["text"]
     assert not call("globex")["isError"]
+
+
+def test_limits_store_blip_uses_the_last_known_good_then_fails_closed(mcp, monkeypatch):
+    """Like the query API: a blip in obs-tenants doesn't stop tool calls for a minute (decided from
+    what was last read plus what this container counted); past that, or knowing nothing, refused."""
+    import boto3
+    monkeypatch.setattr(mcp, "CALLS_PER_MINUTE", 3)
+    call = lambda t: rpc(mcp, "tools/call", {"name": "list_services", "arguments": {}}, tenant=t)[1]["result"]  # noqa: E731
+    minute = int(mcp.time.time() // 60)
+    monkeypatch.setattr(mcp.time, "time", lambda: minute * 60 + 5)
+    assert not call("acme")["isError"]                                      # read: 1 call this minute
+    boto3.client("dynamodb").delete_table(TableName=mcp.sre.TABLE)  # the store goes away
+    assert [call("acme")["isError"] for _ in range(3)] == [False, False, True]   # 2, 3, then over
+    r = call("globex")                                                      # never read: nothing to go on
+    assert r["isError"] and "can't be checked" in r["content"][0]["text"]
+    monkeypatch.setattr(mcp.time, "time", lambda: minute * 60 + 5 + mcp.LIMITS_FRESH_S + 1)
+    r = call("acme")
+    assert r["isError"] and "can't be checked" in r["content"][0]["text"]

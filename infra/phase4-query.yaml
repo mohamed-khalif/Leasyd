@@ -144,6 +144,15 @@ Resources:
       LogGroupName: /aws/lambda/obs-query-api
       RetentionInDays: 14
 
+  LimitsRefusedFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApiLogGroup
+      # services/shared/limits.py: a limit refused because obs-tenants couldn't be read for too long
+      FilterPattern: '{ $.limits_fallback = * && $.decision = "refuse" }'
+      MetricTransformations:
+        - { MetricNamespace: obs, MetricName: LimitsRefused, MetricValue: "1", DefaultValue: 0 }
+
   ApiFunction:
     Type: AWS::Lambda::Function
     DependsOn: ApiLogGroup

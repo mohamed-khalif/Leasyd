@@ -724,10 +724,6 @@ def test_failed_jobs_say_so(data, monkeypatch, coordinator):
 def test_queries_running_at_once_are_limited_per_tenant(data, monkeypatch, coordinator):
     """At most INFLIGHT_LIMITS[plan] queries of a tenant run at once (a slot from the API's start to
     the coordinator's end); another tenant is unaffected; a slot left by a crash expires."""
-    boto3.client("dynamodb").create_table(
-        TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
-        AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
-        KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
     query._plans.clear()
     monkeypatch.setitem(query.INFLIGHT_LIMITS, "standard", 2)
     monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
@@ -755,10 +751,6 @@ def test_queries_running_at_once_are_limited_per_tenant(data, monkeypatch, coord
 
 def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     """Per tenant and minute, by plan; another tenant is unaffected; jobs have a lower limit."""
-    boto3.client("dynamodb").create_table(
-        TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
-        AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
-        KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
     boto3.resource("dynamodb").Table("obs-tenants").put_item(Item={"pk": "tenant#acme", "plan": "free"})
     query._plans.clear()
     monkeypatch.setitem(query.RATE_LIMITS, "query", {"free": 3, "standard": 5})
@@ -773,18 +765,36 @@ def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     assert http_user(bo, {**q, "async": True})[0] == 202
     status, out = http_user(bo, {**q, "async": True})
     assert status == 429 and "long-running" in out["error"]
-    # A counting problem (e.g. no permission yet) never stops queries.
+    # Limits that can't be read: with nothing known, refuse (fail closed) and say so.
     query._plans.clear()
     boto3.client("dynamodb").delete_table(TableName="obs-tenants")
-    assert http_user({"custom:tenant": "initech"}, q)[0] == 200
+    status, out = http_user({"custom:tenant": "initech"}, q)
+    assert status == 503 and "can't be checked" in out["error"]
+
+
+def test_limits_store_blip_uses_the_last_known_good_then_fails_closed(data, monkeypatch):
+    """A blip in obs-tenants doesn't stop queries: for a minute the API decides from what it last
+    read plus what it counted itself; past that, or knowing nothing, it refuses (503, Retry-After)."""
+    boto3.resource("dynamodb").Table("obs-tenants").put_item(Item={"pk": "tenant#acme", "plan": "free"})
+    query._plans.clear()
+    monkeypatch.setitem(query.RATE_LIMITS, "query", {"free": 4, "standard": 5})
+    monkeypatch.setitem(query.DAILY_SEARCH_UNITS, "free", 1000)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    ana = {"custom:tenant": "acme"}
+    minute = int(time.time() // 60)
+    monkeypatch.setattr(query.time, "time", lambda: minute * 60 + 5)
+    assert http_user(ana, q)[0] == 200                      # read: 1 query this minute
+    boto3.client("dynamodb").delete_table(TableName="obs-tenants")   # the store goes away
+    assert [http_user(ana, q)[0] for _ in range(4)] == [200, 200, 200, 429]   # counted here: 2, 3, 4, then over
+    status, out = http_user({"custom:tenant": "globex"}, q)  # never read: nothing to go on
+    assert status == 503 and out["error"] and query._http(503, {}, retry_after=5)["headers"]["Retry-After"] == "5"
+    monkeypatch.setattr(query.time, "time", lambda: minute * 60 + 5 + query.LIMITS_FRESH_S + 1)
+    status, out = http_user(ana, q)                         # what it knew is too old now
+    assert status == 503 and "can't be checked" in out["error"]
 
 
 def test_daily_search_allowance(data, monkeypatch):
     """Each query uses search units (one per worker); past today's allowance: 429 until midnight."""
-    boto3.client("dynamodb").create_table(
-        TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
-        AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
-        KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
     t = boto3.resource("dynamodb").Table("obs-tenants")
     t.put_item(Item={"pk": "tenant#acme", "plan": "standard", "search_units_per_day": 3})
     t.put_item(Item={"pk": "tenant#globex", "plan": "standard", "search_units_per_day": 0})   # no daily limit

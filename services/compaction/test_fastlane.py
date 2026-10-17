@@ -36,6 +36,10 @@ def aws(monkeypatch):
                        {"AttributeName": "sk", "KeyType": "RANGE"}],
         )
         test_handler.create_usage_table()
+        boto3.client("dynamodb").create_table(      # plans and query limits (the API checks them)
+            TableName="obs-tenants", BillingMode="PAY_PER_REQUEST",
+            AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+            KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}])
         monkeypatch.setattr(handler, "_invoke_worker", lambda p: None)
         yield handler, lookup
 

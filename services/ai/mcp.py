@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 
 from botocore.exceptions import ClientError
 
+import limits
 import sre
 
 VERSION = "1.0.0"
@@ -35,6 +36,8 @@ DEFAULT_RANGE = timedelta(hours=1)
 CALL_SECONDS = 24
 CALLS_PER_MINUTE = int(os.environ.get("MCP_CALLS_PER_MINUTE", "60"))
 CALLS_PER_DAY = int(os.environ.get("MCP_CALLS_PER_DAY", "5000"))
+LIMITS_FRESH_S = 60      # when obs-tenants can't be read, what was last read decides this long, then: refused
+_seen = limits.LastKnownGood(LIMITS_FRESH_S)   # (pk) -> count; ("contact", tenant) -> True
 
 INSTRUCTIONS = """Leasyd stores this team's OpenTelemetry logs, traces (spans) and metrics, and runs \
 synthetic checks and alerts. Use these read-only tools to answer questions about their systems. \
@@ -145,18 +148,30 @@ def call(tenant, name, args, now=None, toolbox=None):
 
 
 def over_limit(tenant):
-    """Counts the call; -> a message when the tenant is over its per-minute or per-day limit."""
+    """Counts the call; -> a message when the tenant is over its per-minute or per-day limit, or
+    when the limits can't be checked (fail closed, after LIMITS_FRESH_S of last-known-good)."""
     now = int(time.time())
     for pk, limit, ttl, what in ((f"rate#mcp#{tenant}#{now // 60}", CALLS_PER_MINUTE, 120, "a minute"),
                                  (f"rate#mcp#{tenant}#{time.strftime('%Y-%m-%d', time.gmtime(now))}", CALLS_PER_DAY, 2 * 86400, "a day")):
         try:
-            sre.client("table").update_item(Key={"pk": pk}, UpdateExpression="ADD n :one SET expires = :exp",
-                                            ConditionExpression="attribute_not_exists(n) OR n < :max",
-                                            ExpressionAttributeValues={":one": 1, ":max": limit, ":exp": now + ttl})
+            n = sre.client("table").update_item(Key={"pk": pk}, UpdateExpression="ADD n :one SET expires = :exp",
+                                                ConditionExpression="attribute_not_exists(n) OR n < :max", ReturnValues="UPDATED_NEW",
+                                                ExpressionAttributeValues={":one": 1, ":max": limit, ":exp": now + ttl})["Attributes"]["n"]
+            _seen.remember(pk, int(n))
+            _seen.remember(("contact", tenant), True)
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 return f"too many tool calls: at most {limit} {what} for this account; try again later"
-            print(json.dumps({"mcp_limit": "not counted", "error": str(e)[:200]}))   # never fail a call on counting
+            if _seen.recall(("contact", tenant)) is None:
+                limits.log_fallback("mcp", tenant, False, e)
+                return limits.UNAVAILABLE
+            if (got := _seen.recall(pk)) is None:
+                _seen.remember(pk, 0)
+                got = (0, 0)
+            if got[0] + got[1] >= limit:
+                return f"too many tool calls: at most {limit} {what} for this account; try again later"
+            _seen.count(pk)
+            limits.log_fallback("mcp", tenant, True, e)
     return None
 
 

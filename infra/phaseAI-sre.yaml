@@ -158,6 +158,15 @@ Resources:
       LogGroupName: /aws/lambda/obs-mcp
       RetentionInDays: 30
 
+  McpLimitsRefusedFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref McpLogGroup
+      # services/shared/limits.py: a limit refused because obs-tenants couldn't be read for too long
+      FilterPattern: '{ $.limits_fallback = * && $.decision = "refuse" }'
+      MetricTransformations:
+        - { MetricNamespace: obs, MetricName: LimitsRefused, MetricValue: "1", DefaultValue: 0 }
+
   McpFunction:
     Type: AWS::Lambda::Function
     DependsOn: McpLogGroup

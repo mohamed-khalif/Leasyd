@@ -22,6 +22,7 @@ os.environ.update(
 )
 os.environ.pop("AWS_SESSION_TOKEN", None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))   # limits.py
 
 import boto3  # noqa: E402
 from moto import mock_aws  # noqa: E402
