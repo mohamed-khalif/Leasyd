@@ -10,7 +10,7 @@ import { TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtMs, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "../time";
-import { describeConstraint, describeStep, every, isBrowser, OK, pct, ResultBox } from "./Synthetics";
+import { describeConstraint, describeStep, every, isBrowser, OK, pct, ResultBox } from "./synthetics/shared";
 import { useRangeWindow } from "../useNow";
 
 const SUCCESS = "synthetics.check.success", DURATION = "synthetics.check.duration";
