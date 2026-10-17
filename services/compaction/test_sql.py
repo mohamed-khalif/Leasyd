@@ -63,6 +63,15 @@ def test_refused(text, msg):
         query.check_sql(text)
 
 
+def test_deeply_nested_queries_are_refused_not_crashed():
+    """A 2 KB query nested deeply enough crashed the parser's JSON walk (RecursionError: a 503 and
+    an alarm, repeatable); it is a bad query."""
+    for text in ("SELECT " + "+".join(["1"] * 800) + " FROM logs",
+                 "SELECT * FROM " + "(SELECT * FROM " * 400 + "logs" + ")" * 400):
+        with pytest.raises(query.BadQuery, match="nested too deeply"):
+            query.check_sql(text)
+
+
 def test_locked_down_even_past_the_checker(data, monkeypatch):
     """If a query slipped past check_sql, DuckDB itself still refuses files and settings."""
     monkeypatch.setattr(query, "check_sql", lambda s: ["logs"])

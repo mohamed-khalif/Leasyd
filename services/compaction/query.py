@@ -445,6 +445,8 @@ def check_sql(sql):
     try:
         con.execute("SET enable_external_access=false")
         tree = json.loads(con.execute("SELECT json_serialize_sql(?)::VARCHAR", [sql]).fetchone()[0])
+    except RecursionError:
+        raise BadQuery("the query is nested too deeply") from None
     finally:
         con.close()
     if tree.get("error"):
@@ -470,7 +472,10 @@ def check_sql(sql):
         elif isinstance(n, list):
             for v in n:
                 walk(v)
-    walk(tree["statements"][0])
+    try:
+        walk(tree["statements"][0])
+    except RecursionError:
+        raise BadQuery("the query is nested too deeply") from None
     unknown = tables - set(SQL_TABLES) - ctes
     if unknown:
         raise BadQuery(f"unknown table {sorted(unknown)[0]!r}; the tables are logs, spans and metrics")
