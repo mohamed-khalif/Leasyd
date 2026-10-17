@@ -98,9 +98,15 @@ AWS cleanup (in order): deploy T7, T5, T2, W1, site; delete stack obs-phaseD1; d
 
 ### Kubernetes and GPU monitoring (2026-10-16, built and tested locally; pending deploy and the real-cluster test)
 
-GPU lab (infra/gpu-lab.sh), paused 2026-10-15: first run on g4dn.12xlarge got k3s up but the node showed no GPUs
-(device plugin without the NVIDIA runtime); fixed in the bootstrap (NVIDIA as k3s default runtime), not yet re-run.
-Instance terminated; tenant qa-gpulab kept (no cost). Next: `infra/gpu-lab.sh up`, then capture, tests, `down`.
+GPU lab (infra/gpu-lab.sh), verified 2026-10-17 on a real cluster: k3s 1.36 on g4dn.12xlarge (4x Tesla T4), installed
+with `leasyd-k8s.sh --gpu` exactly as a customer would. Every page query answers correctly on the real data (fleet, GPU
+states active / idle / free over time, GPU hours per workload and team, pods waiting for a GPU, nodes, pods, workloads,
+events, usage). Found and fixed on the way: the cluster collector's chart Service had no ports (install failed); the
+agent lacked `nodes/pods` / `nodes/proxy` for the kubelet's pod list (Kubernetes 1.33+: no node or pod usage at all);
+dcgm-exporter 4.x labels the host `hostname`, not `Hostname`. Lab-only fixes: node label for NVIDIA's device plugin,
+NVIDIA as k3s default runtime, no xtrace (it printed the key; key rotated), quiet benchmark (a failing loop filled the
+daily cap). 21 minutes of the real output in `services/compaction/testdata/k8s-gpu-capture.json.gz` (no secrets),
+checked by `test_k8s_capture.py` (8 tests); compaction suite 232 passed. Deploy W1 for the installer fixes.
 
 Design and data contract: `docs/gpu-kubernetes.md`. Collection: `examples/kubernetes/leasyd-k8s.sh` installs the official
 OpenTelemetry Collector Helm chart (0.176.0, contrib image) twice: an agent DaemonSet (kubeletstats, pod logs, k8sattributes
