@@ -190,13 +190,20 @@ def _regex(v):
         raise BadQuery("a regex must be a string of at most 1000 characters")
     try:
         regex_compile_check(v)
-    except re.error as e:
-        raise BadQuery(f"bad regex {v!r}: {e}")
+    except (re.error, ValueError) as e:
+        raise BadQuery(f"bad regex {v!r}: {str(e).splitlines()[0]}")
     return v
 
 
 def regex_compile_check(v):
+    """Raises when the regex doesn't compile: in Python, and in DuckDB (RE2, which runs it: no
+    look-arounds or back-references)."""
     re.compile(v)
+    import duckdb
+    try:
+        duckdb.execute("SELECT regexp_full_match('', ?)", [v])
+    except duckdb.Error as e:
+        raise ValueError(str(e).removeprefix("Invalid Input Error: ")) from None
 
 
 def _num(expr):
@@ -262,6 +269,8 @@ def compile_query(q, edges=False):
 
     if q.get("search") is not None:
         limit = min(int((q.get("search") or {}).get("limit", 100)), MAX_ROWS)
+        if limit < 0:
+            raise BadQuery("search.limit must be 0 or more")
         return f"SELECT * FROM t WHERE {where_sql} ORDER BY ts DESC LIMIT {limit}", params, "search"
 
     aggs = q.get("aggs") or [{"fn": "count"}]

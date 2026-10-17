@@ -894,6 +894,21 @@ def test_ai_and_mcp_queries_use_the_daily_allowance(data, monkeypatch):
     assert "error" not in query.handler({**q, "tenant": "acme"}, None)    # alerts still run
 
 
+def test_user_mistakes_in_json_queries_are_400_not_503(data, monkeypatch):
+    """B7: a negative search limit and a regex DuckDB (RE2) can't compile reached the workers and
+    failed there: 503 and an alarm. They are the caller's mistake: 400 with what to fix."""
+    monkeypatch.setattr(query, "_invoke_worker", query.run_worker)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z"}
+    ana = {"custom:tenant": "acme"}
+    status, out = http_user(ana, {**q, "search": {"limit": -5}})
+    assert status == 400 and "limit" in out["error"]
+    for bad in ("(?=a)", "a(?<n>b)\\1"):
+        status, out = http_user(ana, {**q, "aggs": [{"fn": "count"}], "where": [{"field": "body", "op": "regex", "value": bad}]})
+        assert status == 400 and "bad regex" in out["error"], (bad, status, out)
+    assert http_user(ana, {**q, "search": {"limit": 0}})[0] == 200
+    assert http_user(ana, {**q, "aggs": [{"fn": "count"}], "where": [{"field": "body", "op": "regex", "value": "a.*"}]})[0] == 200
+
+
 def test_worker_out_of_file_descriptors_exits_for_a_fresh_container(monkeypatch):
     import errno as _errno
     exits = []
