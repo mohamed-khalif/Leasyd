@@ -88,12 +88,35 @@ test("today: a 202 without a job id fails at once as 'took too long' (code-audit
   await assert.rejects(query(Q), (e: unknown) => e instanceof ApiError && e.status === 504);
 });
 
-test("today: one transient 503 while polling ends the wait (code-audit B8)", async (t) => {
+test("a transient 503 or network error while polling is retried; the job's answer comes back (B8)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  let polls = 0;
+  answer((c) => {
+    if (c.method === "POST") return { status: 202, body: { job: "c".repeat(32) } };
+    polls++;
+    return polls === 1 ? { status: 503, body: { error: "try again" } } : polls === 2 ? new TypeError("Failed to fetch")
+      : { status: 200, body: { columns: ["n"], rows: [[7]] } };
+  });
+  const p = query(Q);
+  for (let i = 0; i < 4; i++) { await flush(); t.mock.timers.tick(2000); }
+  assert.deepEqual(await p, { columns: ["n"], rows: [[7]] });
+});
+
+test("polling that keeps failing ends the wait with the error (B8)", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
   answer((c) => c.method === "POST" ? { status: 202, body: { job: "c".repeat(32) } } : { status: 503, body: { error: "try again" } });
   const p = query(Q);
   const failed = assert.rejects(p, (e: unknown) => e instanceof ApiError && e.status === 503);
-  for (let i = 0; i < 3; i++) { await flush(); t.mock.timers.tick(2000); }
+  for (let i = 0; i < 6; i++) { await flush(); t.mock.timers.tick(2000); }
+  await failed;
+});
+
+test("a job's own error (not transient) ends the wait at once", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  answer((c) => c.method === "POST" ? { status: 202, body: { job: "c".repeat(32) } } : { status: 400, body: { error: "bad query: x" } });
+  const p = query(Q);
+  const failed = assert.rejects(p, (e: unknown) => e instanceof ApiError && e.status === 400);
+  await flush(); t.mock.timers.tick(2000);
   await failed;
 });
 

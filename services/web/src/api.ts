@@ -33,15 +33,26 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 /** POST /v1/app/query. A query still running after ~20 s carries on in the background (202 and a
  *  job id): poll its answer every 2 s, up to 6 minutes. `background` asks for that from the start
  *  (long SQL ranges); onWait hears the seconds waited so far. */
+const TRANSIENT = new Set([502, 503, 504]);
+const POLL_TRIES = 3;
+
 async function runQuery<T>(q: object, opts: { background?: boolean; onWait?: (seconds: number) => void } = {}): Promise<T> {
   const t0 = Date.now();
   let res = await raw("/v1/app/query", { method: "POST", body: JSON.stringify(opts.background ? { ...q, async: true } : q) });
-  while (res.status === 202) {
-    const job = (res.body as { job?: string }).job;
+  const job = (res.body as { job?: string }).job;
+  // While a job runs, a poll that fails in passing (502/503/504, or the network) is tried again: the
+  // job carries on regardless. POLL_TRIES of those in a row end the wait with the last one.
+  for (let failed = 0; res.status === 202 || (failed > 0 && failed < POLL_TRIES);) {
     if (!job || Date.now() - t0 > 6 * 60_000) throw new ApiError(504, "The query took too long. Try a shorter time range.");
     opts.onWait?.(Math.round((Date.now() - t0) / 1000));
     await new Promise((r) => setTimeout(r, 2000));
-    res = await raw(`/v1/app/query/${job}`);
+    try {
+      res = await raw(`/v1/app/query/${job}`);
+      failed = TRANSIENT.has(res.status) ? failed + 1 : 0;
+    } catch (e) {
+      if (!(e instanceof TypeError) || ++failed >= POLL_TRIES) throw e;
+      res = { status: 202, body: {} };
+    }
   }
   if (res.status >= 400) throw apiError(res.status, res.body);
   return res.body as T;
