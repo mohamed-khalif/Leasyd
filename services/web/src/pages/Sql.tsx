@@ -1,6 +1,6 @@
 // SQL: one read-only SELECT (DuckDB SQL) over the tables logs, spans and metrics, for the time
 // range at the top. Results as a table, or a chart when the first column is a time.
-import { KeyboardEvent, useMemo, useState } from "react";
+import { KeyboardEvent, useMemo, useRef, useState } from "react";
 import { sql as runSql, SqlResult } from "../api";
 import type { Ctx } from "../App";
 import { TimeSeries } from "../components/TimeSeries";
@@ -63,7 +63,10 @@ export function Sql({ ctx }: { ctx: Ctx }) {
   const [view, setView] = useState<"table" | "chart">("table");
   const [ms, setMs] = useState(0);
 
+  const busy = useRef(false);   // not `running`: two Ctrl+Enters can land before it re-renders
   const run = async () => {
+    if (busy.current || !text.trim()) return;   // one query at a time, as the Run button allows
+    busy.current = true;
     setRunning(true); setError(null); setWaited(0);
     try { localStorage.setItem("leasyd.sql", text); } catch { /* ignore */ }
     const t0 = performance.now();
@@ -74,7 +77,7 @@ export function Sql({ ctx }: { ctx: Ctx }) {
       const r = await runSql({ sql: text, start: w.start, end: w.end }, { background: long, onWait: setWaited });
       setResult(r); setMs(performance.now() - t0);
     } catch (e) { setError((e as Error).message); setResult(null); }
-    finally { setRunning(false); }
+    finally { busy.current = false; setRunning(false); }
   };
   const chartable = useMemo(() => chartOf(result), [result]);
 

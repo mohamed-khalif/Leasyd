@@ -1,6 +1,6 @@
 // One synthetic check: Overview (configuration, uptime, timings), Check runs (every run, with a
 // side panel showing the run's steps, requests and responses) and Settings.
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserStep, Check, CheckResult, checks, notExcluded, records, Step } from "../api";
 import type { Ctx } from "../App";
 import { Block, Card, Drawer, StatusStrip, Tabs } from "../components/Charts";
@@ -51,6 +51,8 @@ export function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const [openRun, setOpenRun] = useState<Run | null>(null);
   const load = useCallback(() => checks.get(id).then(setCheck, (e: Error) => setError(e.message)), [id]);
   useEffect(() => { load(); }, [load, ctx.tick]);
+  const later = useRef<ReturnType<typeof setTimeout>>(undefined);   // the re-read after Run now
+  useEffect(() => () => clearTimeout(later.current), []);
 
   const w = useRangeWindow(ctx.range, ctx.tick, nonce);
   const exRuns = (check?.exclusions ?? []).map((e) => e.run_id);
@@ -65,7 +67,7 @@ export function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const act = async (f: () => Promise<unknown>) => { try { await f(); } catch (e) { setError((e as Error).message); } };
   const runNow = async () => {
     setRunning("running");
-    try { setRunning((await checks.run(id)).result); setTimeout(() => setNonce((n) => n + 1), 60_000); }   // searchable within ~a minute
+    try { setRunning((await checks.run(id)).result); clearTimeout(later.current); later.current = setTimeout(() => setNonce((n) => n + 1), 60_000); }   // searchable within ~a minute
     catch (e) { setError((e as Error).message); setRunning(null); }
   };
   const last = runList[0];
