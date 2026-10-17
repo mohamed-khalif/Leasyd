@@ -367,10 +367,12 @@ Resources:
                   - sts:AssumeRole
                   - sts:TagSession
                 Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
-              - Sid: FanOutQueryWorkers   # Phase 4: the query coordinator runs workers in parallel
+              - Sid: FanOutQueryWorkers   # Phase 4: the query coordinator runs workers in parallel; the API runs queries in the coordinator
                 Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-worker"
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query-worker"
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
               - Sid: LargeResults
                 Effect: Allow
                 Action:

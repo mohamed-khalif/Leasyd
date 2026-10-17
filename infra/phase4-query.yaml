@@ -45,9 +45,11 @@ Parameters:
     Description: Most obs-query-api instances at once (0 = no cap); the 60-day peak was 28.
   CoordinatorConcurrency:
     Type: Number
-    Default: 100
+    Default: 400
     MinValue: 0
-    Description: Most obs-query (alerts, AI, MCP) instances at once (0 = no cap); the 60-day peak was 8.
+    Description: >
+      Most obs-query instances at once (0 = no cap): every app and API query runs here (obs-query-api
+      waits for it, capped at 300), plus alerts, the AI SRE and MCP (60-day peak 8).
 
 Conditions:
   CapWorkers: !Not [!Equals [!Ref WorkerConcurrency, 0]]
@@ -90,6 +92,7 @@ Resources:
           QUERY_WORKER_FUNCTION: obs-query-worker
           QUERY_MAX_WORKERS: !Ref MaxWorkers
           QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker
+          RETENTION_DAYS: !Ref RetentionDays
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "4" }
@@ -162,6 +165,7 @@ Resources:
           INDEX_TABLE: obs-index
           TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
           QUERY_WORKER_FUNCTION: obs-query-worker
+          COORDINATOR_FUNCTION: obs-query
           QUERY_MAX_WORKERS: !Ref MaxWorkers
           QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker
           RETENTION_DAYS: !Ref RetentionDays

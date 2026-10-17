@@ -52,13 +52,13 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
 from decimal import Decimal
 
 import boto3
 import botocore.config
+import botocore.exceptions
 from botocore.exceptions import ClientError
 from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
 
@@ -774,6 +774,8 @@ def handler(event, context):
       {"tenant", "promql", "time"}: one PromQL evaluation (the Prometheus API's vector result);
       {"tenant", "promql", "start", "end", "step"}: a PromQL range (matrix);
       {"tenant", "sql", "start", "end"}: read-only SQL."""
+    if "answer_job" in event:
+        return answer_job(event["answer_job"])
     try:
         if "promql" in event:
             import promql
@@ -803,7 +805,7 @@ API_FIELDS = {"signal", "start", "end", "services", "where", "match", "group_by"
 MAX_RESPONSE_BYTES = 5_500_000   # Lambda's response limit is 6 MB
 
 
-SYNC_DEADLINE_S = 20    # a query still running then continues as a job (API Gateway gives up at 29 s)
+SYNC_DEADLINE_S = 20    # the API waits this long, then answers 202 and the query runs on (API Gateway gives up at 29 s)
 JOB_TIMEOUT_S = 330     # a job not done by then has failed (the worker function's timeout is 300 s)
 _JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
@@ -814,10 +816,11 @@ def api(event, context):
       POST /v1/app/query        signed-in user (Cognito authorizer, ID token)
       GET  /v1/query/{job}, /v1/app/query/{job}   a long query's answer (see below)
       GET  /v1/app/me           who the signed-in user is
-    A query that takes longer than SYNC_DEADLINE_S, or asks for it ("async": true), runs on as a
-    job: the answer is 202 {"job", "status": "running"}, and GET .../query/{job} answers 202
-    while it runs, then the query's own answer (kept a day). Jobs run in obs-query-worker
-    (up to 5 minutes) and their answers are stored under _results/jobs/<tenant>/.
+    Every query runs in obs-query (the coordinator; up to 5 minutes), which this function waits
+    for up to SYNC_DEADLINE_S. Past that, or when the query asks for it ("async": true), the
+    answer is 202 {"job", "status": "running"}: the same run carries on (Lambda doesn't stop a call
+    whose caller has stopped waiting) and stores its answer under _results/jobs/<tenant>/, and
+    GET .../query/{job} answers 202 while it runs, then the query's own answer (kept a day).
     The tenant comes only from the authorizer: the key's tenant, or the
     user's custom:tenant claim (set by the tenant admin, not changeable by
     the user). A tenant or any other field in the body outside API_FIELDS is
@@ -843,20 +846,84 @@ def api(event, context):
         return _http(400, {"error": "body must be a JSON query"})
     if not isinstance(q, dict):
         return _http(400, {"error": "body must be a JSON object"})
-    if q.get("async"):
-        return start_job(tenant, q)
-    # Run here; past the deadline, hand the query to a job (it starts again there) and say so.
-    pool = ThreadPoolExecutor(1)
-    running = pool.submit(answer, tenant, q)
-    pool.shutdown(wait=False)
+    if q.get("async") and (refused := over_limit(tenant, "job")):
+        return refused
+    job = secrets.token_hex(16)
+    _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job), ContentType="application/json",
+                     Body=json.dumps({"status": "running", "started": _now().strftime("%Y-%m-%dT%H:%M:%SZ")}))
+    wait_s = 0 if q.get("async") else SYNC_DEADLINE_S
+    payload = {"answer_job": {"id": job, "tenant": tenant, "query": {k: v for k, v in q.items() if k != "async"},
+                              "store_after": time.time() + wait_s - STORE_MARGIN_S}}
     try:
-        return running.result(timeout=SYNC_DEADLINE_S)
-    except FutureTimeout:
-        return start_job(tenant, q)
+        return _coordinate(payload, wait_s)
+    except _StillRunning:
+        return _http(202, {"job": job, "status": "running",
+                           "message": "the query runs in the background; GET /v1/app/query/{job} (or /v1/query/{job}) for its answer"})
     except Unavailable as e:
         return _unavailable(e)
+
+
+STORE_MARGIN_S = 5      # the coordinator stores an answer it finishes this close to the API's deadline, or later
+COORDINATOR_FUNCTION = os.environ.get("COORDINATOR_FUNCTION", "obs-query")
+
+
+class _StillRunning(Exception):
+    """The coordinator didn't answer within the wait; it runs on and stores its answer."""
+
+
+def _coordinate(payload, wait_s):
+    """Run a query in obs-query and wait up to wait_s for its answer (0: don't wait). Past that the
+    call runs on (Lambda doesn't stop it) and raises _StillRunning here. Never retried: a retry
+    would run the query twice."""
+    try:
+        if not wait_s:
+            _client("lambda").invoke(FunctionName=COORDINATOR_FUNCTION, InvocationType="Event", Payload=json.dumps(payload))
+            raise _StillRunning()
+        r = _coordinator_client(wait_s).invoke(FunctionName=COORDINATOR_FUNCTION, Payload=json.dumps(payload).encode())
+    except botocore.exceptions.ReadTimeoutError:
+        raise _StillRunning() from None
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in _UNAVAILABLE_CODES:
+            print(json.dumps({"coordinator_unavailable": e.response["Error"]["Code"]}))
+            raise Unavailable(UNAVAILABLE) from e
+        raise
+    out = json.loads(r["Payload"].read())
+    if r.get("FunctionError"):
+        raise RuntimeError(f"query coordinator failed: {str(out)[:300]}")
+    return out
+
+
+def _coordinator_client(wait_s):
+    key = f"lambda-wait-{wait_s}"
+    if key not in _clients:
+        _clients[key] = boto3.client("lambda", config=botocore.config.Config(
+            read_timeout=wait_s, connect_timeout=5, retries={"total_max_attempts": 1}))
+    return _clients[key]
+
+
+def answer_job(job):
+    """In obs-query: run one query from the API -> its HTTP answer. Stored for GET .../query/{job}
+    when it finishes near or past the API's deadline (the API has answered 202 by then)."""
+    tenant = layout.check_tenant(job["tenant"])
+    if not _JOB_ID.match(job["id"]):
+        raise ValueError("bad job id")
+    try:
+        out = answer(tenant, job["query"])
+    except Unavailable as e:
+        out = _unavailable(e)
+    except Exception:
+        _store_answer(tenant, job["id"], _http(500, {"error": "the query failed; try a shorter time range"}))
+        raise
     finally:
         charge_units(tenant)
+    if time.time() >= job.get("store_after", 0):
+        _store_answer(tenant, job["id"], out)
+    return out
+
+
+def _store_answer(tenant, job, out):
+    _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job), ContentType="application/json",
+                     Body=json.dumps({"status": "done", "answer": out}))
 
 
 def answer(tenant, q):
@@ -888,18 +955,6 @@ def answer(tenant, q):
 
 def _job_key(tenant, job):
     return f"_results/jobs/{tenant}/{job}.json"
-
-
-def start_job(tenant, q):
-    """Run the query in the background (obs-query-worker, async) -> 202 with the job's id."""
-    if (refused := over_limit(tenant, "job")):
-        return refused
-    job = secrets.token_hex(16)
-    _s3().put_object(Bucket=lookup.BUCKET, Key=_job_key(tenant, job), ContentType="application/json",
-                     Body=json.dumps({"status": "running", "started": _now().strftime("%Y-%m-%dT%H:%M:%SZ")}))
-    _run_in_background({"job": {"id": job, "tenant": tenant, "query": {k: v for k, v in q.items() if k != "async"}}})
-    return _http(202, {"job": job, "status": "running",
-                       "message": "the query runs in the background; GET /v1/app/query/{job} (or /v1/query/{job}) for its answer"})
 
 
 # Limits per tenant, by plan, so one customer can't use up the account's Lambda capacity (shared
@@ -981,12 +1036,9 @@ def over_limit(tenant, kind):
         return None
 
 
-def _run_in_background(payload):
-    _client("lambda").invoke(FunctionName=WORKER_FUNCTION, InvocationType="Event", Payload=json.dumps(payload))
-
-
 def run_job(event):
-    """In obs-query-worker: run a job's query and store its answer for job_status."""
+    """In obs-query-worker: a job started by an API from before answer_job (kept for jobs in flight
+    during that deploy; remove once deployed). Runs the query and stores its answer."""
     job = event["job"]
     tenant = layout.check_tenant(job["tenant"])
     if not _JOB_ID.match(job["id"]):

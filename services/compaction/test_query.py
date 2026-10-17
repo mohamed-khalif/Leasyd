@@ -3,6 +3,7 @@
 
 import gzip
 import json
+import threading
 from datetime import date, datetime, timedelta, timezone
 import math
 import os
@@ -622,44 +623,101 @@ def get_job(tenant, job):
     return out["statusCode"], json.loads(out["body"])
 
 
-def test_long_queries_run_on_as_jobs(data, monkeypatch):
+class Coordinator:
+    """obs-query, in-process: each call runs query.handler in a thread that, like a Lambda whose caller
+    has stopped waiting, carries on after the API gives up."""
+    def __init__(self):
+        self.threads, self.payloads, self.errors = [], [], []
+
+    def __call__(self, payload, wait_s):
+        self.payloads.append(payload)
+        out = []
+
+        def run():
+            try:
+                out.append(query.handler(payload, None))
+            except Exception as e:      # a Lambda error in obs-query (alarmed); the stored answer says so
+                self.errors.append(e)
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        self.threads.append(th)
+        th.join(wait_s)
+        if th.is_alive() or not out:
+            raise query._StillRunning()
+        return out[0]
+
+    def finish(self):
+        for th in self.threads:
+            th.join(10)
+
+
+@pytest.fixture
+def coordinator(monkeypatch):
+    c = Coordinator()
+    monkeypatch.setattr(query, "_coordinate", c)
+    yield c
+    c.finish()
+
+
+def test_long_queries_run_on_as_jobs(data, monkeypatch, coordinator):
     """async: true, or a query past the deadline -> 202 and a job; GET answers 202 while it runs,
     then the query's own answer, to its tenant only."""
     monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
-    started = []
-    monkeypatch.setattr(query, "_run_in_background", started.append)
+    real = query.answer
+    gate = threading.Event()
+    monkeypatch.setattr(query, "answer", lambda t, q: (gate.wait(10), real(t, q))[1])
     q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
     ana = {"custom:tenant": "acme"}
     status, out = http_user(ana, {**q, "async": True})
-    assert status == 202 and out["status"] == "running" and started[-1]["job"]["query"] == q
+    assert status == 202 and out["status"] == "running" and coordinator.payloads[-1]["answer_job"]["query"] == q
     job = out["job"]
     assert get_job("acme", job)[0] == 202
     assert get_job("globex", job)[0] == 404 and get_job("acme", "../x")[0] == 404 and get_job("acme", "0" * 32)[0] == 404
-    query.worker(started[-1], None)                       # the background run (obs-query-worker)
+    gate.set()
+    coordinator.finish()
     assert get_job("acme", job) == (200, {**get_job("acme", job)[1], "rows": [[len(data)]]})
     assert get_job("globex", job)[0] == 404
-    # Past the deadline: the same query continues as a job, SQL and PromQL alike.
-    real = query.answer
+    # Fast: answered in the same request (no job).
+    status, out = http_user(ana, q)
+    assert status == 200 and out["rows"] == [[len(data)]]
+    # Past the deadline: SQL and PromQL alike continue as a job, the same run.
+    gate.clear()
     monkeypatch.setattr(query, "SYNC_DEADLINE_S", 0.05)
-    monkeypatch.setattr(query, "answer", lambda t, q: (time.sleep(0.5), real(t, q))[1])
     sql = {"sql": "SELECT count(*) FROM logs", "start": q["start"], "end": q["end"]}
     status, out = http_user(ana, sql)
-    assert status == 202 and started[-1]["job"]["query"] == sql
-    query.worker(started[-1], None)
+    assert status == 202 and coordinator.payloads[-1]["answer_job"]["query"] == sql
+    gate.set()
+    coordinator.finish()
     assert get_job("acme", out["job"])[1]["rows"] == [[len(data)]]
-    # A job that never finished (the worker died) is reported, not left "running" forever.
+    # A job that never finished (the run died) is reported, not left "running" forever.
+    gate.clear()
     status, out = http_user(ana, {**q, "async": True})
     monkeypatch.setattr(query, "_now", lambda: datetime.now(timezone.utc) + timedelta(minutes=10))
     assert get_job("acme", out["job"])[0] == 504
+    gate.set()
 
 
-def test_failed_jobs_say_so(data, monkeypatch):
-    started = []
-    monkeypatch.setattr(query, "_run_in_background", started.append)
+def test_a_query_past_the_deadline_runs_once(data, monkeypatch, coordinator):
+    """Found 2026-10-17: at the 20 s deadline the API started the same query again as a job while the
+    first run carried on (up to 2 x 64 workers x 300 s, units charged twice). Now the one run goes on."""
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
+    real, runs, gate = query.answer, [], threading.Event()
+    monkeypatch.setattr(query, "answer", lambda t, q: (runs.append(q), gate.wait(10), real(t, q))[2])
+    monkeypatch.setattr(query, "SYNC_DEADLINE_S", 0.05)
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    status, out = http_user({"custom:tenant": "acme"}, q)
+    assert status == 202
+    gate.set()
+    coordinator.finish()
+    assert len(runs) == 1
+    assert get_job("acme", out["job"])[1]["rows"] == [[len(data)]]
+
+
+def test_failed_jobs_say_so(data, monkeypatch, coordinator):
     monkeypatch.setattr(query, "answer", lambda t, q: 1 / 0)
     status, out = http_user({"custom:tenant": "acme"}, {"signal": "logs", "async": True})
-    with pytest.raises(ZeroDivisionError):
-        query.worker(started[-1], None)                   # still a Lambda error (alarmed)
+    coordinator.finish()
+    assert [type(e) for e in coordinator.errors] == [ZeroDivisionError]   # still a Lambda error (alarmed)
     assert get_job("acme", out["job"]) == (500, {"error": "the query failed; try a shorter time range"})
 
 
@@ -674,7 +732,6 @@ def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     monkeypatch.setitem(query.RATE_LIMITS, "query", {"free": 3, "standard": 5})
     monkeypatch.setitem(query.DAILY_SEARCH_UNITS, "free", 0)
     monkeypatch.setitem(query.RATE_LIMITS, "job", {"free": 1, "standard": 2})
-    monkeypatch.setattr(query, "_run_in_background", lambda p: None)
     q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
     ana, bo = {"custom:tenant": "acme"}, {"custom:tenant": "globex"}
     assert [http_user(ana, q)[0] for _ in range(4)] == [200, 200, 200, 429]
