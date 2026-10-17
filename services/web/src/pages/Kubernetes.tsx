@@ -5,6 +5,7 @@
 // Queries: infra/queries.ts; contract: docs/gpu-kubernetes.md.
 import { useMemo, useState } from "react";
 import type { Ctx } from "../App";
+import { Capped } from "../components/Capped";
 import { Card, Drawer, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
@@ -187,10 +188,10 @@ function Nodes({ nodes }: Props) {
     <Panel title="Nodes" flush>
       <Loads q={loads(nodes)} empty={!nodes.rows.length} height={160}>
         {() => (
-          <table className="dtable">
+          <Capped rows={nodes.rows}>{(rows) => (<table className="dtable">
             <thead><tr><th style={{ width: "24%" }}>Node</th><th>Cluster</th><th>Instance</th><th>Status</th><th className="num">CPU</th>
               <th className="num">Memory</th><th className="num">Disk</th><th className="num">Pods</th><th className="num">GPUs</th></tr></thead>
-            <tbody>{nodes.rows.map((n) => (
+            <tbody>{rows.map((n) => (
               <tr key={n.node}>
                 <td title={n.node}>{n.node}</td><td>{n.cluster || "–"}</td>
                 <td className="faint" title={n.zone}>{n.instance_type || "–"}</td>
@@ -202,7 +203,7 @@ function Nodes({ nodes }: Props) {
                 <td className="num">{n.gpus ? <a href="#/gpus">{n.gpus}</a> : <span className="faint">–</span>}</td>
               </tr>
             ))}</tbody>
-          </table>
+          </table>)}</Capped>
         )}
       </Loads>
     </Panel>
@@ -224,10 +225,10 @@ function Workloads({ w, k, hint, f, pods }: Props) {
     <Panel title="Workloads" flush right={<span className="faint">usage: the sum of their pods' latest</span>}>
       <Loads q={loads(wl)} empty={!wl.rows.length} height={160}>
         {() => (
-          <table className="dtable">
+          <Capped rows={wl.rows}>{(rows) => (<table className="dtable">
             <thead><tr><th style={{ width: "26%" }}>Workload</th><th>Kind</th><th>Namespace</th><th className="num">Ready</th>
               <th className="num">CPU</th><th className="num">Memory</th><th className="num">Restarts</th></tr></thead>
-            <tbody>{wl.rows.map((r) => {
+            <tbody>{rows.map((r) => {
               const u = usage.get(`${r.namespace}/${r.name}`);
               const ok = r.kind === "Job" || r.desired == null || (r.ready ?? 0) >= r.desired;
               return (
@@ -239,7 +240,7 @@ function Workloads({ w, k, hint, f, pods }: Props) {
                 </tr>
               );
             })}</tbody>
-          </table>
+          </table>)}</Capped>
         )}
       </Loads>
     </Panel>
@@ -260,10 +261,10 @@ function Pods({ pods, onPod }: Props) {
       </span>}>
       <Loads q={loads(pods)} empty={!shown.length} height={160}>
         {() => (
-          <table className="dtable">
+          <Capped rows={shown}>{(rows) => (<table className="dtable">
             <thead><tr><th style={{ width: "27%" }}>Pod</th><th>Namespace</th><th>Status</th><th style={{ width: "16%" }}>Node</th>
               <th className="num">CPU</th><th className="num">Memory</th><th className="num">Of limit</th><th className="num">Restarts</th></tr></thead>
-            <tbody>{shown.slice(0, 1000).map((p) => {
+            <tbody>{rows.map((p) => {
               const why = podProblem(p);
               return (
                 <tr key={p.namespace + p.pod} onClick={() => onPod(`${p.namespace}/${p.pod}`)}>
@@ -277,7 +278,7 @@ function Pods({ pods, onPod }: Props) {
                 </tr>
               );
             })}</tbody>
-          </table>
+          </table>)}</Capped>
         )}
       </Loads>
     </Panel>
@@ -350,10 +351,10 @@ function PodDrawer({ ctx, w, hint, id, row, onClose }: { ctx: Ctx; w: { start: s
       <h4>Containers</h4>
       <Loads q={loads(containers)} empty={!containers.rows.length} height={60}>
         {() => (
-          <table className="dtable">
+          <Capped rows={containers.rows}>{(rows) => (<table className="dtable">
             <thead><tr><th style={{ width: "30%" }}>Container</th><th>State</th><th className="num">Restarts</th>
               <th className="num" title="request / limit">CPU</th><th className="num" title="request / limit">Memory</th></tr></thead>
-            <tbody>{containers.rows.map((c) => (
+            <tbody>{rows.map((c) => (
               <tr key={c.container}>
                 <td title={c.image}>{c.container}<div className="faint">{c.image}</div></td>
                 <td className={c.reason ? "bad" : c.ready === 1 ? "ok" : "warn"}>{c.reason || (c.ready === 1 ? "ready" : "not ready")}</td>
@@ -362,7 +363,7 @@ function PodDrawer({ ctx, w, hint, id, row, onClose }: { ctx: Ctx; w: { start: s
                 <td className="num" title="request / limit">{memShort(c.mem_request)} / {c.mem_limit == null ? "–" : memShort(c.mem_limit)}</td>
               </tr>
             ))}</tbody>
-          </table>
+          </table>)}</Capped>
         )}
       </Loads>
       <h4>CPU and memory</h4>

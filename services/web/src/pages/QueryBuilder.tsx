@@ -5,6 +5,7 @@ import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from
 import type { Ctx } from "../App";
 import { replaceHashParams } from "../hashParams";
 import { useDebounced } from "../useDebounced";
+import { Capped } from "../components/Capped";
 import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtNum } from "../time";
@@ -198,15 +199,15 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
                 )}
               {settings.legend && series.length > 0 && (
                 <div className="table-scroll" style={{ maxHeight: 180, marginTop: 8 }}>
-                  <table className="dtable qb-legend">
+                  <Capped rows={sorted}>{(rows) => (<table className="dtable qb-legend">
                     <colgroup><col /><col style={{ width: 110 }} /><col style={{ width: 110 }} /><col style={{ width: 110 }} /></colgroup>
                     <thead><tr><th>Series</th><th className="num">Last</th><th className="num">Average</th><th className="num">Max</th></tr></thead>
-                    <tbody>{sorted.map((s) => (
+                    <tbody>{rows.map((s) => (
                       <tr key={s.label} style={{ cursor: "default" }}>
                         <td title={s.label}><i className="swatch" style={{ background: s.color }} />{s.label}</td>
                         <td className="num">{fmt(s.last)}</td><td className="num">{fmt(s.avg)}</td><td className="num">{fmt(s.max)}</td>
                       </tr>))}</tbody>
-                  </table>
+                  </table>)}</Capped>
                 </div>
               )}
             </div>

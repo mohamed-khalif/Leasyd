@@ -5,6 +5,7 @@
 // Queries: infra/queries.ts; conclusions: infra/analysis.ts; contract: docs/gpu-kubernetes.md.
 import { useState } from "react";
 import type { Ctx } from "../App";
+import { Capped } from "../components/Capped";
 import { Card, Drawer, StackedBars, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
@@ -134,11 +135,11 @@ function Overview({ ctx, w, k, hint, f, fleet, prices, onGpu, onTab }: Props & {
       <Panel title="GPUs" flush right={<span className="faint">click one for its details</span>}>
         <Loads q={loads(fleet)} empty={!gs.length} height={160}>
           {() => (
-            <table className="dtable">
+            <Capped rows={gs}>{(rows) => (<table className="dtable">
               <thead><tr><th style={{ width: "19%" }}>Node</th><th style={{ width: 92 }}>GPU</th><th style={{ width: "13%" }}>Model</th>
                 <th style={{ width: "21%" }}>Used by</th><th className="num" style={{ width: 110 }}>Now</th><th className="num">Average</th><th className="num">Memory</th>
                 <th className="num">Temp max</th><th className="num">Idle</th></tr></thead>
-              <tbody>{gs.map((g) => (
+              <tbody>{rows.map((g) => (
                 <tr key={g.gpu} onClick={() => onGpu(g.gpu)}>
                   <td title={g.node}>{g.node}</td>
                   <td className="mono" title={g.gpu}>{shortGpu(g.gpu)}</td>
@@ -152,7 +153,7 @@ function Overview({ ctx, w, k, hint, f, fleet, prices, onGpu, onTab }: Props & {
                   <td className={`num${g.idle_hours > g.hours / 2 ? " warn" : ""}`}>{hours(g.idle_hours + g.free_hours)}</td>
                 </tr>
               ))}</tbody>
-            </table>
+            </table>)}</Capped>
           )}
         </Loads>
       </Panel>
@@ -251,11 +252,11 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
       <Panel title="GPU time by workload" flush>
         <Loads q={loads(wl)} empty={!wl.rows.length} height={140}>
           {() => (
-            <table className="dtable">
+            <Capped rows={wl.rows}>{(rows) => (<table className="dtable">
               <thead><tr><th style={{ width: "22%" }}>Workload</th><th>Namespace</th><th>Team</th><th style={{ width: "14%" }}>Model</th>
                 <th className="num">GPUs</th><th className="num">Utilization</th><th className="num">GPU time</th><th className="num">Spend</th>
                 <th className="num">Idle</th></tr></thead>
-              <tbody>{wl.rows.map((r) => {
+              <tbody>{rows.map((r) => {
                 const p = priceFor(r.model, prices).usd, idleShare = r.hours ? r.idle_hours / r.hours : 0;
                 return (
                   <tr key={r.namespace + r.workload + r.model}>
@@ -270,7 +271,7 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
                   </tr>
                 );
               })}</tbody>
-            </table>
+            </table>)}</Capped>
           )}
         </Loads>
       </Panel>
@@ -300,10 +301,10 @@ function Health({ w, k, hint, f, onGpu }: Props & { onGpu: (g: string) => void }
         <a href={`#/alerts/rules/new?template=${encodeURIComponent("GPU too hot")}`}>on heat ›</a></span>}>
         <Loads q={loads(health)} empty={false} height={140}>
           {() => rs.length ? (
-            <table className="dtable">
+            <Capped rows={rs}>{(rows) => (<table className="dtable">
               <thead><tr><th style={{ width: "20%" }}>Node</th><th style={{ width: 80 }}>GPU</th><th style={{ width: "30%" }}>Signs</th>
                 <th>Used by</th><th className="num">Temp max</th></tr></thead>
-              <tbody>{rs.map((r) => (
+              <tbody>{rows.map((r) => (
                 <tr key={r.gpu} onClick={() => onGpu(r.gpu)}>
                   <td title={r.node}>{r.node}<div className="faint">{r.model}</div></td>
                   <td className="mono">{shortGpu(r.gpu)}</td>
@@ -312,7 +313,7 @@ function Health({ w, k, hint, f, onGpu }: Props & { onGpu: (g: string) => void }
                   <td className={`num${(r.temp_max ?? 0) >= HOT_TEMP ? " bad" : ""}`}>{r.temp_max == null ? "–" : `${Math.round(r.temp_max)} °C`}</td>
                 </tr>
               ))}</tbody>
-            </table>
+            </table>)}</Capped>
           ) : <div className="state">No hardware signs in this range: no XIDs, ECC errors, throttling or overheating.</div>}
         </Loads>
       </Panel>

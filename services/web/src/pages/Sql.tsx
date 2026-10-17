@@ -5,6 +5,7 @@ import { sql as runSql, SqlResult } from "../api";
 import type { Ctx } from "../App";
 import { TimeSeries } from "../components/TimeSeries";
 import { downloadCsv } from "../csv";
+import { Capped } from "../components/Capped";
 import { fmtNum, rangeWindow } from "../time";
 
 const TABLES: [string, string, [string, string][]][] = [
@@ -134,12 +135,13 @@ export function Sql({ ctx }: { ctx: Ctx }) {
                 <div className="panel-body"><TimeSeries series={chartable} range={ctx.range} height={280} area={false} /></div>
               ) : !result.rows.length ? <div className="state">No rows</div> : (
                 <div className="table-scroll" style={{ maxHeight: 620 }}>
-                  <table className="dtable sql-result">
-                    <thead><tr>{result.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
-                    <tbody>{result.rows.slice(0, 2000).map((r, i) => (
-                      <tr key={i} style={{ cursor: "default" }}>{r.map((v, j) => <td key={j} title={cell(v)}>{cell(v)}</td>)}</tr>))}</tbody>
-                  </table>
-                  {result.rows.length > 2000 && <div className="state" style={{ minHeight: 40 }}>Showing 2,000 of {fmtNum(result.rows.length)} rows; download CSV for all.</div>}
+                  {/* Drawn 500 at a time; the CSV always has every row. */}
+                  <Capped key={ms} rows={result.rows}>{(rows) => (
+                    <table className="dtable sql-result">
+                      <thead><tr>{result.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+                      <tbody>{rows.map((r, i) => (
+                        <tr key={i} style={{ cursor: "default" }}>{r.map((v, j) => <td key={j} title={cell(v)}>{cell(v)}</td>)}</tr>))}</tbody>
+                    </table>)}</Capped>
                 </div>
               )}
             </section>

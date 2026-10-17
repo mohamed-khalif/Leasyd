@@ -9,6 +9,7 @@ import { bucketSeconds, fmtMs, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "../time";
 import { DurationCompare, KV, type Span, type SpanEvent } from "../components/SpanDetails";
+import { Capped } from "../components/Capped";
 import { isError } from "../lib/telemetry";
 import { useNow, useRangeWindow } from "../useNow";
 
@@ -234,8 +235,25 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
     tree.forEach((s) => s.parent_span_id && m.set(s.parent_span_id, (m.get(s.parent_span_id) ?? 0) + 1));
     return m;
   }, [tree]);
-  // Rows under a collapsed span are hidden (tree order: a span's descendants follow it, deeper).
+  // Search covers every span of the trace: the matches and their ancestors (for context), whether
+  // collapsed or not. Otherwise rows under a collapsed span are hidden (tree order: a span's
+  // descendants follow it, deeper). Only drawing is capped (Capped), never what is searched.
+  const [find, setFind] = useState("");
+  const matched = useMemo(() => {
+    const f = find.trim().toLowerCase();
+    if (!f) return null;
+    const byId = new Map(tree.map((s) => [s.span_id, s]));
+    const keep = new Set<string>();
+    let hits = 0;
+    for (const s of tree) {
+      if (!(s.name.toLowerCase().includes(f) || s.service.toLowerCase().includes(f) || s.span_id.startsWith(f))) continue;
+      hits++;
+      for (let x: Span | undefined = s; x && !keep.has(x.span_id); x = x.parent_span_id ? byId.get(x.parent_span_id) : undefined) keep.add(x.span_id);
+    }
+    return { keep, hits };
+  }, [tree, find]);
   const visible = useMemo(() => {
+    if (matched) return tree.filter((s) => matched.keep.has(s.span_id));
     const out: Span[] = [];
     let hideBelow: number | null = null;
     for (const s of tree) {
@@ -244,7 +262,7 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
       out.push(s);
     }
     return out;
-  }, [tree, closed]);
+  }, [tree, closed, matched]);
   const errors = tree.filter((s) => isError(s.status)).length;
   const root = tree[0];
   const selected = tree.find((s) => s.span_id === sel) ?? tree.find((s) => isError(s.status)) ?? root;
@@ -272,11 +290,18 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
             </div>
             <div className="trace-split">
               <section className="panel trace-table" aria-label="Spans">
+                <div className="toolbar" style={{ padding: "6px 8px", margin: 0 }}>
+                  <input className="input grow mono" placeholder="Find a span: name, service or span ID…" value={find}
+                         onChange={(e) => setFind(e.target.value)} aria-label="Find a span" />
+                  {matched && <span className="faint">{fmtNum(matched.hits)} found</span>}
+                  <button type="button" className="btn small" onClick={() => setClosed(new Set())}>Expand all</button>
+                  <button type="button" className="btn small" onClick={() => setClosed(new Set(kids.keys()))}>Collapse all</button>
+                </div>
                 <div className="tw-row tw-headrow">
                   <span>Span</span><span>Service</span><span className="num">Duration</span>
                   <span className="tw-axis"><span>0</span><span>{fmtMs((t1 - t0) / 2)}</span><span>{fmtMs(t1 - t0)}</span></span>
                 </div>
-                {visible.map((s) => {
+                <Capped key={`${traceId}|${find}`} rows={visible}>{(shown) => shown.map((s) => {
                   const left = ((s.start - t0) / (t1 - t0 || 1)) * 100, width = Math.max((s.dur / (t1 - t0 || 1)) * 100, 0.3);
                   const n = kids.get(s.span_id) ?? 0, err = isError(s.status);
                   return (
@@ -295,7 +320,7 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
                       </span>
                     </div>
                   );
-                })}
+                })}</Capped>
               </section>
               {selected && <SpanPanel span={selected} logs={logRows.filter((l) => String(l.span_id ?? "") === selected.span_id)} />}
             </div>
