@@ -91,3 +91,11 @@ export function fmtUnit(v: number, unit = "", decimals?: number): string {
   if (unit === "/s") return `${n(v)}/s`;
   return n(v);
 }
+
+/** A timestamp as local "YYYY-MM-DD hh:mm:ss.mmm" (the text itself when it isn't one). */
+export function fmtTs(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(+d)) return iso;
+  const p = (n: number, l = 2) => String(n).padStart(l, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}

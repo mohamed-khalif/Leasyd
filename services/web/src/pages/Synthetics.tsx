@@ -6,7 +6,7 @@ import { Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { fmtNum } from "../time";
 import { useQuery } from "../useQuery";
-import { fmtTs } from "./Logs";
+import { fmtTs } from "../time";
 import { CheckDetail } from "./CheckDetail";
 import { Maintenance } from "./Maintenance";
 import { useRangeWindow } from "../useNow";

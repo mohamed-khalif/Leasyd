@@ -4,23 +4,12 @@ import type { Ctx } from "../App";
 import { useHashParam, useHashSearch } from "../hashParams";
 import { Bar, ColumnPicker, StackedBars, StackKey, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
-import { bucketSeconds, fmtNum } from "../time";
+import { bucketSeconds, fmtNum, fmtTs } from "../time";
+import { SEVERITY_RANGES, severityRange } from "../lib/telemetry";
 import { useQuery } from "../useQuery";
 import { useRangeWindow } from "../useNow";
 
 // OpenTelemetry severity numbers: 1-4 trace, 5-8 debug, 9-12 info, 13-16 warn, 17-20 error, 21-24 fatal.
-export const SEVERITY_RANGES: (StackKey & { min: number; max: number; key: string })[] = [
-  { key: "error", label: "ERROR & FATAL", color: "var(--sev-error)", min: 17, max: 24 },
-  { key: "warn", label: "WARN", color: "var(--sev-warn)", min: 13, max: 16 },
-  { key: "info", label: "INFO", color: "var(--sev-info)", min: 9, max: 12 },
-  { key: "debug", label: "TRACE & DEBUG", color: "var(--sev-debug)", min: 1, max: 8 },
-  { key: "unknown", label: "UNKNOWN", color: "var(--surface-3)", min: 0, max: 0 },
-];
-export const severityRange = (n: unknown) => {
-  const v = Number(n) || 0;
-  const i = SEVERITY_RANGES.findIndex((r) => v >= r.min && v <= r.max);
-  return i < 0 ? SEVERITY_RANGES.length - 1 : i;
-};
 
 const VIEWS: (View & { where: Where[]; services?: string[] })[] = [
   { key: "all", label: "All logs", where: [] },
@@ -346,10 +335,3 @@ function sevName(n: number): string {
   if (n >= 9) return "info"; if (n >= 5) return "debug"; return n ? "trace" : "";
 }
 
-function fmtTs(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(+d)) return iso;
-  const p = (n: number, l = 2) => String(n).padStart(l, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
-}
-export { fmtTs };

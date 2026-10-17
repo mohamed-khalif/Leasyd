@@ -11,8 +11,7 @@ import { RankTable } from "../components/RankTable";
 import { TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtMs, fmtNum, Range } from "../time";
 import { useQuery } from "../useQuery";
-import { SEVERITY_RANGES, severityRange } from "./Logs";
-import { isError } from "./Traces";
+import { isError, SEVERITY_RANGES, severityRange } from "../lib/telemetry";
 import { useRangeWindow } from "../useNow";
 
 const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];

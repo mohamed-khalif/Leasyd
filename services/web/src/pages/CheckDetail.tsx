@@ -9,7 +9,7 @@ import { RankTable } from "../components/RankTable";
 import { TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtMs, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
-import { fmtTs } from "./Logs";
+import { fmtTs } from "../time";
 import { describeConstraint, describeStep, every, isBrowser, OK, pct, ResultBox } from "./Synthetics";
 import { useRangeWindow } from "../useNow";
 

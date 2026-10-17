@@ -8,7 +8,7 @@ import { RankTable } from "../components/RankTable";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { fmtNum } from "../time";
 import { useQuery } from "../useQuery";
-import { fmtTs } from "./Logs";
+import { fmtTs } from "../time";
 import { useRangeWindow } from "../useNow";
 
 // Alerts: rules (when) and channels (where). Every firing and resolution is also a log of the tenant

@@ -13,7 +13,8 @@ import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtMs, fmtNum, fmtTime } from "../time";
 import { useSql } from "../useQuery";
-import { DurationCompare, isError, KV, Span } from "./Traces";
+import { DurationCompare, KV, Span } from "../components/SpanDetails";
+import { isError } from "../lib/telemetry";
 import { useRangeWindow } from "../useNow";
 
 const ENTRY = "(kind IN (2, 5) OR parent_span_id IS NULL)";
