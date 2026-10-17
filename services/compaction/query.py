@@ -431,6 +431,28 @@ SQL_MAX_ROWS = 10_000
 SQL_MAX_FILES = 4_000
 SQL_DOWNLOAD_THREADS = 64
 SQL_MAX_LENGTH = 20_000
+# Longest a worker lets DuckDB run (loading and the query itself): an endless query is interrupted
+# with a clear answer instead of holding a 3 GB worker until Lambda kills it at 300 s.
+QUERY_TIMEOUT_S = int(os.environ.get("QUERY_TIMEOUT_S", "240"))
+
+
+def timed_out_message():
+    return (f"the query ran longer than {QUERY_TIMEOUT_S} s and was stopped; "
+            "try a shorter time range or a simpler query")
+
+
+class _Deadline:
+    """Interrupts a DuckDB connection QUERY_TIMEOUT_S after it is entered."""
+    def __init__(self, con):
+        self.timer = threading.Timer(QUERY_TIMEOUT_S, con.interrupt)
+        self.timer.daemon = True
+
+    def __enter__(self):
+        self.timer.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.timer.cancel()
 
 
 def check_sql(sql):
@@ -547,6 +569,7 @@ def run_sql_worker(event):
         t_dl = time.perf_counter()
         con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
         try:
+            deadline = _Deadline(con).__enter__()
             for table, signal in SQL_TABLES.items():
                 mine = [(f, local) for t, f, local in todo if t == table]
                 pq = [local for f, local in mine if _is_parquet(f)]
@@ -579,11 +602,14 @@ def run_sql_worker(event):
             t_load = time.perf_counter()
             try:
                 cur = con.execute(event["sql"])
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchmany(SQL_MAX_ROWS + 1)
+            except duckdb_interrupt():
+                return {"error": timed_out_message()}
             except duckdb_error() as e:
                 return {"error": str(e).split("\n")[0][:500]}
-            cols = [d[0] for d in cur.description]
-            rows = cur.fetchmany(SQL_MAX_ROWS + 1)
         finally:
+            deadline.__exit__()
             con.close()
         return {"columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:SQL_MAX_ROWS]],
                 "truncated": len(rows) > SQL_MAX_ROWS,
@@ -595,6 +621,11 @@ def run_sql_worker(event):
 def duckdb_error():
     import duckdb
     return duckdb.Error
+
+
+def duckdb_interrupt():
+    import duckdb
+    return duckdb.InterruptException
 
 
 def run_worker(event):
@@ -629,6 +660,7 @@ def run_worker(event):
         t_dl = time.perf_counter()
         con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
         ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for f in in_place})
+        deadline = _Deadline(con).__enter__()
         try:
             parts = []
             pq = [p for f, p in local if _is_parquet(f)]
@@ -666,7 +698,10 @@ def run_worker(event):
                 edges = {"columns": [d[0] for d in cur.description],
                          "rows": [[_jsonable(v) for v in r] for r in cur.fetchall()]}
             scanned = con.execute("SELECT count(*) FROM t").fetchone()[0] if event.get("count_scanned") else None
+        except duckdb_interrupt():
+            return {"kind": kind, "timed_out": True, "rows": [], "columns": [], "stats": {"files": len(files)}}
         finally:
+            deadline.__exit__()
             con.close()
         return {"kind": kind, "columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:cap]],
                 "truncated": len(rows) > cap, **({"edges": edges} if edges else {}),
@@ -1103,6 +1138,8 @@ def run(q, invoke_worker=None):
         with ThreadPoolExecutor(len(chunks)) as pool:
             partials = list(pool.map(lambda c: invoke_worker({"query": q, "files": c}), chunks))
     t_scan = time.perf_counter()
+    if any(p.get("timed_out") for p in partials):
+        raise BadQuery(timed_out_message())
     result = merge(q, partials)
     result["stats"] = {
         "files": len(found["files"]), "workers": max(1, len(chunks)),

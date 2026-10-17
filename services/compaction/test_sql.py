@@ -107,3 +107,24 @@ def test_api_takes_iso_or_epoch_times(monkeypatch):
     assert seen[0] == (f"{DAY}T10:00:00Z", f"{DAY}T11:00:00Z") and seen[1] == ("2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z")
     assert query._sql_api("acme", {"sql": "SELECT 1", "start": "yesterday", "end": E})["statusCode"] == 400
     assert query._sql_api("acme", {"sql": "SELECT 1", "start": str(1767261600 * 10**9), "end": E})["statusCode"] == 400   # nanoseconds
+
+
+RUNAWAY = "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r) SELECT count(*) FROM r, logs"
+
+
+def test_runaway_sql_is_stopped_at_the_query_timeout(data, monkeypatch):
+    """An endless query (it passes the checker) used to hold a 3 GB worker until Lambda killed it
+    at 300 s; DuckDB is now interrupted at QUERY_TIMEOUT_S with a clear answer."""
+    monkeypatch.setattr(query, "QUERY_TIMEOUT_S", 1)
+    t0 = query.time.perf_counter()
+    out = query.run_sql("acme", RUNAWAY, S, E, invoke_worker=query.run_sql_worker)
+    assert "ran longer than 1 s" in out["error"] and query.time.perf_counter() - t0 < 10
+    assert sql("SELECT count(*) FROM logs")["rows"] == [[len(data)]]   # normal queries unaffected
+
+
+def test_runaway_engine_query_is_stopped_at_the_query_timeout(data, monkeypatch):
+    monkeypatch.setattr(query, "QUERY_TIMEOUT_S", 1)
+    real = query.compile_query
+    monkeypatch.setattr(query, "compile_query", lambda q, **kw: (RUNAWAY.replace("logs", "t"), [], "aggregate") if not kw else real(q, **kw))
+    with pytest.raises(query.BadQuery, match="ran longer than 1 s"):
+        query.run({"tenant": "acme", "signal": "logs", "start": S, "end": E, "aggs": [{"fn": "count"}]}, invoke_worker=query.run_worker)
