@@ -69,5 +69,8 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Page smoke tests: 22 routes against the mock backend
 - [x] 45 tests pass; tsc and lint clean
 
-## Bug fixes: next (order B12, B10, B3, B4/B5, B1, then the rest)
+## Bug fixes (order B12, B10, B3, B4/B5, B1, then the rest)
+- [x] B12 CSV export: formula-like text cells made inert, object URL revoked (fd64373)
+- [x] B10 AI SRE + MCP queries use the daily allowance; alert queries' units no longer leak into the next API charge (da6a87f) -- deploy phase4 + phaseAI
+- [x] B3 failures shown as errors (AI insights, who-am-I, GPU prices, drop-rules role, check lists, dashboard check names); shared useCheckList for 3 of the check-list loaders
 ## Phase 4 (caching, STOP), Phase 6, Phase 7: not started
