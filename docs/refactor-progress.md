@@ -50,7 +50,15 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Fail closed with last-known-good + obs-limits-refused alarm (§5) (ec1ce78)
 - [x] Backend cancel (§4.2) (bbe2055) -- client side (§4.1) lands in Phase 6 step 2
 - [x] obs-ingest-throttled alarm (T7)
-- [ ] Deploy + verify on AWS: phase0, phase4, phaseAI, T2, T7 (user)
+- [x] Deployed and verified on AWS 2026-10-17 (canary tenant, through obs-query-api):
+      fast query 200 inline (2.0 s); slow SQL -> 202 at 21.3 s, same run finished as a job (200 at 141 s;
+      1 coordinator + 1 worker invocation, 133 s); endless SQL stopped at 240 s with a clear 400; cancel ->
+      202, poll 410 at once, worker ended within 5 s, other tenant 404; 0 throttles on ingest and query
+      functions; all query alarms OK.
+- [x] Found on AWS: HeadObject of a missing marker is 403 without ListBucket -> every job poll failed (75ade31, deployed)
+- [x] Found on AWS: a failed cancel check ended the timeout watch (commit after 75ade31) -- deploy phase4
+- [x] obs-query cap needed --parameter-overrides CoordinatorConcurrency=400 (deploy keeps previous parameter values)
 - [ ] Later, separate changes: password-flow migration (§6), optional TOTP MFA
 
-## Phase 5 (safety net), bug fixes, Phase 4 (caching, STOP), Phase 6, Phase 7: not started
+## Phase 5 (safety net): next
+## Bug fixes, Phase 4 (caching, STOP), Phase 6, Phase 7: not started
