@@ -36,26 +36,45 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const TRANSIENT = new Set([502, 503, 504]);
 const POLL_TRIES = 3;
 
-async function runQuery<T>(q: object, opts: { background?: boolean; onWait?: (seconds: number) => void } = {}): Promise<T> {
-  const t0 = Date.now();
-  let res = await raw("/v1/app/query", { method: "POST", body: JSON.stringify(opts.background ? { ...q, async: true } : q) });
+export type RunOptions = { background?: boolean; onWait?: (seconds: number) => void; signal?: AbortSignal };
+
+async function runQuery<T>(q: object, opts: RunOptions = {}): Promise<T> {
+  const t0 = Date.now(), signal = opts.signal;
+  let res = await raw("/v1/app/query", { method: "POST", body: JSON.stringify(opts.background ? { ...q, async: true } : q), signal });
   const job = (res.body as { job?: string }).job;
-  // While a job runs, a poll that fails in passing (502/503/504, or the network) is tried again: the
-  // job carries on regardless. POLL_TRIES of those in a row end the wait with the last one.
-  for (let failed = 0; res.status === 202 || (failed > 0 && failed < POLL_TRIES);) {
-    if (!job || Date.now() - t0 > 6 * 60_000) throw new ApiError(504, "The query took too long. Try a shorter time range.");
-    opts.onWait?.(Math.round((Date.now() - t0) / 1000));
-    await new Promise((r) => setTimeout(r, 2000));
-    try {
-      res = await raw(`/v1/app/query/${job}`);
-      failed = TRANSIENT.has(res.status) ? failed + 1 : 0;
-    } catch (e) {
-      if (!(e instanceof TypeError) || ++failed >= POLL_TRIES) throw e;
-      res = { status: 202, body: {} };
+  try {
+    // While a job runs, a poll that fails in passing (502/503/504, or the network) is tried again: the
+    // job carries on regardless. POLL_TRIES of those in a row end the wait with the last one.
+    for (let failed = 0; res.status === 202 || (failed > 0 && failed < POLL_TRIES);) {
+      if (!job || Date.now() - t0 > 6 * 60_000) throw new ApiError(504, "The query took too long. Try a shorter time range.");
+      opts.onWait?.(Math.round((Date.now() - t0) / 1000));
+      await sleep(2000, signal);
+      try {
+        res = await raw(`/v1/app/query/${job}`, { signal });
+        failed = TRANSIENT.has(res.status) ? failed + 1 : 0;
+      } catch (e) {
+        if (!(e instanceof TypeError) || ++failed >= POLL_TRIES) throw e;
+        res = { status: 202, body: {} };
+      }
     }
+  } catch (e) {
+    // Given up on while its job runs: stop the job too (fire and forget; it stops within ~5 s).
+    if (signal?.aborted && job) raw(`/v1/app/query/${job}`, { method: "DELETE" }).catch(() => undefined);
+    throw e;
   }
   if (res.status >= 400) throw apiError(res.status, res.body);
   return res.body as T;
+}
+
+/** Wait ms, or reject with an AbortError as soon as the signal aborts. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  const aborted = () => new DOMException("The operation was aborted.", "AbortError");
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(aborted());
+    const t = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, ms);
+    const abort = () => { clearTimeout(t); reject(aborted()); };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function raw(path: string, init?: RequestInit): Promise<{ status: number; body: unknown }> {
@@ -75,13 +94,13 @@ function apiError(status: number, body: unknown) {
 // PromQL over all signals, and read-only SQL, through the same route.
 export type PromSeries = { metric: Record<string, string>; values: [number, string][] };
 export type PromResult = { status: string; data: { resultType: string; result: PromSeries[] }; stats?: Record<string, number> };
-export const promql = (q: { promql: string; start: string; end: string; step: number }, opts?: Parameters<typeof runQuery>[1]) =>
+export const promql = (q: { promql: string; start: string; end: string; step: number }, opts?: RunOptions) =>
   runQuery<PromResult>(q, opts);
 /** One PromQL evaluation at a moment (epoch seconds): a value per series, e.g. over [$__range]. */
 export type PromInstant = { status: string; data: { resultType: string; result: { metric: Record<string, string>; value: [number, string] }[] } };
-export const promqlAt = (q: { promql: string; time: number }, opts?: Parameters<typeof runQuery>[1]) => runQuery<PromInstant>(q, opts);
+export const promqlAt = (q: { promql: string; time: number }, opts?: RunOptions) => runQuery<PromInstant>(q, opts);
 export type SqlResult = { columns: string[]; rows: unknown[][]; truncated?: boolean; stats?: Record<string, number> };
-export const sql = (q: { sql: string; start: string; end: string; services?: string[] }, opts?: Parameters<typeof runQuery>[1]) =>
+export const sql = (q: { sql: string; start: string; end: string; services?: string[] }, opts?: RunOptions) =>
   runQuery<SqlResult>(q, opts);
 
 export const me = () => call<{ tenant: string; email: string }>("/v1/app/me");
@@ -144,7 +163,7 @@ export type DropCondition = { field: string; op: "=" | "!=" | "<" | "<=" | ">" |
 export type DropRule = { id?: string; name: string; signal: Signal; enabled: boolean; keep_percent: number; conditions: DropCondition[] };
 // One UTC day of the account's meter: records received (all signals), and per signal received and dropped.
 export type Meter = { day: string; records?: number; bytes?: number } & Partial<Record<`in_${Signal}` | `dropped_${Signal}`, number>>;
-export const query = (q: Query, opts?: Parameters<typeof runQuery>[1]) => runQuery<Result>(q, opts);
+export const query = (q: Query, opts?: RunOptions) => runQuery<Result>(q, opts);
 
 // Synthetic checks (/v1/app/checks): the signed-in user's tenant's own checks.
 export type Constraint = { type: string; expr?: string; value?: string | number; name?: string; path?: string; op?: string };

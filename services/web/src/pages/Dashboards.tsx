@@ -279,13 +279,24 @@ export function fillQuery(text: string, vars: Record<string, string[]>, step: nu
 
 // ------------------------------------------------------------------ panels
 
-/** At most 6 panel queries in flight; the rest wait their turn. */
+/** At most 6 panel queries in flight; the rest wait their turn. An aborted query leaves the queue,
+ *  or (running) is aborted and frees its place. Exported for tests. */
 const queue: (() => void)[] = [];
 let running = 0;
-function limited<T>(f: () => Promise<T>): Promise<T> {
+export function limited<T>(f: (signal?: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
-    const go = () => { running++; f().then(resolve, reject).finally(() => { running--; queue.shift()?.(); }); };
-    if (running < 6) go(); else queue.push(go);
+    const go = () => {
+      signal?.removeEventListener("abort", leave);
+      if (signal?.aborted) { reject(new DOMException("The operation was aborted.", "AbortError")); queue.shift()?.(); return; }
+      running++;
+      f(signal).then(resolve, reject).finally(() => { running--; queue.shift()?.(); });
+    };
+    const leave = () => {
+      const i = queue.indexOf(go);
+      if (i >= 0) { queue.splice(i, 1); reject(new DOMException("The operation was aborted.", "AbortError")); }
+    };
+    if (running < 6) go();
+    else { queue.push(go); signal?.addEventListener("abort", leave, { once: true }); }
   });
 }
 
@@ -297,20 +308,20 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
   const key = JSON.stringify([panel.queries, vars, range.key, range.from, range.to, tick]);
   useEffect(() => {
     if (panel.type === "text" || !panel.queries?.length) return;
-    let live = true;
+    const ctl = new AbortController(), signal = ctl.signal;
     setState(null);
     const w = rangeWindow(range);
     // Number panels: one value over the page's whole range, at its end (minute-aligned).
     const at = Math.floor(Date.parse(w.end) / 60_000) * 60, rangeS = Math.max(60, Math.round((Date.parse(w.end) - Date.parse(w.start)) / 60_000) * 60);
     const run = (q: { promql: string }) => panel.type === "stat"
-      ? promqlAt({ promql: fillQuery(q.promql, vars, step, rangeS), time: at })
+      ? promqlAt({ promql: fillQuery(q.promql, vars, step, rangeS), time: at }, { signal })
           .then((r) => r.data.result.map((x) => ({ metric: x.metric, values: [x.value] as [number, string][] })))
-      : promql({ promql: fillQuery(q.promql, vars, step, rangeS), start: w.start, end: w.end, step }).then((r) => r.data.result);
+      : promql({ promql: fillQuery(q.promql, vars, step, rangeS), start: w.start, end: w.end, step }, { signal }).then((r) => r.data.result);
     const names = panel.queries.some((q) => q.promql.includes("check_id")) ? checkNames() : Promise.resolve(null);
-    Promise.all([names, ...panel.queries.map((q) => limited(() => run(q).then((result) => ({ q, result }))))])
+    Promise.all([names, ...panel.queries.map((q) => limited(() => run(q).then((result) => ({ q, result })), signal))])
       .then(([nm, ...all]) => {
         const nameMap = nm as Map<string, string> | null;
-        if (!live) return;
+        if (signal.aborted) return;
         const series: (Series & { last: number })[] = [];
         (all as { q: { promql: string; legend?: string }; result: PromSeries[] }[]).forEach(({ q, result }, qi) => result.forEach((s0: PromSeries) => {
           const s = { ...s0, metric: withCheckName(s0.metric, nameMap) };
@@ -319,8 +330,8 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
           series.push({ label: legend(q.legend, s.metric, qi, panel.queries!.length), color: PALETTE[series.length % PALETTE.length], points: pts, last: pts[pts.length - 1][1] });
         }));
         setState({ series });
-      }, (e: Error) => live && setState({ series: [], error: e.message }));
-    return () => { live = false; };
+      }, (e: Error) => !signal.aborted && setState({ series: [], error: e.message }));
+    return () => ctl.abort();
   }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed: `key` encodes queries, variables, range and refresh
   return state;
 }

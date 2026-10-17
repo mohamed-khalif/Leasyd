@@ -125,3 +125,14 @@ test("useHint + useRows: data waits for discovery on first load and reads only t
   await settle();
   assert.deepEqual(calls.map((c) => (c.body as { sql: string }).sql === discovery().sql ? "discovery" : "data").sort(), ["data", "discovery"]);
 });
+
+test("useQuery: leaving the page or a new key aborts the request in flight (design §4.1)", async () => {
+  answer(() => new Promise(() => undefined));
+  const seen: unknown[] = [];
+  const view = await render(<Probe seen={seen} use={() => useQuery(q("logs"), "k1")} />);
+  await view.rerender(<Probe seen={seen} use={() => useQuery(q("traces"), "k2")} />);
+  assert.ok(calls[0].signal?.aborted, "the k1 request is aborted on a new key");
+  assert.ok(!calls[1].signal?.aborted);
+  await view.unmount();
+  assert.ok(calls[1].signal?.aborted, "the k2 request is aborted on unmount");
+});

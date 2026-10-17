@@ -39,3 +39,13 @@ test("a query still running when another is edited gets its answer", async () =>
   assert.equal(calls.filter((c) => (c.body as { promql: string }).promql === "up").length, 1, "query 1 ran once");
   await view.unmount();
 });
+
+test("leaving the page aborts the queries still running (design §4.1)", async () => {
+  answer(() => new Promise(() => undefined));
+  const seen: unknown[] = [];
+  const view = await render(<Probe texts={["up", "a"]} seen={seen} />);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((c) => !c.signal?.aborted));
+  await view.unmount();
+  assert.ok(calls.every((c) => c.signal?.aborted));
+});

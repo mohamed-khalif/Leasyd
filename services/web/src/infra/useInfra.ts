@@ -16,7 +16,7 @@ const DISCOVERY_MINUTES = 15;
  *  previous hint stays until the new one comes (code-audit C6). */
 export function useHint(w: { start: string; end: string }, key: string): Hint | undefined {
   const end = Date.parse(w.end), start = Math.max(Date.parse(w.start), end - DISCOVERY_MINUTES * 60_000);
-  const got = useLoad(() => sql({ sql: discovery().sql, start: new Date(start).toISOString(), end: w.end }).then((r) => {
+  const got = useLoad((signal) => sql({ sql: discovery().sql, start: new Date(start).toISOString(), end: w.end }, { signal }).then((r) => {
     const out: Hint = {};
     for (const row of records(r)) (out[row.kind as Uses] ??= []).push(String(row.service));
     return out;
@@ -33,7 +33,7 @@ export function servicesFor(q: Q, hint: Hint): string[] | undefined {
 /** Runs a query (null: none) over the window once the hint is known; reruns when `key` changes. */
 export function useRows<T>(q: Q | null, w: { start: string; end: string }, key: string, hint: Hint | undefined): Rows<T> {
   const ready = hint !== undefined;
-  const got = useLoad(q && ready ? () => sql({ sql: q.sql, ...w, services: servicesFor(q, hint!) }) : null,
+  const got = useLoad(q && ready ? (signal) => sql({ sql: q.sql, ...w, services: servicesFor(q, hint!) }, { signal }) : null,
                       `${key}|${ready}|${q?.sql}`, true);
   const rows = useMemo(() => (got.data ? records(got.data) : []) as unknown as T[], [got.data]);   // same array until new data
   return { rows, error: got.error, loading: got.loading, ...(got.data?.truncated ? { truncated: true as const } : {}) };

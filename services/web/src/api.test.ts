@@ -120,4 +120,33 @@ test("a job's own error (not transient) ends the wait at once", async (t) => {
   await failed;
 });
 
+test("abort before the answer: the request is dropped, nothing else is sent (design §4.1)", async () => {
+  answer(() => new Promise(() => undefined));   // never answers
+  const ctl = new AbortController();
+  const p = query(Q, { signal: ctl.signal });
+  await flush();
+  ctl.abort();
+  await assert.rejects(p, (e: unknown) => e instanceof DOMException && e.name === "AbortError");
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].signal?.aborted);
+});
+
+test("abort while polling a job: polling stops and the job is cancelled with DELETE (design §4.1)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  const job = "d".repeat(32);
+  answer((c) => c.method === "POST" ? { status: 202, body: { job } } : c.method === "DELETE" ? { status: 202, body: { status: "cancelling" } }
+    : { status: 202, body: { job, status: "running" } });
+  const ctl = new AbortController();
+  const p = query(Q, { signal: ctl.signal });
+  const failed = assert.rejects(p, (e: unknown) => e instanceof DOMException && e.name === "AbortError");
+  await flush(); t.mock.timers.tick(2000); await flush();   // one poll
+  ctl.abort();                                               // during the 2 s sleep
+  await failed;
+  await flush();
+  const polls = calls.filter((c) => c.method === "GET").length;
+  t.mock.timers.tick(10_000); await flush();
+  assert.equal(calls.filter((c) => c.method === "GET").length, polls, "no more polls");
+  assert.deepEqual(calls.filter((c) => c.method === "DELETE").map((c) => c.path), [`/v1/app/query/${job}`]);
+});
+
 const flush = () => new Promise<void>((r) => setImmediate(r));

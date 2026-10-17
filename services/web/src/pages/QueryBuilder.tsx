@@ -441,14 +441,21 @@ export function useResults(queries: Q[], texts: string[], w: { start: string; en
   const keys = texts.map((t) => `${t}|${w.start}|${w.end}|${step}|${tick}`);
   // Each answer goes to its own key's slot, so it is kept even when other queries change meanwhile
   // (stopping it then left that query on "loading" for good: code-audit B1). Only unmounting stops it.
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);   // StrictMode mounts twice
+  // Unmounting aborts every query still running (its job is cancelled too); nothing else does.
+  const mounted = useRef(true), running = useRef(new Set<AbortController>());
+  useEffect(() => {
+    mounted.current = true;
+    const all = running.current;
+    return () => { mounted.current = false; all.forEach((c) => c.abort()); all.clear(); };
+  }, []);   // StrictMode mounts twice
   useEffect(() => {
     keys.forEach((k, i) => {
       if (state[k] || !texts[i]?.trim() || queries[i]?.hidden) return;
       setState((s) => ({ ...s, [k]: { data: null, error: null, loading: true } }));
       const text = texts[i].replace(/\$__rate_interval|\$__interval/g, `${step}s`);
-      promql({ promql: text, start: w.start, end: w.end, step }).then(
+      const ctl = new AbortController();
+      running.current.add(ctl);
+      promql({ promql: text, start: w.start, end: w.end, step }, { signal: ctl.signal }).finally(() => running.current.delete(ctl)).then(
         (r) => mounted.current && setState((s) => ({ ...s, [k]: { data: r.data.result, error: null, loading: false, stats: r.stats } })),
         (e: Error) => mounted.current && setState((s) => ({ ...s, [k]: { data: null, error: e.message, loading: false } })),
       );
