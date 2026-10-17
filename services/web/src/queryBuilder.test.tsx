@@ -49,3 +49,15 @@ test("leaving the page aborts the queries still running (design §4.1)", async (
   await view.unmount();
   assert.ok(calls.every((c) => c.signal?.aborted));
 });
+
+test("a multi-line query keeps its own answer", async () => {
+  answer((c) => ({ status: 200, body: { status: "success", data: { resultType: "matrix",
+    result: [{ metric: {}, values: [[1, (c.body as { promql: string }).promql.includes("\n") ? "9" : "1"]] }] } } }));
+  const seen: unknown[] = [];
+  const view = await render(<Probe texts={["sum(\n  up\n)", "up"]} seen={seen} />);
+  await settle();
+  const [first, second] = seen[seen.length - 1] as { data: { values: [number, string][] }[] }[];
+  assert.equal(first.data[0].values[0][1], "9");
+  assert.equal(second.data[0].values[0][1], "1");
+  await view.unmount();
+});

@@ -147,17 +147,20 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
   const idx = queries.indexOf(cur);
 
   // Chart series: every visible query's series, named by the query's legend template.
-  const series: (Series & { last: number; avg: number; max: number; q: number })[] = [];
-  queries.forEach((q, qi) => {
-    if (q.hidden) return;
-    for (const s of results[qi]?.data ?? []) {
-      const pts = s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1]));
-      if (!pts.length) continue;
-      const vals = pts.map((p) => p[1]);
-      series.push({ label: legendName(q, qi, s, queries.length), color: PALETTE[series.length % PALETTE.length], points: pts, q: qi,
-                    last: vals[vals.length - 1], avg: vals.reduce((a, v) => a + v, 0) / vals.length, max: vals.reduce((a, v) => Math.max(a, v), -Infinity) });   // no spread: big series overflow it
-    }
-  });
+  const series = useMemo(() => {
+    const series: (Series & { last: number; avg: number; max: number; q: number })[] = [];
+    queries.forEach((q, qi) => {
+      if (q.hidden) return;
+      for (const s of results[qi]?.data ?? []) {
+        const pts = s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1]));
+        if (!pts.length) continue;
+        const vals = pts.map((p) => p[1]);
+        series.push({ label: legendName(q, qi, s, queries.length), color: PALETTE[series.length % PALETTE.length], points: pts, q: qi,
+                      last: vals[vals.length - 1], avg: vals.reduce((a, v) => a + v, 0) / vals.length, max: vals.reduce((a, v) => Math.max(a, v), -Infinity) });   // no spread: big series overflow it
+      }
+    });
+    return series;
+  }, [queries, results]);   // every point of every series: not on each keystroke elsewhere on the page
   const sorted = [...series].sort((a, b) => (settings.sort === "name" ? a.label.localeCompare(b.label) : b.avg - a.avg));
   const unit = settings.unit || (queries.length === 1 ? unitOf(queries[0]) ?? "" : "");
   const fmt = (v: number) => (settings.decimals ? v.toFixed(Number(settings.decimals)) : fmtNum(v)) + unit;
@@ -462,7 +465,8 @@ export function useResults(queries: Q[], texts: string[], w: { start: string; en
       );
     });
   }, [keys.join("\n"), queries.map((q) => q.hidden).join()]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed per query (text, window, step, tick)
-  return keys.map((k) => state[k]);
+  const joined = keys.join("\u0000");   // not "\n": a PromQL text can hold newlines
+  return useMemo(() => joined.split("\u0000").map((k) => state[k]), [state, joined]);   // the same array until an answer or key changes
 }
 
 function legendName(q: Q, qi: number, s: PromSeries, nq: number): string {

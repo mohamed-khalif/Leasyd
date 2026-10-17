@@ -67,6 +67,7 @@ export function Logs({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
                                "E" + key + g + tab);
   const rows = useQuery(tab === "table" ? { ...base, search: { limit: LIMIT } } : null, "r" + key + tab);
   const sample = useQuery(tab === "patterns" ? { ...base, search: { limit: PATTERN_SAMPLE } } : null, "p" + key + tab);
+  const sampleRows = useMemo(() => (sample.data ? records(sample.data) : []), [sample.data]);   // one array per answer, so the pattern table's memo holds
   const svcList = useQuery({ signal: "logs", ...w, group_by: ["service"], aggs: [{ fn: "count" }], limit: 100 }, "s" + ctx.range.key + ctx.tick);
 
   // Counts for the header and the severity chart.
@@ -176,7 +177,7 @@ export function Logs({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
               </Loads>)}
           {tab === "patterns" && (
             <Loads q={sample} empty={!sample.data?.rows.length} height={200}>
-              {() => <PatternTable rows={records(sample.data!)} />}
+              {() => <PatternTable rows={sampleRows} />}
             </Loads>
           )}
         </section>
