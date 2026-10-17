@@ -104,5 +104,6 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
       Earlier plan was 4 (free) / 12 (paid); pick from the observed p99 and peaks (one tab should stay at <= 6; several tabs or API clients add up).
 - [ ] Unrelated, open: obs-fastlane-failed in ALARM since 2026-10-16 23:44 UTC (2 messages in the fast-lane DLQ)
 - [x] Decided 2026-10-17 and done: debounce 400 ms with Enter/Run at once (4f09a7e); 500-row cap with Show more, waterfall search and expand/collapse all over the whole trace, CSV full (3b14c61); client limiter 6 per page (6497668) + in-flight log line (d81b8df), server limit left at 25; one formatter module lib/format.ts (798dd08, 31371ea), spec docs/formatting.md, lint rule (this commit's parent)
+- [x] Deployed and checked 2026-10-17: obs-query-api logs {"inflight": 1, "tenant": "canary", "plan": "standard", "limit": 25} per query started
 - [ ] Still open (no behaviour change, large diffs): P7 combine Home's overlapping queries (~20 -> ~14); F4 split oversized modules; F5 typed rows; treemap cap 200 tiles (not asked)
 ## Phase 7: not started
