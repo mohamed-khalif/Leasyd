@@ -803,6 +803,51 @@ def test_queries_running_at_once_are_limited_per_tenant(data, monkeypatch, coord
     gate.set()
 
 
+def test_jobs_that_never_start_start_late_or_end_late(data, monkeypatch):
+    """B14: a query whose coordinator never started gives its slot back at once (it held it until
+    LEASE_S); a job started too late to finish by JOB_TIMEOUT_S (Lambda kept the event) doesn't
+    run; one that ends past JOB_TIMEOUT_S doesn't overwrite the 504 its polls already got."""
+    query._plans.clear()
+    monkeypatch.setitem(query.INFLIGHT_LIMITS, "standard", 1)
+    monkeypatch.setattr(query, "_invoke_worker", lambda e: query.worker(e, None))
+    q = {"signal": "logs", "start": f"{DAY}T00:00:00Z", "end": f"{DAY}T23:59:59Z", "aggs": [{"fn": "count"}]}
+    ana = {"custom:tenant": "acme"}
+
+    def refused(payload, wait_s):
+        raise query.Unavailable(query.UNAVAILABLE)
+    monkeypatch.setattr(query, "_coordinate", refused)
+    assert http_user(ana, q)[0] == 503
+    monkeypatch.setattr(query, "_coordinate", conftest_in_process())
+    assert http_user(ana, q)[0] == 200                       # the slot came back
+
+    ran = []
+    real = query.answer
+    monkeypatch.setattr(query, "answer", lambda t, qq: (ran.append(qq), real(t, qq))[1])
+    job = "a" * 32
+    started = time.time() - query.LATE_START_S - 1
+    query._s3().put_object(Bucket=query.lookup.BUCKET, Key=query._job_key("acme", job), ContentType="application/json",
+                           Body=json.dumps({"status": "running", "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))}))
+    out = query.handler({"answer_job": {"id": job, "tenant": "acme", "query": q, "store_after": 0, "started": started}}, None)
+    assert out["statusCode"] == 504 and ran == []
+    assert get_job("acme", job)[0] == 504
+
+    job = "b" * 32
+    started = time.time()
+    query._s3().put_object(Bucket=query.lookup.BUCKET, Key=query._job_key("acme", job), ContentType="application/json",
+                           Body=json.dumps({"status": "running", "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))}))
+    clock = [time.time()]
+    monkeypatch.setattr(query.time, "time", lambda: clock[0])
+    monkeypatch.setattr(query, "answer", lambda t, qq: (clock.__setitem__(0, clock[0] + query.JOB_TIMEOUT_S + 5), real(t, qq))[1])
+    query.handler({"answer_job": {"id": job, "tenant": "acme", "query": q, "store_after": 0, "started": started}}, None)
+    monkeypatch.setattr(query, "_now", lambda: datetime.now(timezone.utc) + timedelta(seconds=query.JOB_TIMEOUT_S + 5))
+    assert get_job("acme", job)[0] == 504                    # not overwritten by the late answer
+
+
+def conftest_in_process():
+    import conftest
+    return conftest._InProcess()
+
+
 def test_queries_and_jobs_are_limited_per_tenant(data, monkeypatch):
     """Per tenant and minute, by plan; another tenant is unaffected; jobs have a lower limit."""
     boto3.resource("dynamodb").Table("obs-tenants").put_item(Item={"pk": "tenant#acme", "plan": "free"})

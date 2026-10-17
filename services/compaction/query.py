@@ -911,17 +911,26 @@ def api(event, context):
                      Body=json.dumps({"status": "running", "started": _now().strftime("%Y-%m-%dT%H:%M:%SZ")}))
     wait_s = 0 if q.get("async") else SYNC_DEADLINE_S
     payload = {"answer_job": {"id": job, "tenant": tenant, "query": {k: v for k, v in q.items() if k != "async"},
-                              "store_after": time.time() + wait_s - STORE_MARGIN_S}}
+                              "store_after": time.time() + wait_s - STORE_MARGIN_S, "started": time.time()}}
     try:
         return _coordinate(payload, wait_s)
     except _StillRunning:
         return _http(202, {"job": job, "status": "running",
                            "message": "the query runs in the background; GET /v1/app/query/{job} (or /v1/query/{job}) for its answer"})
-    except Unavailable as e:
-        return _unavailable(e)
+    except (Unavailable, ClientError) as e:
+        # obs-query refused the call, so the query never started: free its slot now (not after LEASE_S).
+        give_back_slot(tenant, job)
+        _store_answer(tenant, job, _unavailable(e) if isinstance(e, Unavailable) else _http(500, {"error": "the query couldn't start"}))
+        if isinstance(e, Unavailable):
+            return _unavailable(e)
+        raise
 
 
 STORE_MARGIN_S = 5      # the coordinator stores an answer it finishes this close to the API's deadline, or later
+# A job (async invoke) that Lambda starts later than this after the API made it couldn't finish by
+# JOB_TIMEOUT_S (queries stop at QUERY_TIMEOUT_S): it isn't run, and its polls say 504. Lambda keeps
+# obs-query's async events no longer than this either (phase4-query.yaml).
+LATE_START_S = 60
 COORDINATOR_FUNCTION = os.environ.get("COORDINATOR_FUNCTION", "obs-query")
 
 
@@ -965,6 +974,15 @@ def answer_job(job):
     tenant = layout.check_tenant(job["tenant"])
     if not _JOB_ID.match(job["id"]):
         raise ValueError("bad job id")
+    started = job.get("started")
+    if started and time.time() > started + LATE_START_S:
+        print(json.dumps({"job_started_late": job["id"], "tenant": tenant, "late_s": round(time.time() - started)}))
+        give_back_slot(tenant, job["id"])
+        out = _too_slow()
+        _store_answer(tenant, job["id"], out)
+        return out
+    # An answer ready past JOB_TIMEOUT_S isn't stored: polls have said 504 by then, and keep saying it.
+    in_time = (lambda: not started or time.time() < started + JOB_TIMEOUT_S)
     context = _job.set((_cancel_key(tenant, job["id"]), job.get("store_after", 0)))   # reset below: Lambda reuses the thread
     try:
         out = answer(tenant, job["query"])
@@ -973,15 +991,20 @@ def answer_job(job):
     except Unavailable as e:
         out = _unavailable(e)
     except Exception:
-        _store_answer(tenant, job["id"], _http(500, {"error": "the query failed; try a shorter time range"}))
+        if in_time():
+            _store_answer(tenant, job["id"], _http(500, {"error": "the query failed; try a shorter time range"}))
         raise
     finally:
         _job.reset(context)
         charge_units(tenant)
         give_back_slot(tenant, job["id"])
-    if time.time() >= job.get("store_after", 0):
+    if time.time() >= job.get("store_after", 0) and in_time():
         _store_answer(tenant, job["id"], out)
     return out
+
+
+def _too_slow():
+    return _http(504, {"error": "the query took longer than 5 minutes; try a shorter time range or aggregate more"})
 
 
 def _store_answer(tenant, job, out):
@@ -1338,7 +1361,7 @@ def job_status(tenant, job):
         return CANCELLED_ANSWER
     started = lookup._parse(state["started"])
     if (_now() - started).total_seconds() > JOB_TIMEOUT_S:
-        return _http(504, {"error": "the query took longer than 5 minutes; try a shorter time range or aggregate more"})
+        return _too_slow()
     return _http(202, {"job": job, "status": "running", "started": state["started"]})
 
 

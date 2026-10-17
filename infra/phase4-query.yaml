@@ -127,6 +127,17 @@ Resources:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "4" }
 
+  # Jobs ("async": true) start obs-query asynchronously. Never retried (a retry runs and charges the
+  # query again), and an event not started within LATE_START_S (query.py) is dropped: the job
+  # couldn't finish in time, and its polls say 504. Lambda's defaults were 2 retries, kept 6 hours.
+  CoordinatorAsyncConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref CoordinatorFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+      MaximumEventAgeInSeconds: 60
+
   # Jobs (long queries) are started asynchronously: a failed one is reported, never retried.
   WorkerAsyncConfig:
     Type: AWS::Lambda::EventInvokeConfig
