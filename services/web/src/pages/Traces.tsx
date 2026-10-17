@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { records, Where } from "../api";
 import type { Ctx } from "../App";
+import { useHashParam, useHashSearch } from "../hashParams";
 import { bucketLow, Cell, LOG_STEPS, Column, ColumnPicker, Heatmap, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
@@ -12,8 +13,8 @@ import { useNow, useRangeWindow } from "../useNow";
 const SERVICE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
 const LOOKBACK_DAYS = 30;   // trace ids are looked up across 30 days (day/hour ID filters make this fast)
 
-export function Traces({ ctx, traceId, service }: { ctx: Ctx; traceId?: string; service?: string }) {
-  if (!traceId) return <Explorer ctx={ctx} service={service} />;
+export function Traces({ ctx, traceId }: { ctx: Ctx; traceId?: string }) {
+  if (!traceId) return <Explorer ctx={ctx} />;
   return <Waterfall ctx={ctx} traceId={traceId} />;
 }
 
@@ -54,11 +55,12 @@ const COLUMNS: Column[] = [
 const WIDTH: Record<string, number | undefined> = { service: 150, start: 190, duration: 100, root: 60, type: 110, kind: 90, status: 70 };
 const LIMIT = 200;
 
-function Explorer({ ctx, service: initialService }: { ctx: Ctx; service?: string }) {
-  const [view, setView] = useState("all");
+function Explorer({ ctx }: { ctx: Ctx }) {
+  // In the link (C5): the view, the service and the span-name filter; a link or Back changes them.
+  const [view, setView] = useHashParam("view", "all");
   const [chart, setChart] = useState<"outliers" | "red">("outliers");
-  const [service, setService] = useState(initialService ?? "");
-  const [text, setText] = useState(""), [applied, setApplied] = useState("");
+  const [service, setService] = useHashParam("service");
+  const { text, setText, applied, setApplied } = useHashSearch("q");
   const [cell, setCell] = useState<{ t: number; b: number } | null>(null);
   const [sort, setSort] = useState<"start" | "duration">("start");
   const [id, setId] = useState("");

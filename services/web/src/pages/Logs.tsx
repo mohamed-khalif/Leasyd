@@ -1,6 +1,7 @@
 import { FormEvent, Fragment, useMemo, useState } from "react";
 import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
+import { useHashParam, useHashSearch } from "../hashParams";
 import { Bar, ColumnPicker, StackedBars, StackKey, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { bucketSeconds, fmtNum } from "../time";
@@ -49,10 +50,10 @@ const LIMIT = 200, PATTERN_SAMPLE = 1000;
 type Filter = { field: string; value: string };
 
 export function Logs({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
-  const [text, setText] = useState(params.get("q") ?? "");
-  const [applied, setApplied] = useState(params.get("q") ?? "");
-  const [view, setView] = useState(params.get("view") ?? LEVEL_VIEW[params.get("level") ?? ""] ?? "all");
-  const [service, setService] = useState(params.get("service") ?? "");
+  // In the link (C5): the search, the view and the service; a link or Back changes them.
+  const { text, setText, applied, setApplied } = useHashSearch("q");
+  const [view, setView] = useHashParam("view", LEVEL_VIEW[params.get("level") ?? ""] ?? "all");
+  const [service, setService] = useHashParam("service");
   const [filters, setFilters] = useState<Filter[]>([]);
   const [groupBy, setGroupBy] = useState("");
   const [custom, setCustom] = useState("");

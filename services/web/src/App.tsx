@@ -94,7 +94,7 @@ export function App() {
   let page: React.ReactElement, crumb: [string, string];
   if (path.startsWith("/traces")) {
     const id = path.split("/")[2];
-    page = <Traces ctx={ctx} traceId={id} service={params.get("service") ?? undefined} />;
+    page = <Traces ctx={ctx} traceId={id} />;
     crumb = ["Traces", id ? `${id.slice(0, 16)}…` : "Explorer"];
   } else if (path.startsWith("/services")) {
     page = <ServiceMap ctx={ctx} />;

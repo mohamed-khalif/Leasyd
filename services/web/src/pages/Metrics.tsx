@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
+import { useHashParam } from "../hashParams";
 import { Tabs, Treemap } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
@@ -33,7 +34,7 @@ function unitLabel(u: string): string {
 
 export function Metrics({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
   const name = params.get("m");
-  return name ? <MetricDetail ctx={ctx} name={name} params={params} /> : <MetricList ctx={ctx} />;
+  return name ? <MetricDetail ctx={ctx} name={name} /> : <MetricList ctx={ctx} />;
 }
 
 // ------------------------------------------------------------------ list
@@ -146,9 +147,9 @@ function info(r: Record<string, unknown>): Info {
 
 const GAUGE_AGGS = [["avg", "Average"], ["max", "Max"], ["min", "Min"], ["p95", "p95"]] as const;
 
-function MetricDetail({ ctx, name, params }: { ctx: Ctx; name: string; params: URLSearchParams }) {
-  const [service, setService] = useState(params.get("service") ?? "");
-  const [split, setSplit] = useState(params.get("by") ?? "service");
+function MetricDetail({ ctx, name }: { ctx: Ctx; name: string }) {
+  const [service, setService] = useHashParam("service");   // in the link (C5)
+  const [split, setSplit] = useHashParam("by", "service");
   const [agg, setAgg] = useState("avg");
   const w = useRangeWindow(ctx);
   const key = name + ctx.range.key + ctx.tick;
