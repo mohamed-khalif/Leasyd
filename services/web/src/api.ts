@@ -1,6 +1,7 @@
 // The two /v1/app routes. The tenant is never sent: the API takes it from
 // the signed-in user's token.
 import { idToken } from "./auth";
+import { limited } from "./limiter";
 import { getConfig } from "./config";
 import type { GpuPrice } from "./infra/model";
 
@@ -38,7 +39,12 @@ const POLL_TRIES = 3;
 
 export type RunOptions = { background?: boolean; onWait?: (seconds: number) => void; signal?: AbortSignal };
 
-async function runQuery<T>(q: object, opts: RunOptions = {}): Promise<T> {
+/** A query through the page's limiter (MAX_IN_FLIGHT at once; a job keeps its place while polled). */
+function runQuery<T>(q: object, opts: RunOptions = {}): Promise<T> {
+  return limited(() => runNow<T>(q, opts), opts.signal);
+}
+
+async function runNow<T>(q: object, opts: RunOptions): Promise<T> {
   const t0 = Date.now(), signal = opts.signal;
   let res = await raw("/v1/app/query", { method: "POST", body: JSON.stringify(opts.background ? { ...q, async: true } : q), signal });
   const job = (res.body as { job?: string }).job;

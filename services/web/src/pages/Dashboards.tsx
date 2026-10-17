@@ -284,26 +284,6 @@ export function fillQuery(text: string, vars: Record<string, string[]>, step: nu
 
 // ------------------------------------------------------------------ panels
 
-/** At most 6 panel queries in flight; the rest wait their turn. An aborted query leaves the queue,
- *  or (running) is aborted and frees its place. Exported for tests. */
-const queue: (() => void)[] = [];
-let running = 0;
-export function limited<T>(f: (signal?: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const go = () => {
-      signal?.removeEventListener("abort", leave);
-      if (signal?.aborted) { reject(new DOMException("The operation was aborted.", "AbortError")); queue.shift()?.(); return; }
-      running++;
-      f(signal).then(resolve, reject).finally(() => { running--; queue.shift()?.(); });
-    };
-    const leave = () => {
-      const i = queue.indexOf(go);
-      if (i >= 0) { queue.splice(i, 1); reject(new DOMException("The operation was aborted.", "AbortError")); }
-    };
-    if (running < 6) go();
-    else { queue.push(go); signal?.addEventListener("abort", leave, { once: true }); }
-  });
-}
 
 type Loaded = { series: (Series & { last: number })[]; error?: string } | null;
 
@@ -327,7 +307,7 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
       ? promqlAt({ promql: fillQuery(q.promql, vars, step, rangeS), time: at }, { signal })
           .then((r) => r.data.result.map((x) => ({ metric: x.metric, values: [x.value] as [number, string][] })))
       : promql({ promql: fillQuery(q.promql, vars, step, rangeS), start: w.start, end: w.end, step }, { signal }).then((r) => r.data.result);
-    Promise.all(panel.queries.map((q) => limited(() => run(q).then((result) => ({ q, result })), signal)))
+    Promise.all(panel.queries.map((q) => run(q).then((result) => ({ q, result }))))   // api.ts runs at most 6 at once
       .then((results) => !signal.aborted && setState({ results }), (e: Error) => !signal.aborted && setState({ error: e.message }));
     return () => ctl.abort();
   }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed: `key` encodes queries, variables, range and refresh

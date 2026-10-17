@@ -1,7 +1,7 @@
-// Dashboards' panel-query limiter (6 at once) with aborts (design §4.1).
+// The query limiter (6 at once per page) with aborts (design §4.1).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { limited } from "./pages/Dashboards";
+import { limited } from "./limiter";
 
 const flush = () => new Promise<void>((r) => setImmediate(r));
 
