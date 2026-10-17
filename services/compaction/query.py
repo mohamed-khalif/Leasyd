@@ -454,29 +454,32 @@ def check_sql(sql):
         raise BadQuery("only one SELECT query is allowed" if "Only SELECT" in msg else f"bad SQL: {msg}")
     if len(tree.get("statements") or []) != 1:
         raise BadQuery("give exactly one SELECT query")
-    tables, ctes = set(), set()
+    tables, unknown = set(), set()
 
-    def walk(n):
+    def walk(n, ctes):
+        """A CTE name is a table only inside the query that defines it (and that query's subqueries)."""
         if isinstance(n, dict):
             if n.get("type") == "TABLE_FUNCTION":
                 raise BadQuery("table functions (read_csv, read_parquet, ...) are not allowed; query logs, spans or metrics")
+            if isinstance(n.get("cte_map"), dict):
+                ctes = ctes | {str(e.get("key", "")).lower() for e in n["cte_map"].get("map") or []}
             if n.get("type") == "BASE_TABLE":
+                name = n.get("table_name", "").lower()
                 if n.get("schema_name") or n.get("catalog_name"):
                     raise BadQuery(f"unknown table {n.get('table_name')!r}; the tables are logs, spans and metrics")
-                tables.add(n.get("table_name", "").lower())
-            if isinstance(n.get("cte_map"), dict):
-                for entry in n["cte_map"].get("map") or []:
-                    ctes.add(str(entry.get("key", "")).lower())
+                if name in SQL_TABLES:
+                    tables.add(name)
+                elif name not in ctes:
+                    unknown.add(name)
             for v in n.values():
-                walk(v)
+                walk(v, ctes)
         elif isinstance(n, list):
             for v in n:
-                walk(v)
+                walk(v, ctes)
     try:
-        walk(tree["statements"][0])
+        walk(tree["statements"][0], frozenset())
     except RecursionError:
         raise BadQuery("the query is nested too deeply") from None
-    unknown = tables - set(SQL_TABLES) - ctes
     if unknown:
         raise BadQuery(f"unknown table {sorted(unknown)[0]!r}; the tables are logs, spans and metrics")
     used = sorted(tables & set(SQL_TABLES))

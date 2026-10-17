@@ -63,6 +63,21 @@ def test_refused(text, msg):
         query.check_sql(text)
 
 
+def test_cte_names_only_count_where_they_are_visible():
+    """A CTE defined inside one subquery doesn't make that name a table elsewhere in the query
+    (found 2026-10-17: it let a file path or the worker's raw temp tables through the checker)."""
+    for text in ('SELECT * FROM logs, (WITH "/etc/passwd" AS (SELECT 1) SELECT * FROM "/etc/passwd") a, "/etc/passwd" b',
+                 "SELECT * FROM logs WHERE ts IN (WITH raw_logs_0 AS (SELECT 1 AS ts) SELECT ts FROM raw_logs_0) "
+                 "UNION ALL SELECT * FROM raw_logs_0"):
+        with pytest.raises(query.BadQuery, match="unknown table"):
+            query.check_sql(text)
+    # still fine: a CTE used in its own query, in a subquery of it, and recursively
+    assert query.check_sql("WITH e AS (SELECT * FROM logs) SELECT count(*) FROM e") == ["logs"]
+    assert query.check_sql("WITH e AS (SELECT * FROM logs) SELECT (SELECT count(*) FROM e)") == ["logs"]
+    assert query.check_sql("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) "
+                           "SELECT * FROM r, (SELECT count(*) FROM spans) s") == ["spans"]
+
+
 def test_deeply_nested_queries_are_refused_not_crashed():
     """A 2 KB query nested deeply enough crashed the parser's JSON walk (RecursionError: a 503 and
     an alarm, repeatable); it is a bad query."""
