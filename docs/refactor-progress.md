@@ -95,7 +95,8 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] 6.3 one shared "now" per page (31a72d4); range in the link, C4 (8620692); Logs/Traces/Metrics filters in the link, C5 (b99feaa); bars skip NaN times while a new range loads (8cb4902)
 - [x] 6.4 one check-list loader (cabcb8b) and one account loader (0964a44), no cache; Dashboards' session-long names cache removed
 - [x] 6.5 one SQL quoting helper, lib/sql.ts (cfabec5); escaping fixed earlier in B6/B11
-- [ ] 6.6 duplication, dead code, module splits; lint rules (no raw fetch outside api.ts, import boundaries)
-- [ ] 6.7 performance (P1-P8)
-- [ ] then: tighten INFLIGHT_LIMITS to 4/12 (Home still sends ~20 at once: needs a client limiter first)
+- [x] 6.6 page helpers out of pages, import cycle gone (eec25b1, 7880154); lint: fetch only in api.ts, pages don't import pages (3f7c203); dead code deleted (9866638)
+- [x] 6.7 per-page code loading, first load 224 -> 109 kB gzip (a22d4ea), old assets kept on deploy, C15 (b182725); line chart (189574a) and heatmap (e40ab19) not redrawn on hover; ctx memoised (6ae663c); Logs patterns and QB series memoised (83c7076)
+- [ ] Waiting for a yes (they change what users see): P4 debounce typing (400 ms); P6 cap long lists at 500 with "show more"; client limiter (6 at once) then INFLIGHT_LIMITS 4/12; F2 one set of formatters (e.g. "just now" vs "45 s ago", axis tops); treemap cap 200 tiles
+- [ ] Not started (no behaviour change, large diffs): P7 combine Home's overlapping queries (~20 -> ~14); F4 split oversized modules; F5 typed rows
 ## Phase 7: not started
