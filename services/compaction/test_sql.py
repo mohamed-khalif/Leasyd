@@ -128,3 +128,16 @@ def test_runaway_engine_query_is_stopped_at_the_query_timeout(data, monkeypatch)
     monkeypatch.setattr(query, "compile_query", lambda q, **kw: (RUNAWAY.replace("logs", "t"), [], "aggregate") if not kw else real(q, **kw))
     with pytest.raises(query.BadQuery, match="ran longer than 1 s"):
         query.run({"tenant": "acme", "signal": "logs", "start": S, "end": E, "aggs": [{"fn": "count"}]}, invoke_worker=query.run_worker)
+
+
+def test_the_query_timeout_holds_even_when_checking_for_cancel_fails(data, monkeypatch):
+    """Found on AWS 2026-10-17: an S3 error while a worker checked for its cancel marker ended the
+    watch, so the query timeout never fired and the worker ran until Lambda killed it at 300 s."""
+    monkeypatch.setattr(query, "QUERY_TIMEOUT_S", 1)
+    monkeypatch.setattr(query, "CANCEL_POLL_S", 0.1)
+    monkeypatch.setattr(query, "_exists", lambda key: (_ for _ in ()).throw(RuntimeError("S3 says no")))
+    t0 = query.time.perf_counter()
+    out = query.run_sql_worker({"sql": RUNAWAY, "tenant": "acme", "start": S, "end": E, "cancel": "_results/jobs/acme/x.cancel",
+                                "tables": {t: query.lookup.lookup(tenant="acme", start=S, end=E, signal=sig)["files"]
+                                           for t, sig in query.SQL_TABLES.items()}})
+    assert "ran longer than 1 s" in out["error"] and query.time.perf_counter() - t0 < 10

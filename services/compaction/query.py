@@ -457,12 +457,20 @@ class _Deadline:
         while not self.stop.wait(min(CANCEL_POLL_S if self.cancel else QUERY_TIMEOUT_S, max(0, until - time.monotonic()))):
             if time.monotonic() >= until:
                 break
-            if self.cancel and _exists(self.cancel):
+            if self.cancel and self._cancel_marked():
                 self.cancelled = True
                 break
         else:
             return
         self.con.interrupt()
+
+    def _cancel_marked(self):
+        """Never raises: a failed check must not end the watch (and with it the query timeout)."""
+        try:
+            return _exists(self.cancel)
+        except Exception as e:      # noqa: BLE001
+            print(json.dumps({"cancel_check_failed": str(e)[:200]}))
+            return False
 
     def __enter__(self):
         self.thread.start()
