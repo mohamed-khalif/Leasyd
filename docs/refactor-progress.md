@@ -89,5 +89,13 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 ## Phase 4 (caching)
 - [x] Recommendation written: docs/caching-decision.md (recommends (b), in-house layer, 30 s freshness)
 - [x] Decided: (a) no cache. Keep: shared "now" per page, one check-list / account loader each (no reuse), one SQL quoting helper. Dropped: cross-page discovery sharing, in-flight de-dup
-## Phase 6: next (step 4 becomes: shared loaders without caching)
+## Phase 6
+- [x] 6.1 one core data hook (useLoad); useQuery/useSql/useHint/useRows wrap it (555d9a1)
+- [x] 6.2 abort on new key/unmount; DELETE for abandoned jobs; limiter frees slots; QB aborts only on unmount (4e69cbb)
+- [x] 6.3 one shared "now" per page (31a72d4); range in the link, C4 (8620692); Logs/Traces/Metrics filters in the link, C5 (b99feaa); bars skip NaN times while a new range loads (8cb4902)
+- [x] 6.4 one check-list loader (cabcb8b) and one account loader (0964a44), no cache; Dashboards' session-long names cache removed
+- [x] 6.5 one SQL quoting helper, lib/sql.ts (cfabec5); escaping fixed earlier in B6/B11
+- [ ] 6.6 duplication, dead code, module splits; lint rules (no raw fetch outside api.ts, import boundaries)
+- [ ] 6.7 performance (P1-P8)
+- [ ] then: tighten INFLIGHT_LIMITS to 4/12 (Home still sends ~20 at once: needs a client limiter first)
 ## Phase 7: not started
