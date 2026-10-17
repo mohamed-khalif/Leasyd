@@ -7,10 +7,11 @@ import { Block, Card, Drawer, StatusStrip, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum, rangeWindow } from "../time";
+import { bucketSeconds, fmtMs, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "./Logs";
 import { describeConstraint, describeStep, every, isBrowser, OK, pct, ResultBox } from "./Synthetics";
+import { useRangeWindow } from "../useNow";
 
 const SUCCESS = "synthetics.check.success", DURATION = "synthetics.check.duration";
 const TLS = "synthetics.check.tls_days_remaining", STEP_DURATION = "synthetics.step.duration";
@@ -51,7 +52,7 @@ export function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const load = useCallback(() => checks.get(id).then(setCheck, (e: Error) => setError(e.message)), [id]);
   useEffect(() => { load(); }, [load, ctx.tick]);
 
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick, nonce]);
+  const w = useRangeWindow(ctx.range, ctx.tick, nonce);
   const exRuns = (check?.exclusions ?? []).map((e) => e.run_id);
   const key = id + ctx.range.key + ctx.tick + nonce + ":" + exRuns.join(",").length;
   const runs = useQuery({ signal: "traces", ...w, services: ["synthetics"], search: { limit: RUNS },
@@ -411,7 +412,7 @@ function Screenshots({ check, run }: { check: Check; run: Run }) {
       checks.screenshot(check.id, run.id, n).then((r) => live && setImgs((m) => ({ ...m, [n]: r.image })),
                                                   (e: Error) => live && setImgs((m) => ({ ...m, [n]: { error: e.message } })));
     return () => { live = false; };
-  }, [check.id, run.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [check.id, run.id]);   // eslint-disable-line react-hooks/exhaustive-deps -- only another run's screenshots; the objects are new on every refresh
   if (!run.screenshots.length) return <div className="state">No screenshots for this run. They are taken when a step fails, or after every step if the check is set to.</div>;
   return (
     <>

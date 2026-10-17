@@ -18,7 +18,7 @@ export function Ai({ ctx, path, params }: { ctx: Ctx; path: string; params: URLS
   const [list, setList] = useState<{ id: string; title: string; status: string; updated_at: string }[]>([]);
   const [enabled, setEnabled] = useState(true);
   const loadList = () => ai.list().then((r) => { setList(r.conversations); setEnabled(r.enabled); }, () => undefined);
-  useEffect(() => { loadList(); }, [id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadList(); }, [id]);    
 
   // A question handed over from another page (?ask=...): ask it once, then show the conversation.
   const asked = useRef(false);
@@ -30,7 +30,7 @@ export function Ai({ ctx, path, params }: { ctx: Ctx; path: string; params: URLS
       try { page = JSON.parse(params.get("page") ?? "null") ?? undefined; } catch { page = undefined; }
       ai.ask(q, { ...rangeWindow(ctx.range), page }).then((c) => ctx.go(`/ai/${c.id}`), (e) => alert((e as Error).message));
     }
-  }, [params]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [params]);   // eslint-disable-line react-hooks/exhaustive-deps -- an ?ask= link is asked once (see `asked`)
 
   return (
     <div className="ai">
@@ -145,7 +145,7 @@ function Insights({ ctx, onAsk }: { ctx: Ctx; onAsk: (q: string, page?: unknown)
         setSel(out[0]?.service ?? null);
       }, () => live && setItems([]));
     return () => { live = false; };
-  }, [ctx.range.key, ctx.range.from, ctx.range.to, ctx.tick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ctx.range.key, ctx.range.from, ctx.range.to, ctx.tick]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the range's parts and the refresh tick
 
   const services = useMemo(() => {
     const m = new Map<string, Insight[]>();
@@ -204,7 +204,7 @@ function Conversation({ ctx, id, onChange }: { ctx: Ctx; id: string; onChange: (
     if (!rev) setConv(null);
     poll();
     return () => { live = false; window.clearTimeout(timer); };
-  }, [id, rev]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, rev]);   // eslint-disable-line react-hooks/exhaustive-deps -- polls again only for another conversation or a new answer; onChange is new each render
   useEffect(() => { bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" }); }, [conv?.view.length]);
   if (error) return <div className="state error">{error}</div>;
   if (!conv) return <div className="skeleton" style={{ height: 300 }} />;

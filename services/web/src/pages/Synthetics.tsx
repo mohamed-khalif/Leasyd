@@ -1,13 +1,14 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useState } from "react";
 import { BrowserAction, BrowserStep, Check, CheckResult, checks, CheckSettings, Constraint, Extraction, notExcluded, records, Step, StepResult } from "../api";
 import type { Ctx } from "../App";
 import { Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
-import { fmtNum, rangeWindow } from "../time";
+import { fmtNum } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "./Logs";
 import { CheckDetail } from "./CheckDetail";
 import { Maintenance } from "./Maintenance";
+import { useRangeWindow } from "../useNow";
 
 // Results are the tenant's own telemetry (service "synthetics"): gauges synthetics.check.success /
 // .duration / .tls_days_remaining and synthetics.step.duration, and a trace per run (a span per step),
@@ -63,7 +64,7 @@ function useChecks(tick: number) {
 
 function CheckList({ ctx }: { ctx: Ctx }) {
   const list = useChecks(ctx.tick);
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = ctx.range.key + ctx.tick;
   const excluded = (list.data?.checks ?? []).flatMap((c) => c.excluded_runs ?? []);
   const byCheck = { signal: "metrics" as const, ...w, services: ["synthetics"], group_by: ["attributes.check.id"], limit: 1000 };

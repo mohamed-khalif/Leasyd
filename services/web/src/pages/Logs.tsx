@@ -3,8 +3,9 @@ import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
 import { Bar, ColumnPicker, StackedBars, StackKey, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
-import { bucketSeconds, fmtNum, rangeWindow } from "../time";
+import { bucketSeconds, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
+import { useRangeWindow } from "../useNow";
 
 // OpenTelemetry severity numbers: 1-4 trace, 5-8 debug, 9-12 info, 13-16 warn, 17-20 error, 21-24 fatal.
 export const SEVERITY_RANGES: (StackKey & { min: number; max: number; key: string })[] = [
@@ -60,7 +61,7 @@ export function Logs({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
   const [shown, setShown] = useColumns("logs", COLUMNS);
 
   const v = VIEWS.find((x) => x.key === view) ?? VIEWS[0];
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const where: Where[] = [...v.where, ...filters.map((f) => ({ field: f.field, op: "=", value: f.value }))];
   if (applied.trim()) where.push({ field: "body", op: "contains", value: applied.trim() });
   const services = v.services ?? (service ? [service] : undefined);

@@ -8,17 +8,18 @@ import { Bar, Card, Cell, Heatmap, Section, StackedBars, StackKey } from "../com
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum, Range, rangeWindow } from "../time";
+import { bucketSeconds, fmtMs, fmtNum, Range } from "../time";
 import { useQuery } from "../useQuery";
 import { SEVERITY_RANGES, severityRange } from "./Logs";
 import { isError } from "./Traces";
+import { useRangeWindow } from "../useNow";
 
 const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
 const SUCCESS = "synthetics.check.success";
 
 /** One query, re-run when the time range or refresh tick changes (null: not needed). */
 function usePanel(ctx: Ctx, signal: Signal, extra: Omit<Query, "signal" | "start" | "end"> | null) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   return useQuery(extra && { signal, ...w, ...extra }, JSON.stringify(extra) + signal + ctx.range.key + ctx.tick);
 }
 

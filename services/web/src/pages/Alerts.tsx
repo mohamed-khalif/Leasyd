@@ -1,13 +1,14 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { AlertChannel, AlertRule, alerts, Check, checks, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
 import type { Ctx } from "../App";
 import { ALERT_TEMPLATES, AlertTemplate } from "../infra/alertTemplates";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Series, TimeSeries } from "../components/TimeSeries";
-import { fmtNum, rangeWindow } from "../time";
+import { fmtNum } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "./Logs";
+import { useRangeWindow } from "../useNow";
 
 // Alerts: rules (when) and channels (where). Every firing and resolution is also a log of the tenant
 // (service "alerts"), shown under History.
@@ -96,7 +97,7 @@ function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearc
   useEffect(() => { if (id) alerts.rule(id).then((x) => setR(x), (e: Error) => setError(e.message)); }, [id]);
   useEffect(() => {                                  // a new rule sends to every channel by default
     if (!id && s && !r.channels.length) setR((x) => ({ ...x, channels: s.channels.map((c) => c.id), slo: x.slo ?? s.slos[0]?.id }));
-  }, [s]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [s]);   // eslint-disable-line react-hooks/exhaustive-deps -- defaults applied once when the settings arrive, not on later edits
   if (loadError) return <div className="state error">{loadError}</div>;
   if (!s) return <div className="skeleton" style={{ height: 240 }} />;
   const set = (p: Partial<AlertRule>) => setR({ ...r, ...p });
@@ -276,7 +277,7 @@ function Channels({ ctx }: { ctx: Ctx }) {
 }
 
 function History({ ctx }: { ctx: Ctx }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const q = useQuery({ signal: "logs", ...w, services: ["alerts"], search: { limit: 500 } }, "h" + ctx.range.key + ctx.tick);
   const rows = q.data ? records(q.data).sort((a, b) => String(b.ts).localeCompare(String(a.ts))) : [];
   return (
@@ -312,7 +313,7 @@ function QueryRuleFields({ r, set, ctx }: { r: Omit<AlertRule, "id">; set: (p: P
         color: `var(--series-${(i % 6) + 1})`, points: s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1])) })) }),
       (e: Error) => setChart({ series: [], error: e.message }));
   };
-  useEffect(() => { if (r.promql) run(r.promql); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (r.promql) run(r.promql); }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- a prefilled rule's preview runs once, on opening
   useEffect(() => {
     if (!shown.trim() || r.critical == null || Number.isNaN(r.critical)) return;
     let live = true;

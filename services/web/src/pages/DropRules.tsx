@@ -71,7 +71,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
     }, () => setPreviews((p) => ({ ...p, [key]: "error" })));
   };
   const previewOf = (r: DropRule) => { const rule = normalized(r); return previews[JSON.stringify([rule.signal, rule.conditions])]; };
-  useEffect(() => { rules?.forEach(preview); }, [rules]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { rules?.forEach(preview); }, [rules]);   // eslint-disable-line react-hooks/exhaustive-deps -- previews once per new rules list (preview skips rules already done)
 
   const dirty = rules != null && JSON.stringify(rules) !== saved;
   const save = async (next: DropRule[]) => {

@@ -3,7 +3,7 @@
 // Workloads & cost (who uses them, who holds them idle, what to do), Health (XIDs, ECC, throttling,
 // heat) and Planning (daily peaks, never-needed GPUs, the demand trend). A GPU opens in a drawer.
 // Queries: infra/queries.ts; conclusions: infra/analysis.ts; contract: docs/gpu-kubernetes.md.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { Ctx } from "../App";
 import { Card, Drawer, StackedBars, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
@@ -13,7 +13,8 @@ import { ago, hours, mib, money, pct, shortGpu } from "../infra/format";
 import { HOT_TEMP, IDLE_UTIL, priceFor, xidInfo } from "../infra/model";
 import * as Q from "../infra/queries";
 import { loads, useGpuPrices, useHint, useRows } from "../infra/useInfra";
-import { fmtNum, rangeWindow } from "../time";
+import { fmtNum } from "../time";
+import { useRangeWindow } from "../useNow";
 
 type Tab = "overview" | "workloads" | "health" | "planning";
 const TABS: [Tab, string][] = [["overview", "Overview"], ["workloads", "Workloads & cost"], ["health", "Health"], ["planning", "Planning"]];
@@ -21,7 +22,7 @@ const USE_KEYS = [{ label: "busy", color: "var(--accent)" }, { label: "held, idl
                   { label: "unallocated", color: "var(--series-6)" }];
 
 export function Gpus({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = ctx.range.key + ctx.tick;
   const hint = useHint(w, key);
   const [tab, setTab] = useState<Tab>((params.get("tab") as Tab) || "overview");

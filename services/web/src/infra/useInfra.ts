@@ -24,7 +24,7 @@ export function useHint(w: { start: string; end: string }, key: string): Hint | 
       setHint(out);
     }, () => live && setHint({}));
     return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed: `key` encodes the window and refresh
   }, [key]);
   return hint;
 }
@@ -47,7 +47,7 @@ export function useRows<T>(q: Q | null, w: { start: string; end: string }, key: 
       (r) => live && setState({ rows: records(r) as unknown as T[], error: null, loading: false }),
       (e: Error) => live && setState({ rows: [], error: e.message, loading: false }));
     return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed: `key` encodes window and refresh; the hint is waited for via `ready`
   }, [key, ready, q?.sql]);
   return state;
 }

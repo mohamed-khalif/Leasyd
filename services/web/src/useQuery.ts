@@ -15,7 +15,7 @@ export function useQuery(q: Query | null, key: string): Loaded {
       (e: Error) => live && setState({ data: null, error: e.message, loading: false }),
     );
     return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed: `key` encodes the query and its refresh (one core hook in Phase 6)
   }, [key]);
   return state;
 }
@@ -30,7 +30,7 @@ export function useSql(text: string | null, w: { start: string; end: string }, k
     sql({ sql: text, ...w }).then((data) => live && setState({ data, error: null, loading: false }),
       (e: Error) => live && setState({ data: null, error: e.message, loading: false }));
     return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed: `key` encodes the SQL, window and refresh
   }, [key]);
   return state;
 }

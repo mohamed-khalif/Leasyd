@@ -1,6 +1,6 @@
 // Dashboards: a list on the left (search, favorites, create), the chosen dashboard on the right:
 // its filters (e.g. Service Name), and a grid of panels, each one or more PromQL queries.
-import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { checks, Dashboard, dashboards, DashboardSummary, Panel, PanelType, promql, promqlAt, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
 import { BUILTIN } from "../builtinDashboards";
@@ -8,6 +8,7 @@ import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, fmtUnit, Range, rangeWindow } from "../time";
 import { useQuery } from "../useQuery";
+import { useRangeWindow } from "../useNow";
 
 const PALETTE = ["#b49bf3", "#6ea8fe", "#d7b98a", "#6fd3c1", "#f59ab4", "#9aa6b8", "#7fb77e", "#e07a5f", "#8d99ae", "#f2cc8f"];
 const ROW_PX = 170;
@@ -201,7 +202,7 @@ function DashboardView({ ctx, id, edit, onChanged, initial }: { ctx: Ctx; id: st
 
 function Variables({ ctx, variables, values, onChange }: { ctx: Ctx; variables: Dashboard["variables"];
                     values: Record<string, string[]>; onChange: (v: Record<string, string[]>) => void }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const opts = { group_by: ["service"], aggs: [{ fn: "count" }], limit: 500, ...w };
   const t = useQuery({ signal: "traces", ...opts }, "vt" + ctx.range.key + ctx.tick);
   const l = useQuery({ signal: "logs", ...opts }, "vl" + ctx.range.key + ctx.tick);
@@ -303,7 +304,7 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
         setState({ series });
       }, (e: Error) => live && setState({ series: [], error: e.message }));
     return () => { live = false; };
-  }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed: `key` encodes queries, variables, range and refresh
   return state;
 }
 

@@ -5,8 +5,9 @@ import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from
 import type { Ctx } from "../App";
 import { Drawer, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtNum, rangeWindow } from "../time";
+import { bucketSeconds, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
+import { useRangeWindow } from "../useNow";
 
 type Mode = "tracing" | "logging" | "metrics" | "promql";
 type Filter = { label: string; op: "=" | "!=" | "=~" | "!~"; value: string };
@@ -88,14 +89,14 @@ function load(params: URLSearchParams): { queries: Q[]; settings: Settings } {
 }
 
 export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
-  const init = useMemo(() => load(params), []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const init = useMemo(() => load(params), []);   // eslint-disable-line react-hooks/exhaustive-deps -- the link is read once, when the page opens
   const [queries, setQueries] = useState<Q[]>(init.queries);
   const [active, setActive] = useState(init.queries[0].id);
   const [settings, setSettings] = useState<Settings>(init.settings);
   const [nonce, setNonce] = useState(0);
   const [copied, setCopied] = useState(false);
   const [adding, setAdding] = useState(false);
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick, nonce]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const w = useRangeWindow(ctx.range, ctx.tick, nonce);
   const step = bucketSeconds(ctx.range);
   const metricList = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "metric_type", "is_monotonic"], aggs: [{ fn: "count" }], limit: 2000 },
                               "ml" + ctx.range.key + ctx.tick);
@@ -112,7 +113,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
   // Builder queries re-run as they change; PromQL runs on Run (Ctrl+Enter).
   useEffect(() => {
     setRan((old) => queries.map((q, i) => (q.mode === "promql" ? old[i] ?? texts[i] : texts[i])));
-  }, [JSON.stringify(queries.map((q) => (q.mode === "promql" ? q.id : texts))), kinds.size]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(queries.map((q) => (q.mode === "promql" ? q.id : texts))), kinds.size]);   // eslint-disable-line react-hooks/exhaustive-deps -- builder queries re-run when their text changes or metric kinds arrive
   const runPromQL = () => { setRan(texts); setNonce((n) => n + 1); };
 
   const results = useResults(queries, ran, w, step, ctx.tick + ":" + nonce);
@@ -274,7 +275,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
           <SideSection title="Thresholds">
             <label className="side-field">Line at
               <input className="input mono" inputMode="decimal" placeholder="e.g. 500" value={settings.threshold}
-                     onChange={(e) => setSettings({ ...settings, threshold: e.target.value.replace(/[^0-9.\-]/g, "") })} /></label>
+                     onChange={(e) => setSettings({ ...settings, threshold: e.target.value.replace(/[^0-9.-]/g, "") })} /></label>
           </SideSection>
           <SideSection title="Limits">
             <div className="faint" style={{ fontSize: 12 }}>
@@ -426,7 +427,7 @@ function useResults(queries: Q[], texts: string[], w: { start: string; end: stri
       );
     });
     return () => { live = false; };
-  }, [keys.join("\n"), queries.map((q) => q.hidden).join()]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keys.join("\n"), queries.map((q) => q.hidden).join()]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed per query (text, window, step, tick); see code-audit B1
   return keys.map((k) => state[k]);
 }
 

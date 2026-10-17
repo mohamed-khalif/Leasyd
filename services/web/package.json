@@ -8,7 +8,8 @@
     "mock": "vite --mode mock",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "test": "node scripts/test.mjs"
+    "test": "node scripts/test.mjs",
+    "lint": "eslint ."
   },
   "dependencies": {
     "amazon-cognito-identity-js": "^6.3.20",
@@ -16,11 +17,18 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@happy-dom/global-registrator": "20.14.5",
     "@types/node": "^22.20.4",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "happy-dom": "20.14.5",
     "typescript": "^5.8.0",
+    "typescript-eslint": "8.70.1",
     "vite": "^7.0.0"
   }
 }

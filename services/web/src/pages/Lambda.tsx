@@ -10,9 +10,10 @@ import type { Ctx } from "../App";
 import { StackedBars, Tabs } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum, fmtTime, rangeWindow } from "../time";
+import { bucketSeconds, fmtMs, fmtNum, fmtTime } from "../time";
 import { useSql } from "../useQuery";
 import { DurationCompare, isError, KV, Span } from "./Traces";
+import { useRangeWindow } from "../useNow";
 
 const ENTRY = "(kind IN (2, 5) OR parent_span_id IS NULL)";
 const TRACED = "resource_attributes['cloud.platform'] = 'aws_lambda'";
@@ -35,7 +36,7 @@ export function Lambda({ ctx, fn }: { ctx: Ctx; fn?: string }) {
 // ------------------------------------------------------------------ all functions
 
 function Functions({ ctx }: { ctx: Ctx }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = ctx.range.key + ctx.tick;
   const traced = useSql(`SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,
       any_value(resource_attributes['cloud.region']) AS region, any_value(resource_attributes['cloud.account.id']) AS account
@@ -105,7 +106,7 @@ type Invocation = { ts: string; span_id: string; trace_id: string; name: string;
                     cold: string; attrs: Record<string, unknown> };
 
 function FunctionView({ ctx, fn }: { ctx: Ctx; fn: string }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const b = bucketSeconds(ctx.range);
   const key = fn + ctx.range.key + ctx.tick;
   const [search, setSearch] = useState("");

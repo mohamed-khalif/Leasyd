@@ -4,13 +4,14 @@
 // (services/ingest/rum.py). Per site (service): page views and visits, Core Web Vitals at the 75th
 // percentile (as Google rates them) with the share of good ones, pages, JavaScript errors, failing
 // or slow API calls (each linked to its backend trace) and browsers; a visit opens with its events.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
 import { Card, Drawer, StackedBars } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
-import { bucketSeconds, fmtNum, fmtTime, rangeWindow } from "../time";
+import { bucketSeconds, fmtNum, fmtTime } from "../time";
 import { useSql } from "../useQuery";
+import { useRangeWindow } from "../useNow";
 
 const RUM = "resource_attributes['telemetry.sdk.name'] = 'leasyd-rum'";
 const A = (k: string) => `attributes['${k}']`;
@@ -32,7 +33,7 @@ export const rate = (name: string, v: number) => {
 const TONE = { good: "ok", "needs-improvement": "warn", poor: "bad", "": undefined } as const;
 
 export function Web({ ctx }: { ctx: Ctx }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = ctx.range.key + ctx.tick;
   const apps = useSql(`SELECT service, count(*) FILTER (WHERE ${A("rum.type")} = 'page_view') AS views
     FROM logs WHERE ${RUM} GROUP BY 1 ORDER BY 2 DESC`, w, "apps" + key);

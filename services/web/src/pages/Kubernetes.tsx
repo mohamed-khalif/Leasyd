@@ -12,14 +12,15 @@ import { ago, bytes, cores, pct } from "../infra/format";
 import { BAD_REASONS, PHASES } from "../infra/model";
 import * as Q from "../infra/queries";
 import { loads, useHint, useRows } from "../infra/useInfra";
-import { bucketSeconds, fmtNum, rangeWindow } from "../time";
+import { bucketSeconds, fmtNum } from "../time";
+import { useRangeWindow } from "../useNow";
 
 type Tab = "overview" | "nodes" | "workloads" | "pods" | "events";
 const TABS: [Tab, string][] = [["overview", "Overview"], ["nodes", "Nodes"], ["workloads", "Workloads"], ["pods", "Pods"], ["events", "Events"]];
 const COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
 
 export function Kubernetes({ ctx, params }: { ctx: Ctx; params: URLSearchParams }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = ctx.range.key + ctx.tick;
   const hint = useHint(w, key);
   const [tab, setTab] = useState<Tab>((params.get("tab") as Tab) || "overview");

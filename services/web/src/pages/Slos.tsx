@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Check, checks, notExcluded, Query, Result, Slo, slos, Where } from "../api";
 import type { Ctx } from "../App";
 import { Loads, Panel } from "../components/Panel";
@@ -7,6 +7,7 @@ import { Stat } from "../components/Stat";
 import { TimeSeries } from "../components/TimeSeries";
 import { customRange, fmtNum } from "../time";
 import { Loaded, useQuery } from "../useQuery";
+import { useNow } from "../useNow";
 
 // SLOs over synthetic checks, worked out from their results (the tenant's own metrics):
 //   availability  good = runs that passed          (synthetics.check.success = 1)
@@ -67,7 +68,7 @@ const goodOf = (slo: Slo, r: Result | null, row = 0) => Number(r?.rows[row]?.[sl
 const totalOf = (r: Result | null, row = 0) => Number(r?.rows[row]?.[r.columns.indexOf("count")] ?? 0);
 
 function useSlo(slo: Slo | null, excluded: string[], tick: number) {
-  const now = useMemo(() => Date.now(), [tick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const now = useNow(tick);
   const key = `${slo?.id}:${slo?.updated_at ?? ""}:${excluded.length}:${tick}`;
   const q = slo ? sloQueries(slo, excluded, now - slo.window_days * DAY, now) : null;
   const h = slo ? sloQueries(slo, excluded, now - HOUR, now) : null;

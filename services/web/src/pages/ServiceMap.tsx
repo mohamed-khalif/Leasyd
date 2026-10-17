@@ -9,7 +9,8 @@ import type { Ctx } from "../App";
 import { Tabs } from "../components/Charts";
 import { Loads } from "../components/Panel";
 import { useSql } from "../useQuery";
-import { bucketSeconds, fmtMs, fmtNum, rangeWindow } from "../time";
+import { bucketSeconds, fmtMs, fmtNum } from "../time";
+import { useRangeWindow } from "../useNow";
 
 type Node = { service: string; requests: number; errors: number; avg_ms: number; attrs: Record<string, string>; x: number; y: number };
 type Edge = { source: string; target: string; calls: number; errors: number };
@@ -70,7 +71,7 @@ const curve = (x1: number, y1: number, x2: number, y2: number) => {
 };
 
 export function ServiceMap({ ctx }: { ctx: Ctx }) {
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = ctx.range.key + ctx.tick;
   const nq = useSql(NODES_SQL, w, "n" + key), eq = useSql(EDGES_SQL, w, "e" + key);
   const [sel, setSel] = useState<string | null>(null);
@@ -110,7 +111,7 @@ function Graph(p: { nodes: Node[]; edges: Edge[]; minutes: number; selected: str
   const box = { x: Math.min(...xs) - 160, y: Math.min(...ys) - 90, w: Math.max(...xs) - Math.min(...xs) + 320, h: Math.max(...ys) - Math.min(...ys) + 190 };
   const [view, setView] = useState(box);
   const fit = () => setView(box);
-  useEffect(fit, [p.nodes.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(fit, [p.nodes.length]);   // eslint-disable-line react-hooks/exhaustive-deps -- refit only when the nodes change, not for each render's new box
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
   const svg = useRef<SVGSVGElement>(null);
   const still = typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -187,7 +188,7 @@ const RUNTIME_DASHBOARDS: Record<string, [string, string]> = { java: ["builtin-j
 
 function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: Node; minutes: number; edges: Edge[]; onClose: () => void }) {
   const [tab, setTab] = useState<"overview" | "operations">("overview");
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const b = bucketSeconds(ctx.range);
   const key = node.service + ctx.range.key + ctx.tick;
   const series = useSql(`SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t, count(*) AS n,

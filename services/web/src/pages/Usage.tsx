@@ -7,6 +7,7 @@ import { Gauge, Stat } from "../components/Stat";
 import { PRICE, PRICE_LABEL, usd } from "../pricing";
 import { fmtNum } from "../time";
 import { Loaded, useQuery } from "../useQuery";
+import { useNow } from "../useNow";
 
 const SIGNALS: Signal[] = ["traces", "logs", "metrics"];
 const COLOR: Record<Signal, string> = { traces: "var(--series-3)", logs: "var(--series-2)", metrics: "var(--series-6)" };
@@ -14,10 +15,8 @@ const NAME: Record<Signal, string> = { traces: "Spans", logs: "Logs", metrics: "
 
 /** Last 24 hours by service, per signal: the baseline extrapolated to 30 days. */
 function useBaseline(ctx: Ctx, signal: Signal): Loaded {
-  const w = useMemo(() => {
-    const end = Date.now();
-    return { start: new Date(end - 86_400_000).toISOString(), end: new Date(end).toISOString() };
-  }, [ctx.tick]);
+  const end = useNow(ctx.tick);
+  const w = useMemo(() => ({ start: new Date(end - 86_400_000).toISOString(), end: new Date(end).toISOString() }), [end]);
   return useQuery({ signal, ...w, group_by: ["service"], aggs: [{ fn: "count" }], limit: 100 }, signal + "24h" + ctx.tick);
 }
 

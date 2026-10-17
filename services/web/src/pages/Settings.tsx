@@ -22,7 +22,7 @@ export function Settings({ ctx }: { ctx: Ctx }) {
   const [note, setNote] = useState<string | null>(null);
 
   const load = () => account.get().then(setAcc, (e) => setError((e as Error).message));
-  useEffect(() => { load(); }, [ctx.tick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [ctx.tick]);    
   // Back from Stripe Checkout: the subscription starts when Stripe tells us (seconds); look again shortly.
   const back = /[?&]billing=(done|cancelled)/.exec(window.location.hash)?.[1];
   useEffect(() => {
@@ -32,7 +32,7 @@ export function Settings({ ctx }: { ctx: Ctx }) {
       return () => t.forEach(window.clearTimeout);
     }
     return undefined;
-  }, [back]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [back]);    
   const toStripe = (f: () => Promise<{ url: string }>) => act(async () => { window.location.assign((await f()).url); });
   const act = async (f: () => Promise<unknown>, done?: string) => {
     setBusy(true); setError(null); setNote(null);

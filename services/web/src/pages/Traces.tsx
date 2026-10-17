@@ -4,9 +4,10 @@ import type { Ctx } from "../App";
 import { bucketLow, Cell, LOG_STEPS, Column, ColumnPicker, Heatmap, Tabs, useColumns, View, ViewsSidebar } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtMs, fmtNum, rangeWindow } from "../time";
+import { bucketSeconds, fmtMs, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
 import { fmtTs } from "./Logs";
+import { useNow, useRangeWindow } from "../useNow";
 
 const SERVICE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
 const LOOKBACK_DAYS = 30;   // trace ids are looked up across 30 days (day/hour ID filters make this fast)
@@ -64,7 +65,7 @@ function Explorer({ ctx, service: initialService }: { ctx: Ctx; service?: string
   const [shown, setShown] = useColumns("spans", COLUMNS);
 
   const v = VIEWS.find((x) => x.key === view) ?? VIEWS[0];
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const b = bucketSeconds(ctx.range);
   const where: Where[] = [...v.where, ...(applied.trim() ? [{ field: "name", op: "contains", value: applied.trim() }] : [])];
   const services = v.services ?? (service ? [service] : undefined);
@@ -214,7 +215,8 @@ function spanEvents(r: Record<string, unknown>, start: number): SpanEvent[] {
 const isException = (e: SpanEvent) => e.name === "exception";
 
 function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
-  const w = useMemo(() => ({ start: new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString(), end: new Date().toISOString() }), [traceId, ctx.tick]);
+  const now = useNow(traceId, ctx.tick);
+  const w = useMemo(() => ({ start: new Date(now - LOOKBACK_DAYS * 86_400_000).toISOString(), end: new Date(now).toISOString() }), [now]);
   const spans = useQuery({ signal: "traces", ...w, match: { trace_id: traceId }, search: { limit: 2000 } }, "t" + traceId + ctx.tick);
   const logs = useQuery({ signal: "logs", ...w, match: { trace_id: traceId }, search: { limit: 200 } }, "l" + traceId + ctx.tick);
   const [sel, setSel] = useState<string | null>(null);

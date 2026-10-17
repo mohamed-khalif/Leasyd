@@ -5,8 +5,9 @@ import { Tabs, Treemap } from "../components/Charts";
 import { Loads, Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
 import { Series, TimeSeries } from "../components/TimeSeries";
-import { bucketSeconds, fmtNum, rangeWindow } from "../time";
+import { bucketSeconds, fmtNum } from "../time";
 import { useQuery } from "../useQuery";
+import { useRangeWindow } from "../useNow";
 
 const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
 const TOP = SERIES.length;                     // lines drawn (one colour each); the table lists every group
@@ -41,7 +42,7 @@ function MetricList({ ctx }: { ctx: Ctx }) {
   const [filter, setFilter] = useState("");
   const [size, setSize] = useState<"cardinality" | "points">("cardinality");
   const [folded, setFolded] = useState<Record<string, boolean>>({});
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = ctx.range.key + ctx.tick;
   const list = useQuery({ signal: "metrics", ...w, group_by: ["metric_name", "metric_type", "temporality", "is_monotonic", "unit"],
                           aggs: [{ fn: "count" }], limit: 2000 }, "l" + key);
@@ -63,7 +64,7 @@ function MetricList({ ctx }: { ctx: Ctx }) {
       m.set(p, [...(m.get(p) ?? []), r]);
     }
     return [...m];
-  }, [rows]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows]);    
   const open = (name: string) => ctx.go(`/metrics?m=${encodeURIComponent(name)}`);
   const collapsedByDefault = rows.length > 30 && !filter.trim();
   const isOpen = (p: string) => folded[p] ?? !collapsedByDefault;
@@ -149,7 +150,7 @@ function MetricDetail({ ctx, name, params }: { ctx: Ctx; name: string; params: U
   const [service, setService] = useState(params.get("service") ?? "");
   const [split, setSplit] = useState(params.get("by") ?? "service");
   const [agg, setAgg] = useState("avg");
-  const w = useMemo(() => rangeWindow(ctx.range), [ctx.range, ctx.tick]);
+  const w = useRangeWindow(ctx.range, ctx.tick);
   const key = name + ctx.range.key + ctx.tick;
   const where: Where[] = [{ field: "metric_name", op: "=", value: name }];
 
@@ -171,7 +172,7 @@ function MetricDetail({ ctx, name, params }: { ctx: Ctx; name: string; params: U
         if (k !== "service.name") keys.add(`resource.${k}`);
     }
     return [...keys].sort();
-  }, [sample.data]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sample.data]);   // eslint-disable-line react-hooks/exhaustive-deps -- derived from this result only
 
   const unit = m ? unitLabel(m.unit) : "";
   return (
@@ -258,7 +259,7 @@ function Charts(p: { ctx: Ctx; m: Info; kind: Kind; agg: string; split: string; 
       out.get(label)!.points.push([t, v]);
     }
     return [...out.values()];
-  }, [bres.data]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bres.data]);   // eslint-disable-line react-hooks/exhaustive-deps -- derived from this result only; the panel settings it reads arrive with it
 
   // [time, group, a0, a1?] rows -> one line per group, for each chart.
   const { primary, rate } = useMemo(() => {
@@ -278,7 +279,7 @@ function Charts(p: { ctx: Ctx; m: Info; kind: Kind; agg: string; split: string; 
       } else add(prim, a0);
     }
     return { primary: [...prim.values()], rate: [...rt.values()] };
-  }, [res.data]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [res.data]);   // eslint-disable-line react-hooks/exhaustive-deps -- derived from this result only; the panel settings it reads arrive with it
 
   // One colour per group across both charts, by the primary chart's ranking.
   const colors = new Map(rank(primary).map((l, i) => [l.label, SERIES[i % SERIES.length]]));
