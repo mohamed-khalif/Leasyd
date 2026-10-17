@@ -42,8 +42,9 @@ cat > services/web/dist/config.json <<JSON
   "clientId": "$(out "$LOGINS" AppClientId)", "apiBase": "", "ingestUrl": "$(out obs-phaseT2 IngestEndpoint)" }
 JSON
 
-# Hashed assets can be cached for a year; the page and its settings never.
-aws s3 sync services/web/dist/assets "s3://${BUCKET}/assets" --delete --cache-control "public,max-age=31536000,immutable"
+# Hashed assets can be cached for a year; the page and its settings never. Old assets are kept (no
+# --delete): a tab still running the previous version loads its pages' code from them after a deploy.
+aws s3 sync services/web/dist/assets "s3://${BUCKET}/assets" --cache-control "public,max-age=31536000,immutable"
 aws s3 sync services/web/dist "s3://${BUCKET}" --delete --exclude "assets/*" --cache-control "no-cache"
 aws cloudfront create-invalidation --distribution-id "$DIST" --paths "/index.html" "/config.json" "/" >/dev/null
 echo "Leasyd web app: ${URL}"
