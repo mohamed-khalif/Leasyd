@@ -4,7 +4,7 @@
 // everyone sees them. A rule's preview counts what it would have matched in the last 24 hours of
 // stored data (a query with the same conditions), and what that would save a month.
 import { useEffect, useMemo, useState } from "react";
-import { fmtNum } from "../lib/format";
+import { fmtNum, fmtPercent, fmtUnitPrice } from "../lib/format";
 import { account, DropCondition, DropRule, Meter, query, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
@@ -93,7 +93,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
         <h2>Drop rules</h2>
         <p className="muted">
           Discard data you don't need as it arrives: debug logs, health checks, noisy metrics. Dropped data is charged
-          for ingest only (from ${PRICE.metrics.ingest.toFixed(3)} per million) and never stored, so it's never billed for storage.
+          for ingest only (from {fmtUnitPrice(PRICE.metrics.ingest)} per million) and never stored, so it's never billed for storage.
           Rules apply in order: the first one a record matches decides.
         </p>
       </div>
@@ -107,7 +107,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
             <div key={s} className="drop-card">
               <span className="faint">{SIGNAL_NAME[s]} dropped today (UTC)</span>
               <b>{fmtNum(out)}</b>
-              <span className="faint">{inn ? `of ${fmtNum(inn)} received (${((out / inn) * 100).toFixed(1)}%) · saves ${usd((out / 1e6) * PRICE[s].storage)} today` : "nothing received yet today"}</span>
+              <span className="faint">{inn ? `of ${fmtNum(inn)} received (${fmtPercent((out / inn) * 100)}) · saves ${usd((out / 1e6) * PRICE[s].storage)} today` : "nothing received yet today"}</span>
             </div>
           );
         })}
@@ -214,7 +214,7 @@ function PreviewText({ p, rule }: { p?: Preview; rule: DropRule }) {
   const share = p.total ? (p.matched / p.total) * 100 : 0;
   return (
     <span>
-      {fmtNum(p.matched)} {PRICE_LABEL[rule.signal]} <span className="faint">({share.toFixed(share < 1 ? 1 : 0)}%)</span>
+      {fmtNum(p.matched)} {PRICE_LABEL[rule.signal]} <span className="faint">({fmtPercent(share)})</span>
       <div className="faint">saves ~{usd(((dropped * 30) / 1e6) * PRICE[rule.signal].storage)}/month</div>
     </span>
   );

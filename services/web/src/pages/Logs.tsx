@@ -1,5 +1,5 @@
 import { FormEvent, Fragment, useMemo, useState } from "react";
-import { fmtNum, fmtTs } from "../lib/format";
+import { fmtNum, fmtPercent, fmtTs } from "../lib/format";
 import { Query, records, Where } from "../api";
 import type { Ctx } from "../App";
 import { useDebounced } from "../useDebounced";
@@ -224,8 +224,8 @@ function GroupTable(p: { field: string; rows: Record<string, unknown>[]; errors:
             return (
               <tr key={k} onClick={() => r[p.field] != null && p.onPick(k)} title={r[p.field] != null ? "Show only these records" : undefined}>
                 <td>{k}</td><td className="num">{fmtNum(n)}</td>
-                <td className="num" style={e ? { color: "var(--sev-error)" } : undefined}>{e ? fmtNum(e) : "—"}</td>
-                <td><span className="share-bar" style={{ width: `${(n / top) * 140}px` }} /> <span className="faint">{((n / total) * 100).toFixed(1)}%</span></td>
+                <td className="num" style={e ? { color: "var(--sev-error)" } : undefined}>{e ? fmtNum(e) : "–"}</td>
+                <td><span className="share-bar" style={{ width: `${(n / top) * 140}px` }} /> <span className="faint">{fmtPercent((n / total) * 100)}</span></td>
               </tr>
             );
           })}
@@ -276,7 +276,7 @@ function PatternTable({ rows }: { rows: Record<string, unknown>[] }) {
           {pats.map(([p, x]) => (
             <Fragment key={p}>
               <tr className={open === p ? "on" : undefined} onClick={() => setOpen(open === p ? null : p)}>
-                <td><span className="sev-pill" style={{ background: SEVERITY_RANGES[x.sev].color }} /><span className="faint">{x.text || "—"}</span></td>
+                <td><span className="sev-pill" style={{ background: SEVERITY_RANGES[x.sev].color }} /><span className="faint">{x.text || "–"}</span></td>
                 <td>{p}</td><td className="muted">{[...x.services].join(", ")}</td><td className="num">{fmtNum(x.n)}</td>
               </tr>
               {open === p && (
@@ -297,7 +297,7 @@ function PatternTable({ rows }: { rows: Record<string, unknown>[] }) {
 
 function SeverityCell({ r }: { r: Record<string, unknown> }) {
   const i = severityRange(r.severity_number);
-  const text = String(r.severity_text ?? "") || sevName(Number(r.severity_number)).toUpperCase() || "—";
+  const text = String(r.severity_text ?? "") || sevName(Number(r.severity_number)).toUpperCase() || "–";
   return <><span className="sev-pill" style={{ background: SEVERITY_RANGES[i].color }} /><span className={`sev ${sevName(Number(r.severity_number))}`}>{text}</span></>;
 }
 

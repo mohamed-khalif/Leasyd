@@ -73,8 +73,8 @@ function CheckList({ ctx }: { ctx: Ctx }) {
                          return [<Dot ok={c.enabled ? ok : null} title={!c.enabled ? "paused" : ok == null ? "no runs in this range" : ok ? "passing" : "failing"} />,
                                  <span className="link">{c.name} ›</span>, isBrowser(c) ? "browser" : "HTTP", c.steps[0] ? describeStep(c.steps[0]) : "",
                                  String(c.steps.length), every(c.frequency),
-                                 !c.enabled ? "paused" : l ? fmtTs(String(l.ts)).slice(5, 16) : "—",
-                                 u ? pct(Number(u["avg(value)"])) : "—", ms.has(c.id) ? `${fmtNum(ms.get(c.id)!)} ms` : "—"];
+                                 !c.enabled ? "paused" : l ? fmtTs(String(l.ts)).slice(5, 16) : "–",
+                                 u ? pct(Number(u["avg(value)"])) : "–", ms.has(c.id) ? `${fmtNum(ms.get(c.id)!)} ms` : "–"];
                        })} />
           )}
       </Panel>

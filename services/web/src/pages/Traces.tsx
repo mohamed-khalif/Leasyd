@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { fmtMs, fmtNum, fmtTs } from "../lib/format";
+import { fmtClock, fmtMs, fmtNum, fmtPercent, fmtTs } from "../lib/format";
 import { records, Where } from "../api";
 import type { Ctx } from "../App";
 import { useHashParam, useHashSearch } from "../hashParams";
@@ -39,16 +39,16 @@ const kindName = (k: unknown) => {
   const n = Number(k);
   if (Number.isInteger(n) && KINDS[n]) return KINDS[n];
   const s = String(k ?? "").replace("SPAN_KIND_", "");
-  return s ? s[0] + s.slice(1).toLowerCase() : "—";
+  return s ? s[0] + s.slice(1).toLowerCase() : "–";
 };
 function spanType(a: Record<string, unknown> | undefined): string {
-  if (!a) return "—";
+  if (!a) return "–";
   if (a["db.system"] != null) return `DB · ${a["db.system"]}`;
   if (a["gen_ai.system"] != null) return "Gen AI";
   if (a["rpc.system"] != null) return a["rpc.system"] === "grpc" ? "gRPC" : "RPC";
   if (a["http.request.method"] != null || a["http.method"] != null) return "HTTP";
   if (a["messaging.system"] != null) return "Messaging";
-  return "—";
+  return "–";
 }
 const COLUMNS: Column[] = [
   { key: "name", label: "Name" }, { key: "service", label: "Service" }, { key: "start", label: "Start time" },
@@ -114,7 +114,7 @@ function Explorer({ ctx }: { ctx: Ctx }) {
           <h1>{v.label}</h1>
           {chart === "outliers" && heat.data && <>
             <span className="head-count"><b>{fmtNum(total)}</b>spans</span>
-            <span className="head-count bad"><b>{fmtNum(errors)}</b>errors{total ? ` (${((errors / total) * 100).toFixed(1)}%)` : ""}</span>
+            <span className="head-count bad"><b>{fmtNum(errors)}</b>errors{total ? ` (${fmtPercent((errors / total) * 100)})` : ""}</span>
           </>}
         </div>
         <form className="toolbar" onSubmit={(e) => { e.preventDefault(); setApplied(text); setCell(null); }}>
@@ -160,7 +160,7 @@ function Explorer({ ctx }: { ctx: Ctx }) {
 
         <section className="panel">
           <div className="tabs">
-            <span style={{ padding: "8px 4px", fontSize: 12.5 }}>{cell ? `Spans at ${new Date(cell.t).toLocaleTimeString()} taking ${fmtMs(bucketLow(cell.b))} – ${fmtMs(bucketLow(cell.b + 1))}` : "Spans"}</span>
+            <span style={{ padding: "8px 4px", fontSize: 12.5 }}>{cell ? `Spans at ${fmtClock(cell.t)} taking ${fmtMs(bucketLow(cell.b))} – ${fmtMs(bucketLow(cell.b + 1))}` : "Spans"}</span>
             <span className="faint" style={{ fontSize: 12, marginLeft: 8 }}>{spans.data ? (rows.length >= LIMIT ? `newest ${LIMIT}` : `${rows.length}`) : ""}</span>
             <span className="spacer" />
             <ColumnPicker columns={COLUMNS} shown={shown} onChange={setShown} />
@@ -277,14 +277,14 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
           <>
             <div className="trace-head">
               <button className="btn" onClick={() => ctx.go("/traces")}>← Tracing</button>
-              {rootKind !== "—" && <span className="trace-kind">{rootKind}</span>}
+              {rootKind !== "–" && <span className="trace-kind">{rootKind}</span>}
               <b className="trace-title">{root.name}</b>
               {rootStatus && <span className={Number(rootStatus) >= 500 || isError(root.status) ? "bad" : "faint"}>{rootStatus}</span>}
               {!rootStatus && isError(root.status) && <span className="bad">Error</span>}
               <span className="faint mono">#{traceId.slice(0, 16)}…</span>
               <span className="spacer" />
               <span className="faint">{tree.length} spans · {services.length} services · {fmtMs(t1 - t0)}</span>
-              {errors > 0 && <span className="bad">{errors} error{errors > 1 ? "s" : ""} ({((errors / tree.length) * 100).toFixed(1)}%)</span>}
+              {errors > 0 && <span className="bad">{errors} error{errors > 1 ? "s" : ""} ({fmtPercent((errors / tree.length) * 100)})</span>}
               <button type="button" className="btn ask-btn" onClick={() => ctx.go(`/ai?ask=${encodeURIComponent(`Explain trace \`${traceId}\`: what happened, what was slow or failed, and why?`)}&page=${encodeURIComponent(JSON.stringify({ trace_id: traceId }))}`)}>Ask Leasyd AI</button>
             </div>
             <div className="trace-split">
@@ -332,7 +332,7 @@ function Waterfall({ ctx, traceId }: { ctx: Ctx; traceId: string }) {
             <div>{logRows.map((r, i) => (
               <div key={i} className="logrow" style={{ cursor: "default" }}>
                 <span className="faint">{fmtTs(String(r.ts))}</span>
-                <span className={`sev ${String(r.severity_text ?? "").toLowerCase()}`}>{String(r.severity_text ?? "—")}</span>
+                <span className={`sev ${String(r.severity_text ?? "").toLowerCase()}`}>{String(r.severity_text ?? "–")}</span>
                 <span className="muted">{String(r.service)}</span>
                 <span className="body">{String(r.body ?? "")}</span>
               </div>

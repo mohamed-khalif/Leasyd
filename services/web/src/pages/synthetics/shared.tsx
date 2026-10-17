@@ -1,7 +1,7 @@
 // What the synthetic-check pages share (the list and form in Synthetics.tsx, one check in
 // CheckDetail.tsx): how steps, constraints and results read.
 import { useState } from "react";
-import { fmtNum } from "../../lib/format";
+import { fmtFixed, fmtNum, fmtRatio } from "../../lib/format";
 import { BrowserStep, CheckResult, Constraint, Step, StepResult } from "../../api";
 
 export const OK = "var(--ok, #3fb68b)";
@@ -31,7 +31,7 @@ export function describeStep(st: Step | BrowserStep): string {
 }
 
 // Two decimals from 90% up, so 98.96% never shows as "99.0%" (and red, below a 99% target).
-export const pct = (v: number) => `${(v * 100).toFixed(v >= 0.9995 ? 0 : v >= 0.9 ? 2 : 1)}%`;
+export const pct = (v: number) => fmtRatio(v);
 
 export const OPS: Record<string, string> = { equals: "=", not_equals: "≠", contains: "contains", lt: "<", gt: ">", exists: "exists" };
 export function describeConstraint(c: Constraint): string {
@@ -77,7 +77,7 @@ export function ResultBox({ result, note }: { result: CheckResult; note: string 
 function describeVitals(s: StepResult): string {
   const v = s.vitals!, ms = (x: number | null) => (x == null ? null : `${fmtNum(x)} ms`);
   return [["first byte", ms(v.ttfb_ms)], ["first paint", ms(v.fcp_ms)], ["largest paint", ms(v.lcp_ms)], ["loaded", ms(v.load_ms)],
-          ["layout shift", v.cls == null ? null : v.cls.toFixed(3)]].filter(([, x]) => x != null).map(([k, x]) => `${k} ${x}`).join(" · ");
+          ["layout shift", v.cls == null ? null : fmtFixed(v.cls, 3)]].filter(([, x]) => x != null).map(([k, x]) => `${k} ${x}`).join(" · ");
 }
 
 function BrowserDetails({ s }: { s: StepResult }) {

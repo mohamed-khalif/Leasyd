@@ -49,11 +49,11 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
   const paths = useMemo(() => props.series.map((s) => {
     const pts = [...s.points].sort((a, b) => a[0] - b[0]);
     if (!pts.length) return null;
-    const line = pts.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
+    const line = pts.map((p, i) => `${i ? "L" : "M"}${px(X(p[0]))},${px(Y(p[1]))}`).join(" ");
     return (
       <g key={s.label}>
         {props.area !== false && (
-          <path d={`${line} L${X(pts[pts.length - 1][0]).toFixed(1)},${Y(0)} L${X(pts[0][0]).toFixed(1)},${Y(0)} Z`}
+          <path d={`${line} L${px(X(pts[pts.length - 1][0]))},${Y(0)} L${px(X(pts[0][0]))},${Y(0)} Z`}
                 fill={s.color} opacity={0.14} />
         )}
         <path d={line} fill="none" stroke={s.color} strokeWidth={1.4} />
@@ -113,3 +113,6 @@ function niceMax(v: number): number {
   for (const m of [1, 1.5, 2, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
   return 10 * p;
 }
+
+/** An SVG coordinate to a tenth of a pixel (path text, not display). */
+const px = (v: number) => (Math.round(v * 10) / 10).toString();

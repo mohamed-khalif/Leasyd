@@ -1,7 +1,7 @@
 // SQL: one read-only SELECT (DuckDB SQL) over the tables logs, spans and metrics, for the time
 // range at the top. Results as a table, or a chart when the first column is a time.
 import { KeyboardEvent, useMemo, useRef, useState } from "react";
-import { fmtNum } from "../lib/format";
+import { fmtDuration, fmtNum } from "../lib/format";
 import { sql as runSql, SqlResult } from "../api";
 import type { Ctx } from "../App";
 import { TimeSeries } from "../components/TimeSeries";
@@ -128,7 +128,7 @@ export function Sql({ ctx }: { ctx: Ctx }) {
                 <button type="button" className={view === "chart" ? "on" : undefined} disabled={!chartable} title={chartable ? undefined : "Chart: first column a time, then numbers (and optionally one text column to split by)"}
                         onClick={() => setView("chart")}>Chart</button>
                 <span className="spacer" />
-                <span className="faint" style={{ fontSize: 12 }}>{fmtNum(result.rows.length)} rows{result.truncated ? " (first 10,000)" : ""} · {(ms / 1000).toFixed(1)} s
+                <span className="faint" style={{ fontSize: 12 }}>{fmtNum(result.rows.length)} rows{result.truncated ? " (first 10,000)" : ""} · {fmtDuration(ms)}
                   {result.stats?.files != null ? ` · ${result.stats.files} files` : ""}</span>
                 <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => downloadCsv("leasyd-query.csv", result.columns, result.rows)}>CSV</button>
               </div>

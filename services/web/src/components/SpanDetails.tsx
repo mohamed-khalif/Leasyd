@@ -1,7 +1,7 @@
 // Pieces of the span view shared by Traces and Lambda: the span type, a key/value list, and a
 // span's duration against its operation's other spans.
 import { records } from "../api";
-import { fmtMs, fmtNum } from "../lib/format";
+import { fmtMs, fmtNum, fmtPercent } from "../lib/format";
 import { bucketLow, LOG_STEPS } from "./Charts";
 import { Loads } from "./Panel";
 import { useQuery } from "../useQuery";
@@ -47,7 +47,7 @@ export function DurationCompare({ span, noun = "span" }: { span: Span; noun?: st
           <>
             <p className="faint" style={{ margin: 0 }}>
               {fmtMs(span.dur)} against {fmtNum(total)} <span className="mono">{span.name}</span> {noun}s within 30 min:{" "}
-              {faster >= 50 ? `slower than ${faster.toFixed(0)}%` : `faster than ${(100 - faster - share).toFixed(0)}%`} of them.
+              {faster >= 50 ? `slower than ${fmtPercent(Math.round(faster))}` : `faster than ${fmtPercent(Math.round(100 - faster - share))}`} of them.
             </p>
             <div className="dur-chart">
               {bars.map((x) => (

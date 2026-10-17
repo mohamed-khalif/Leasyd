@@ -4,7 +4,7 @@
 // drawer (?pod=namespace/name): its containers, usage against limits, events, logs and traces.
 // Queries: infra/queries.ts; contract: docs/gpu-kubernetes.md.
 import { useMemo, useState } from "react";
-import { ago, bytes, cores, fmtNum, pct } from "../lib/format";
+import { fmtAgo, fmtBytes, fmtCores, fmtNum, fmtPercent } from "../lib/format";
 import type { Ctx } from "../App";
 import { Capped } from "../components/Capped";
 import { Card, Drawer, Tabs } from "../components/Charts";
@@ -116,8 +116,8 @@ function Overview({ ctx, w, k, hint, f, nodes, pods, onPod, onTab }: Props & { o
               tone={phase(1) || phase(4) ? "warn" : undefined} />
         <Card label="Pods with problems" value={String(problems.length)} sub="crash loops, image pulls, OOM kills, restarts, pending"
               tone={problems.length ? "bad" : "ok"} />
-        <Card label="CPU" value={allocCpu ? pct((cpu / allocCpu) * 100) : "–"} sub={`${cores(cpu)} of ${cores(allocCpu)} allocatable`} />
-        <Card label="Memory" value={allocMem ? pct((mem / allocMem) * 100) : "–"} sub={`${bytes(mem)} of ${bytes(allocMem)}`} />
+        <Card label="CPU" value={allocCpu ? fmtPercent((cpu / allocCpu) * 100) : "–"} sub={`${fmtCores(cpu)} of ${fmtCores(allocCpu)} allocatable`} />
+        <Card label="Memory" value={allocMem ? fmtPercent((mem / allocMem) * 100) : "–"} sub={`${fmtBytes(mem)} of ${fmtBytes(allocMem)}`} />
         <Card label="Warning events" value={fmtNum(sum(warnings.map((e) => e.events)))} sub={`${warnings.length} kind${warnings.length === 1 ? "" : "s"} of trouble`} onClick={() => onTab("events")}
               tone={warnings.length ? "warn" : undefined} />
       </div>
@@ -151,12 +151,12 @@ function Overview({ ctx, w, k, hint, f, nodes, pods, onPod, onTab }: Props & { o
       <div className="grid2">
         <Panel title="CPU by namespace">
           <Loads q={loads(usage)} empty={!usage.rows.length} height={170}>
-            {() => <TimeSeries range={ctx.range} height={170} format={(v) => cores(v)} series={series("cpu")} />}
+            {() => <TimeSeries range={ctx.range} height={170} format={(v) => fmtCores(v)} series={series("cpu")} />}
           </Loads>
         </Panel>
         <Panel title="Memory by namespace">
           <Loads q={loads(usage)} empty={!usage.rows.length} height={170}>
-            {() => <TimeSeries range={ctx.range} height={170} format={(v) => bytes(v)} series={series("mem")} />}
+            {() => <TimeSeries range={ctx.range} height={170} format={(v) => fmtBytes(v)} series={series("mem")} />}
           </Loads>
         </Panel>
       </div>
@@ -174,7 +174,7 @@ function Bar({ used, total }: { used: number | null; total: number | null }) {
   if (used == null || !total) return <span className="faint">–</span>;
   const p = (used / total) * 100;
   return (
-    <span className="util" title={`${p.toFixed(1)}%`}>
+    <span className="util" title={fmtPercent(p)}>
       <span className="util-bar"><span style={{ width: `${Math.min(100, p)}%` }} className={p >= 90 ? "hot" : ""} /></span>
       <span>{Math.round(p)}%</span>
     </span>
@@ -196,8 +196,8 @@ function Nodes({ nodes }: Props) {
                 <td title={n.node}>{n.node}</td><td>{n.cluster || "–"}</td>
                 <td className="faint" title={n.zone}>{n.instance_type || "–"}</td>
                 <td className={n.ready === 1 ? "ok" : "bad"}>{n.ready === 1 ? "Ready" : n.ready === 0 ? "Not ready" : "Unknown"}</td>
-                <td className="num" title={`${cores(n.cpu)} of ${cores(n.alloc_cpu)}`}><Bar used={n.cpu} total={n.alloc_cpu} /></td>
-                <td className="num" title={`${bytes(n.mem)} of ${bytes(n.alloc_mem)}`}><Bar used={n.mem} total={n.alloc_mem} /></td>
+                <td className="num" title={`${fmtCores(n.cpu)} of ${fmtCores(n.alloc_cpu)}`}><Bar used={n.cpu} total={n.alloc_cpu} /></td>
+                <td className="num" title={`${fmtBytes(n.mem)} of ${fmtBytes(n.alloc_mem)}`}><Bar used={n.mem} total={n.alloc_mem} /></td>
                 <td className="num"><Bar used={n.fs_used} total={n.fs_cap} /></td>
                 <td className="num">{n.pods}{n.alloc_pods ? <span className="faint"> / {n.alloc_pods}</span> : null}</td>
                 <td className="num">{n.gpus ? <a href="#/gpus">{n.gpus}</a> : <span className="faint">–</span>}</td>
@@ -235,7 +235,7 @@ function Workloads({ w, k, hint, f, pods }: Props) {
                 <tr key={r.namespace + r.kind + r.name}>
                   <td title={r.name}>{r.name}</td><td className="faint">{r.kind}</td><td>{r.namespace}</td>
                   <td className={`num${ok ? "" : " warn"}`}>{r.kind === "Job" ? `${fmtNum(r.desired ?? 0)} active` : `${fmtNum(r.ready ?? 0)} / ${fmtNum(r.desired ?? 0)}`}</td>
-                  <td className="num">{u ? cores(u.cpu) : "–"}</td><td className="num">{u ? bytes(u.mem) : "–"}</td>
+                  <td className="num">{u ? fmtCores(u.cpu) : "–"}</td><td className="num">{u ? fmtBytes(u.mem) : "–"}</td>
                   <td className={`num${u?.restarts ? " warn" : ""}`}>{u ? fmtNum(u.restarts) : "–"}</td>
                 </tr>
               );
@@ -272,8 +272,8 @@ function Pods({ pods, onPod }: Props) {
                   <td>{p.namespace}</td>
                   <td className={why ? (why.includes("restart") ? "warn" : "bad") : "ok"}>{why ?? PHASES[p.phase ?? 0] ?? "–"}</td>
                   <td className="faint" title={p.node}>{p.node || "–"}</td>
-                  <td className="num">{cores(p.cpu)}</td><td className="num">{bytes(p.mem)}</td>
-                  <td className={`num${(p.mem_limit ?? 0) >= 0.9 ? " bad" : ""}`} title="memory as a share of its limit">{p.mem_limit == null ? "–" : pct(p.mem_limit * 100)}</td>
+                  <td className="num">{fmtCores(p.cpu)}</td><td className="num">{fmtBytes(p.mem)}</td>
+                  <td className={`num${(p.mem_limit ?? 0) >= 0.9 ? " bad" : ""}`} title="memory as a share of its limit">{p.mem_limit == null ? "–" : fmtPercent(p.mem_limit * 100)}</td>
                   <td className={`num${p.restarts ? " warn" : ""}`}>{p.restarts == null ? "–" : fmtNum(p.restarts)}</td>
                 </tr>
               );
@@ -305,7 +305,7 @@ function EventTable({ rows, onPod }: { rows: Q.EventRow[]; onPod?: (id: string) 
         <th>Message</th><th className="num">Count</th></tr></thead>
       <tbody>{rows.map((e) => (
         <tr key={e.namespace + e.object + e.reason} onClick={() => onPod && e.kind === "Pod" && onPod(`${e.namespace}/${e.object}`)}>
-          <td className="faint">{ago(e.last)}</td>
+          <td className="faint">{fmtAgo(e.last)}</td>
           <td className={e.warning ? "warn" : ""}>{e.reason}</td>
           <td title={e.object}>{e.object}<div className="faint">{e.kind}{e.namespace ? ` · ${e.namespace}` : ""}</div></td>
           <td style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{e.message}</td>
@@ -319,8 +319,6 @@ function EventTable({ rows, onPod }: { rows: Q.EventRow[]; onPod?: (id: string) 
 // ------------------------------------------------------------------ one pod
 
 /** Kubernetes' own short forms: 200m, 1.5 (cores); 410Mi, 2Gi. */
-const cpuShort = (v: number | null) => (v == null ? "–" : v < 1 ? `${Math.round(v * 1000)}m` : `${+v.toFixed(2)}`);
-const memShort = (v: number | null) => (v == null ? "–" : v >= 2 ** 30 ? `${+(v / 2 ** 30).toFixed(1)}Gi` : `${Math.round(v / 2 ** 20)}Mi`);
 
 function PodDrawer({ ctx, w, hint, id, row, onClose }: { ctx: Ctx; w: { start: string; end: string }; hint: ReturnType<typeof useHint>;
   id: string; row?: Q.PodRow; onClose: () => void }) {
@@ -341,7 +339,7 @@ function PodDrawer({ ctx, w, hint, id, row, onClose }: { ctx: Ctx; w: { start: s
           {row.workload && <><dt>Workload</dt><dd>{row.kind} {row.workload}</dd></>}
           {row.team && <><dt>Team</dt><dd>{row.team}</dd></>}
           <dt>Node</dt><dd>{row.node || "not scheduled"}{row.cluster && <span className="faint"> · {row.cluster}</span>}</dd>
-          <dt>Now</dt><dd>{cores(row.cpu)} CPU · {bytes(row.mem)} memory{row.mem_limit != null && ` (${pct(row.mem_limit * 100)} of its limit)`}</dd>
+          <dt>Now</dt><dd>{fmtCores(row.cpu)} CPU · {fmtBytes(row.mem)} memory{row.mem_limit != null && ` (${fmtPercent(row.mem_limit * 100)} of its limit)`}</dd>
         </dl>
       )}
       <p style={{ display: "flex", gap: 14 }}>
@@ -359,8 +357,8 @@ function PodDrawer({ ctx, w, hint, id, row, onClose }: { ctx: Ctx; w: { start: s
                 <td title={c.image}>{c.container}<div className="faint">{c.image}</div></td>
                 <td className={c.reason ? "bad" : c.ready === 1 ? "ok" : "warn"}>{c.reason || (c.ready === 1 ? "ready" : "not ready")}</td>
                 <td className={`num${c.restarts ? " warn" : ""}`}>{fmtNum(c.restarts ?? 0)}<span className="faint"> ({fmtNum(c.restarts_total ?? 0)} total)</span></td>
-                <td className="num" title="request / limit">{cpuShort(c.cpu_request)} / {c.cpu_limit == null ? "–" : cpuShort(c.cpu_limit)}</td>
-                <td className="num" title="request / limit">{memShort(c.mem_request)} / {c.mem_limit == null ? "–" : memShort(c.mem_limit)}</td>
+                <td className="num" title="request / limit">{fmtCores(c.cpu_request)} / {fmtCores(c.cpu_limit)}</td>
+                <td className="num" title="request / limit">{fmtBytes(c.mem_request)} / {fmtBytes(c.mem_limit)}</td>
               </tr>
             ))}</tbody>
           </table>)}</Capped>
@@ -370,8 +368,8 @@ function PodDrawer({ ctx, w, hint, id, row, onClose }: { ctx: Ctx; w: { start: s
       <Loads q={loads(series)} empty={!series.rows.length} height={120}>
         {() => (
           <>
-            <TimeSeries range={ctx.range} height={110} format={(v) => cores(v)} series={[{ label: "CPU", color: "var(--series-1)", points: pts("cpu") }]} />
-            <TimeSeries range={ctx.range} height={110} format={(v) => bytes(v)} series={[{ label: "memory", color: "var(--series-2)", points: pts("mem") }]} />
+            <TimeSeries range={ctx.range} height={110} format={(v) => fmtCores(v)} series={[{ label: "CPU", color: "var(--series-1)", points: pts("cpu") }]} />
+            <TimeSeries range={ctx.range} height={110} format={(v) => fmtBytes(v)} series={[{ label: "memory", color: "var(--series-2)", points: pts("mem") }]} />
             {series.rows.some((r) => r.mem_limit != null) && (
               <TimeSeries range={ctx.range} height={110} unit="%" thresholds={[{ value: 100, color: "var(--sev-error)" }]} series={[
                 { label: "memory of limit", color: "var(--series-5)", points: pts("mem_limit", 100) },

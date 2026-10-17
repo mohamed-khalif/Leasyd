@@ -59,25 +59,75 @@ export function fmtTs(iso: string): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
-// Kubernetes and GPU pages
-export const bytes = (v: number | null | undefined) => {
+/** Shown for a value that is missing or not a number. */
+export const NONE = "–";
+const missing = (v: number | null | undefined): v is null | undefined => v == null || !Number.isFinite(v);
+/** toFixed without trailing zeros: 12.50 -> "12.5", 12.00 -> "12". */
+const trim = (v: number, digits: number) => String(Number(v.toFixed(digits)));
+
+/** An exact count with thousands separators: 1,234,567. */
+export const fmtInt = (n: number | null | undefined) => (missing(n) ? NONE : Math.round(n).toLocaleString());
+
+/** A fixed number of decimals (clamped to 0-20, which toFixed accepts). */
+export const fmtFixed = (v: number | null | undefined, digits: number) =>
+  missing(v) ? NONE : v.toFixed(Math.min(20, Math.max(0, Math.round(Number.isFinite(digits) ? digits : 0))));
+
+/** v in 0-100. 2 decimals below 1% and from 90% (99.96% is never "100%"), else 1; no trailing zeros. */
+export function fmtPercent(v: number | null | undefined, digits?: number): string {
+  if (missing(v)) return NONE;
+  const d = digits ?? (v === 0 || v === 100 ? 0 : Math.abs(v) < 1 || (v >= 90 && v < 100) ? 2 : 1);
+  let out = trim(v, d);
+  if (v < 100 && Number(out) >= 100) out = trim(v, d + 2);   // never round up to 100%
+  return `${out}%`;
+}
+/** v as a fraction (0-1), shown as a percent. */
+export const fmtRatio = (v: number | null | undefined, digits?: number) => (missing(v) ? NONE : fmtPercent(v * 100, digits));
+
+/** Milliseconds as people read them: 850 ms, 1.23 s, 4 min, 2.5 h, 3 days. */
+export function fmtDuration(ms: number | null | undefined): string {
+  if (missing(ms)) return NONE;
+  if (Math.abs(ms) < 1000) return fmtMs(ms * 1e6);
+  if (Math.abs(ms) < 60_000) return `${(ms / 1000).toFixed(2)} s`;
+  if (Math.abs(ms) < 90 * 60_000) return `${Math.round(ms / 60_000)} min`;
+  if (Math.abs(ms) < 36 * 3_600_000) return `${trim(ms / 3_600_000, 1)} h`;
+  return `${Math.round(ms / 86_400_000)} days`;   // 36 h or more: 2 days or more
+}
+
+/** How long ago: just now (under 10 s), 45 s ago, 12 min ago, 5 h ago, 3 days ago. */
+export function fmtAgo(t: string | number | null | undefined, now = Date.now()): string {
+  if (t == null || t === "") return NONE;
+  const at = typeof t === "number" ? t : Date.parse(t);
+  if (!Number.isFinite(at)) return NONE;
+  const s = Math.max(0, (now - at) / 1000);
+  if (s < 10) return "just now";
+  if (s < 90) return `${Math.round(s)} s ago`;
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129_600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+/** A moment within the visible range: 14:05:07. */
+export const fmtClock = (t: string | number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+/** A moment that may be on another day: 17 Oct, 14:05 (order follows the viewer's locale). */
+export const fmtDateTime = (t: string | number, seconds = false) =>
+  new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hour12: false });
+
+/** Prices per unit: 2 decimals, or 3 when the third isn't zero ($0.18, $0.075, $3.43). */
+export const fmtUnitPrice = (v: number) => `$${Math.round(v * 1000) % 10 ? v.toFixed(3) : v.toFixed(2)}`;
+
+// Sizes, CPU, hours and money
+export const fmtBytes = (v: number | null | undefined) => {
   if (v == null || !isFinite(v)) return "–";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let i = 0, n = v;
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+  return `${n >= 100 || i === 0 ? Math.round(n) : trim(n, 1)} ${units[i]}`;
 };
-export const mib = (v: number | null | undefined) => (v == null ? "–" : bytes(v * 2 ** 20));
-export const cores = (v: number | null | undefined) =>
+export const fmtMiB = (v: number | null | undefined) => (v == null ? NONE : fmtBytes(v * 2 ** 20));
+export const fmtCores = (v: number | null | undefined) =>
   v == null ? "–" : v >= 10 ? `${v.toFixed(1)} cores` : v >= 1 ? `${v.toFixed(2)} cores` : `${Math.round(v * 1000)}m`;
-export const pct = (v: number | null | undefined, digits = 0) => (v == null || !isFinite(v) ? "–" : `${v.toFixed(digits)}%`);
-export const hours = (v: number | null | undefined) =>
+export const fmtHours = (v: number | null | undefined) =>
   v == null ? "–" : v >= 100 ? `${fmtNum(Math.round(v))} h` : v >= 1 ? `${v.toFixed(1)} h` : `${Math.round(v * 60)} min`;
-export const money = (v: number) =>
+export const fmtUsd = (v: number) =>
   v >= 1000 ? `$${fmtNum(Math.round(v))}` : v >= 10 ? `$${v.toFixed(0)}` : `$${v.toFixed(2)}`;
-export const ago = (iso: string | null | undefined, now = Date.now()) => {
-  if (!iso) return "–";
-  const s = Math.max(0, (now - Date.parse(iso)) / 1000);
-  return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129_600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
-};
 export const shortGpu = (uuid: string) => (uuid.startsWith("GPU-") ? uuid.slice(4, 12) : uuid);

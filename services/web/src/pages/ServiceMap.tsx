@@ -4,7 +4,7 @@
 // Clicking a service opens its panel: what it runs on, requests / errors / duration over time,
 // and its operations.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fmtMs, fmtNum } from "../lib/format";
+import { fmtMs, fmtNum, fmtPercent } from "../lib/format";
 import { sqlString as q } from "../lib/sql";
 import { records } from "../api";
 import type { Ctx } from "../App";
@@ -152,7 +152,7 @@ function Graph(p: { nodes: Node[]; edges: Edge[]; minutes: number; selected: str
         {p.nodes.map((n) => (
           <g key={n.service} className={`svc-node ${health(errPct(n))}${p.selected === n.service ? " sel" : ""}${dim(n.service) ? " dim" : ""}`}
              transform={`translate(${n.x},${n.y})`} onClick={(e) => { e.stopPropagation(); p.onPick(p.selected === n.service ? null : n.service); }}
-             tabIndex={0} role="button" aria-label={`${n.service}: ${perMin(n.requests, p.minutes)}, ${errPct(n).toFixed(1)}% errors`}
+             tabIndex={0} role="button" aria-label={`${n.service}: ${perMin(n.requests, p.minutes)}, ${fmtPercent(errPct(n))} errors`}
              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onPick(n.service); } }}>
             <rect x={-30} y={-30} width={60} height={60} rx={10} />
             <text className="svc-rate" y={4} textAnchor="middle">{perMin(n.requests, p.minutes)}</text>
@@ -226,7 +226,7 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
         <div className="svc-panel-body">
           <div className="svc-tiles">
             <Tile label="Requests" value={fmtNum(node.requests)} sub={perMin(node.requests, minutes)} pts={rows.map((r) => Number(r.n))} bars />
-            <Tile label="Error rate" value={`${pct.toFixed(2)}%`} sub={`${fmtNum(node.errors)} failed`} pts={rows.map((r) => (Number(r.n) ? (Number(r.e) / Number(r.n)) * 100 : 0))} bad={pct >= 1} />
+            <Tile label="Error rate" value={fmtPercent(pct)} sub={`${fmtNum(node.errors)} failed`} pts={rows.map((r) => (Number(r.n) ? (Number(r.e) / Number(r.n)) * 100 : 0))} bad={pct >= 1} />
             <Tile label="Duration avg" value={fmtMs(node.avg_ms * 1e6)} sub="per request" pts={rows.map((r) => Number(r.ms ?? 0))} />
           </div>
           <div className="svc-summary">

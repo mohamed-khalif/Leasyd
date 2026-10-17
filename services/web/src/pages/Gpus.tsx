@@ -4,7 +4,7 @@
 // heat) and Planning (daily peaks, never-needed GPUs, the demand trend). A GPU opens in a drawer.
 // Queries: infra/queries.ts; conclusions: infra/analysis.ts; contract: docs/gpu-kubernetes.md.
 import { useState } from "react";
-import { ago, fmtNum, hours, mib, money, pct, shortGpu } from "../lib/format";
+import { fmtAgo, fmtDateTime, fmtDuration, fmtFixed, fmtHours, fmtMiB, fmtNum, fmtPercent, fmtUsd, shortGpu } from "../lib/format";
 import type { Ctx } from "../App";
 import { Capped } from "../components/Capped";
 import { Card, Drawer, StackedBars, Tabs } from "../components/Charts";
@@ -89,10 +89,10 @@ function Overview({ ctx, w, k, hint, f, fleet, prices, onGpu, onTab }: Props & {
         <Card label="GPUs" value={fmtNum(gs.length)} sub={models.map((m) => `${m.gpus} × ${m.label.replace(/^NVIDIA /, "")}`).join(" · ") || "–"} />
         <Card label="Busy now" value={`${state.active} of ${gs.length}`} sub={`${state.idle} held but idle · ${state.free} unallocated`}
               tone={state.idle ? "warn" : undefined} />
-        <Card label="Utilization" value={pct(utilAvg)} sub="average over the range" />
-        <Card label="Estimated spend" value={money(spend.total)} sub={`in the range · ${money(perHour)} an hour now`} />
-        <Card label="Idle spend" value={money(spend.idle + spend.free)} onClick={() => onTab("workloads")}
-              sub={`${money(spend.idle)} held idle · ${money(spend.free)} unallocated`} tone={spend.idle + spend.free > spend.total * 0.2 ? "warn" : undefined} />
+        <Card label="Utilization" value={fmtPercent(utilAvg)} sub="average over the range" />
+        <Card label="Estimated spend" value={fmtUsd(spend.total)} sub={`in the range · ${fmtUsd(perHour)} an hour now`} />
+        <Card label="Idle spend" value={fmtUsd(spend.idle + spend.free)} onClick={() => onTab("workloads")}
+              sub={`${fmtUsd(spend.idle)} held idle · ${fmtUsd(spend.free)} unallocated`} tone={spend.idle + spend.free > spend.total * 0.2 ? "warn" : undefined} />
         <Card label="Hardware issues" value={health.loading ? "…" : String(issues)} onClick={() => onTab("health")}
               sub={issues ? "GPUs with XIDs, ECC errors, throttling or heat" : "none in this range"} tone={issues ? "bad" : "ok"} />
       </div>
@@ -122,7 +122,7 @@ function Overview({ ctx, w, k, hint, f, fleet, prices, onGpu, onTab }: Props & {
                   <tr key={m.model}><td title={m.model}>{m.model}</td><td className="num">{m.gpus}</td><td className="num">{m.nodes}</td>
                     <td className="num"><UtilBar v={m.util} /></td>
                     <td className="num" title={m.own_price ? "your price (Settings)" : "AWS on-demand list price; set yours in Settings"}>
-                      {money(m.usd_per_hour)}{m.own_price ? "" : " *"}</td></tr>
+                      {fmtUsd(m.usd_per_hour)}{m.own_price ? "" : " *"}</td></tr>
                 ))}</tbody>
               </table>
             )}
@@ -146,10 +146,10 @@ function Overview({ ctx, w, k, hint, f, fleet, prices, onGpu, onTab }: Props & {
                   <td title={g.holder_now}>{g.holder_now ? <>{g.holder_now.split("/").pop()}{g.team_now && <span className="faint"> · {g.team_now}</span>}</>
                     : <span className="faint">unallocated</span>}</td>
                   <td className="num"><UtilBar v={g.util_now} /></td>
-                  <td className="num">{pct(g.util_avg)}</td>
-                  <td className="num" title={`${mib(g.mem_used_now)} of ${mib(g.mem_total)}`}>{memShort(g.mem_used_now, g.mem_total)}</td>
+                  <td className="num">{fmtPercent(g.util_avg)}</td>
+                  <td className="num" title={`${fmtMiB(g.mem_used_now)} of ${fmtMiB(g.mem_total)}`}>{memShort(g.mem_used_now, g.mem_total)}</td>
                   <td className={`num${(g.temp_max ?? 0) >= HOT_TEMP ? " bad" : ""}`}>{g.temp_max == null ? "–" : `${Math.round(g.temp_max)} °C`}</td>
-                  <td className={`num${g.idle_hours > g.hours / 2 ? " warn" : ""}`}>{hours(g.idle_hours + g.free_hours)}</td>
+                  <td className={`num${g.idle_hours > g.hours / 2 ? " warn" : ""}`}>{fmtHours(g.idle_hours + g.free_hours)}</td>
                 </tr>
               ))}</tbody>
             </table>)}</Capped>
@@ -173,8 +173,7 @@ function UtilBar({ v }: { v: number | null | undefined }) {
 /** "13.7 / 22.5 GiB" from MiB. */
 function memShort(used: number | null, total: number | null) {
   if (used == null) return "–";
-  const g = (v: number) => (v / 1024).toFixed(v >= 10240 ? 0 : 1);
-  return total ? `${g(used)} / ${g(total)} GiB` : mib(used);
+  return total ? `${fmtMiB(used)} / ${fmtMiB(total)}` : fmtMiB(used);
 }
 
 function weightedUtil(gs: Q.GpuRow[]) {
@@ -197,10 +196,10 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
   return (
     <>
       <div className="cards" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
-        <Card label="Estimated spend" value={money(spend.total)} sub={`${hours(fleet.rows.reduce((s, g) => s + g.hours, 0))} of GPU time in the range`} />
-        <Card label="Held but idle" value={money(spend.idle)} sub="workloads holding GPUs they don't use: reclaimable" tone={spend.idle ? "warn" : undefined} />
-        <Card label="Unallocated" value={money(spend.free)} sub="GPUs no workload held: spare capacity" />
-        <Card label="Utilization of held GPUs" value={pct(heldUtil)} sub="how hard workloads use the GPUs they hold" />
+        <Card label="Estimated spend" value={fmtUsd(spend.total)} sub={`${fmtHours(fleet.rows.reduce((s, g) => s + g.hours, 0))} of GPU time in the range`} />
+        <Card label="Held but idle" value={fmtUsd(spend.idle)} sub="workloads holding GPUs they don't use: reclaimable" tone={spend.idle ? "warn" : undefined} />
+        <Card label="Unallocated" value={fmtUsd(spend.free)} sub="GPUs no workload held: spare capacity" />
+        <Card label="Utilization of held GPUs" value={fmtPercent(heldUtil)} sub="how hard workloads use the GPUs they hold" />
       </div>
 
       <Panel title="Recommendations" flush right={<a href={`#/alerts/rules/new?template=${encodeURIComponent("GPU held but idle")}`}>Alert me when a GPU sits idle ›</a>}>
@@ -208,7 +207,7 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
           {() => recs.length ? (
             <ul className="recs">{recs.map((r, i) => (
               <li key={i} className={r.level}>
-                <div className="rec-title">{r.title}{r.monthly_saving ? <span className="rec-save">≈ {money(r.monthly_saving)} a month</span> : null}</div>
+                <div className="rec-title">{r.title}{r.monthly_saving ? <span className="rec-save">≈ {fmtUsd(r.monthly_saving)} a month</span> : null}</div>
                 <div className="faint">{r.detail}</div>
               </li>
             ))}</ul>
@@ -225,7 +224,7 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
                   <th className="num">Spend</th><th className="num" style={{ width: 100 }}>Idle spend</th></tr></thead>
                 <tbody>{teams.map((t) => (
                   <tr key={t.team}><td>{t.team}</td><td className="num">{t.gpus}</td><td className="num"><UtilBar v={t.util} /></td>
-                    <td className="num">{money(t.spend)}</td><td className={`num${t.idle_spend > t.spend * 0.5 ? " warn" : ""}`}>{money(t.idle_spend)}</td></tr>
+                    <td className="num">{fmtUsd(t.spend)}</td><td className={`num${t.idle_spend > t.spend * 0.5 ? " warn" : ""}`}>{fmtUsd(t.idle_spend)}</td></tr>
                 ))}</tbody>
               </table>
             )}
@@ -238,7 +237,7 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
                 <thead><tr><th style={{ width: "40%" }}>Pod</th><th>Since</th><th className="num">Tries</th><th>Now</th></tr></thead>
                 <tbody>{stalled.rows.map((s) => (
                   <tr key={s.namespace + s.pod} title={s.message} onClick={() => ctx.go(`/kubernetes?pod=${encodeURIComponent(`${s.namespace}/${s.pod}`)}`)}>
-                    <td>{s.pod}<div className="faint">{s.namespace}</div></td><td className="faint">{ago(s.first)}</td>
+                    <td>{s.pod}<div className="faint">{s.namespace}</div></td><td className="faint">{fmtAgo(s.first)}</td>
                     <td className="num">{fmtNum(s.events)}</td>
                     <td className={s.phase === 1 ? "warn" : "faint"}>{s.phase === 1 ? "still pending" : s.phase === 2 ? "running" : "gone"}</td></tr>
                 ))}</tbody>
@@ -264,9 +263,9 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
                     <td title={r.model}>{r.model.replace(/^NVIDIA /, "")}</td>
                     <td className="num">{r.gpus}{r.holding_now !== r.gpus ? <span className="faint"> ({r.holding_now} now)</span> : null}</td>
                     <td className="num"><UtilBar v={r.util_avg} /></td>
-                    <td className="num">{hours(r.hours)}</td>
-                    <td className="num">{money(r.hours * p)}</td>
-                    <td className={`num${idleShare >= 0.8 ? " warn" : ""}`}>{pct(idleShare * 100)}</td>
+                    <td className="num">{fmtHours(r.hours)}</td>
+                    <td className="num">{fmtUsd(r.hours * p)}</td>
+                    <td className={`num${idleShare >= 0.8 ? " warn" : ""}`}>{fmtPercent(idleShare * 100)}</td>
                   </tr>
                 );
               })}</tbody>
@@ -325,7 +324,7 @@ function Health({ w, k, hint, f, onGpu }: Props & { onGpu: (g: string) => void }
                 const info = xidInfo(x.xid);
                 return (
                   <tr key={x.gpu + x.xid + x.first} onClick={() => onGpu(x.gpu)}>
-                    <td className="faint">{new Date(x.last).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="faint">{fmtDateTime(x.last)}</td>
                     <td title={x.gpu}>{x.node}<div className="faint mono">{shortGpu(x.gpu)}{x.holder ? ` · ${x.holder}` : ""}</div></td>
                     <td className={info.level === "critical" ? "bad" : info.level === "warning" ? "warn" : ""} style={{ whiteSpace: "normal" }}>
                       XID {x.xid}: {info.title}</td>
@@ -354,7 +353,7 @@ function Signs({ r }: { r: Q.GpuHealthRow }) {
   return <>{out.map(([t, tone]) => <span key={t} className={`pill ${tone}`}>{t}</span>)}</>;
 }
 
-const fmtSeconds = (s: number) => (s >= 3600 ? `${(s / 3600).toFixed(1)} h` : s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`);
+const fmtSeconds = (s: number) => fmtDuration(s * 1000);
 
 // ------------------------------------------------------------------ planning
 
@@ -376,9 +375,9 @@ function Planning({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Return
         <Card label="GPUs in the fleet" value={fc ? String(fc.fleet) : "–"} sub="the most present at once" />
         <Card label="Most held at once" value={fc ? String(fc.peak_held) : "–"} sub={fc ? `${fc.peak_active} busy at the busiest moment` : ""} />
         <Card label="Never needed" value={fc ? String(fc.never_needed) : "–"} tone={fc?.never_needed ? "warn" : undefined}
-              sub={fc?.never_needed ? (never.length ? `≈ ${money(neverPerMonth)} a month if released` : "held at once at no moment") : "every GPU was held at some point"} />
+              sub={fc?.never_needed ? (never.length ? `≈ ${fmtUsd(neverPerMonth)} a month if released` : "held at once at no moment") : "every GPU was held at some point"} />
         <Card label="Busy peak in 30 days" value={fc?.in_30_days == null ? "–" : String(fc.in_30_days)}
-              sub={fc?.in_30_days == null ? "needs 3 days or more" : `trend ${fc.slope_per_day >= 0 ? "+" : ""}${fc.slope_per_day.toFixed(2)} GPUs a day`}
+              sub={fc?.in_30_days == null ? "needs 3 days or more" : `trend ${fc.slope_per_day >= 0 ? "+" : ""}${fmtFixed(fc.slope_per_day, 2)} GPUs a day`}
               tone={fc?.in_30_days != null && fc.in_30_days > fc.fleet ? "bad" : undefined} />
       </div>
       <Panel title="Daily peaks" right={<span className="faint">the most GPUs present, held and busy at once each day; busy: 95th percentile too</span>}>
@@ -428,7 +427,7 @@ function GpuDrawer({ ctx, w, hint, gpu, row, onClose }: { ctx: Ctx; w: { start: 
           {row.cluster && <><dt>Cluster</dt><dd>{row.cluster}</dd></>}
           <dt>UUID</dt><dd className="mono">{gpu}</dd>
           <dt>Used by</dt><dd>{holder ? <a href={`#/kubernetes?pod=${encodeURIComponent(holder)}`}>{holder}</a> : "unallocated"}{row.team_now && <span className="faint"> · team {row.team_now}</span>}</dd>
-          <dt>In the range</dt><dd>{hours(row.active_hours)} busy · {hours(row.idle_hours)} held idle · {hours(row.free_hours)} unallocated</dd>
+          <dt>In the range</dt><dd>{fmtHours(row.active_hours)} busy · {fmtHours(row.idle_hours)} held idle · {fmtHours(row.free_hours)} unallocated</dd>
         </dl>
       )}
       {mine.length > 0 && (
@@ -438,7 +437,7 @@ function GpuDrawer({ ctx, w, hint, gpu, row, onClose }: { ctx: Ctx; w: { start: 
             const info = xidInfo(x.xid);
             return (
               <li key={x.xid + x.first} className={info.level}>
-                <div className="rec-title">XID {x.xid}: {info.title}<span className="faint" style={{ fontWeight: 400 }}>{ago(x.last)}{x.holder ? ` · ${x.holder}` : ""}</span></div>
+                <div className="rec-title">XID {x.xid}: {info.title}<span className="faint" style={{ fontWeight: 400 }}>{fmtAgo(x.last)}{x.holder ? ` · ${x.holder}` : ""}</span></div>
                 <div className="faint">{info.action}</div>
               </li>
             );
@@ -454,7 +453,7 @@ function GpuDrawer({ ctx, w, hint, gpu, row, onClose }: { ctx: Ctx; w: { start: 
               { label: "engine active", color: "var(--series-4)", points: s("engine", 100) },
               { label: "tensor cores", color: "var(--series-2)", points: s("tensor", 100) }].filter((x) => x.points.length)} />
             <h4>Memory used</h4>
-            <TimeSeries range={ctx.range} height={120} format={(v) => mib(v)} series={[{ label: "memory used", color: "var(--series-3)", points: s("mem_used") }]} />
+            <TimeSeries range={ctx.range} height={120} format={(v) => fmtMiB(v)} series={[{ label: "memory used", color: "var(--series-3)", points: s("mem_used") }]} />
             <h4>Temperature and power</h4>
             <TimeSeries range={ctx.range} height={120} thresholds={[{ value: HOT_TEMP, color: "var(--sev-error)" }]} series={[
               { label: "temperature °C", color: "var(--sev-error)", points: s("temp") }, { label: "power W", color: "var(--series-5)", points: s("power") }]} />

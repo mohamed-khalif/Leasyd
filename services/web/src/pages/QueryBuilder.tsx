@@ -1,7 +1,7 @@
 // Query Builder: one chart from one or more queries. Each query is built on Tracing, Logging or
 // Metrics (which write PromQL for you) or written as PromQL, and runs over all signals.
 import { KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { fmtNum } from "../lib/format";
+import { fmtFixed, fmtNum } from "../lib/format";
 import { dashboards, DashboardSummary, Panel, promql, PromSeries, records } from "../api";
 import type { Ctx } from "../App";
 import { replaceHashParams } from "../hashParams";
@@ -167,7 +167,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
   }, [queries, results]);   // every point of every series: not on each keystroke elsewhere on the page
   const sorted = [...series].sort((a, b) => (settings.sort === "name" ? a.label.localeCompare(b.label) : b.avg - a.avg));
   const unit = settings.unit || (queries.length === 1 ? unitOf(queries[0]) ?? "" : "");
-  const fmt = (v: number) => (settings.decimals ? v.toFixed(Number(settings.decimals)) : fmtNum(v)) + unit;
+  const fmt = (v: number) => (settings.decimals ? fmtFixed(v, Number(settings.decimals)) : fmtNum(v)) + unit;
   const loading = results.some((r) => r?.loading);
   const errors = results.map((r, i) => r?.error && !queries[i].hidden ? `${queries[i].name || `Query ${i + 1}`}: ${r.error}` : null).filter(Boolean);
   const threshold = settings.threshold === "" ? null : Number(settings.threshold);

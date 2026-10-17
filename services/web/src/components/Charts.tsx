@@ -2,7 +2,7 @@
 // a tree map, a pass/fail strip, a views sidebar, tabs, a column picker, collapsible sections
 // and a side drawer. Plain SVG and CSS; sizes follow the container.
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { fmtMs, fmtNum, fmtTime } from "../lib/format";
+import { fmtDateTime, fmtMs, fmtNum, fmtTime } from "../lib/format";
 import { Range } from "../time";
 
 /** The element's width, kept current as it resizes. */
@@ -86,7 +86,7 @@ export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bu
         </svg>
         {hb && (
           <Tip x={hover!} w={w}>
-            <div className="faint">{new Date(hb.t).toLocaleString()}</div>
+            <div className="faint">{fmtDateTime(hb.t, true)}</div>
             {p.keys.map((k, i) => hb.values[i] ? (
               <div key={k.label} className="tip-row"><i style={{ background: k.color }} />{k.label}<b>{fmt(hb.values[i])}</b></div>
             ) : null)}
@@ -151,7 +151,7 @@ export function Heatmap(p: { cells: Cell[]; range: Range; bucketMs: number; heig
       </svg>
       {hover && (
         <Tip x={hx} w={w}>
-          <div className="faint">{new Date(hover.t).toLocaleString()}</div>
+          <div className="faint">{fmtDateTime(hover.t, true)}</div>
           <div className="tip-row">took {fmtMs(bucketLow(hover.b))} – {fmtMs(bucketLow(hover.b + 1))}</div>
           <div className="tip-row"><i style={{ background: "var(--accent)" }} />spans<b>{fmtNum(hover.count)}</b></div>
           {hover.errors > 0 && <div className="tip-row"><i style={{ background: "var(--sev-error)" }} />errors<b>{fmtNum(hover.errors)}</b></div>}

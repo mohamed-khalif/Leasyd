@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { fmtNum } from "../lib/format";
+import { fmtFixed, fmtNum, fmtPercent } from "../lib/format";
 import { Check, notExcluded, Query, Result, Slo, slos, Where } from "../api";
 import type { Ctx } from "../App";
 import { CheckListError, useCheckList } from "../checkList";
@@ -79,9 +79,9 @@ function useSlo(slo: Slo | null, excluded: string[], tick: number) {
   return { status, loaded, now };
 }
 
-const pct = (v: number | null, digits = 3) => (v == null ? "—" : `${Number(v.toFixed(digits))}%`);
+const pct = (v: number | null, digits = 3) => fmtPercent(v, digits);
 const stateColor = (s: SloStatus["state"]) => (s === "healthy" ? OK : s === "at risk" ? WARN : s === "breached" ? BAD : "var(--text-3)");
-const budgetText = (b: number | null) => (b == null ? "—" : b === -Infinity ? "used up" : `${Math.round(Math.max(-9.99, b) * 100)}%`);
+const budgetText = (b: number | null) => (b == null ? "–" : b === -Infinity ? "used up" : `${Math.round(Math.max(-9.99, b) * 100)}%`);
 
 function BudgetBar({ left }: { left: number | null }) {
   const v = left == null || left === -Infinity ? 0 : Math.max(0, Math.min(1, left));
@@ -200,13 +200,13 @@ function SloDetail({ ctx, id }: { ctx: Ctx; id: string }) {
         <div className="grid">
           <div className="span-3"><Loads q={loaded} height={84}>{() => <Stat small value={pct(status?.attainment ?? null)} sub={`current (target ${slo.target}%)`} />}</Loads></div>
           <div className="span-3"><Loads q={loaded} height={84}>{() => <Stat small value={budgetText(status?.budgetLeft ?? null)} sub="error budget left" />}</Loads></div>
-          <div className="span-3"><Loads q={loaded} height={84}>{() => <Stat small value={status ? `${fmtNum(status.bad)} / ${fmtNum(Math.floor(status.allowedBad))}` : "—"}
+          <div className="span-3"><Loads q={loaded} height={84}>{() => <Stat small value={status ? `${fmtNum(status.bad)} / ${fmtNum(Math.floor(status.allowedBad))}` : "–"}
                                                                                  sub={`bad runs / allowed (of ${fmtNum(status?.total ?? 0)})`} />}</Loads></div>
-          <div className="span-3"><Loads q={loaded} height={84}>{() => <Stat small value={status?.burn1h == null ? "—" : `${status.burn1h.toFixed(1)}×`}
+          <div className="span-3"><Loads q={loaded} height={84}>{() => <Stat small value={status?.burn1h == null ? "–" : `${fmtFixed(status.burn1h, 1)}×`}
                                                                                  sub="burn rate, last hour (1× = on budget)" />}</Loads></div>
         </div>
         <div className="faint" style={{ marginTop: 8 }}>
-          The budget is {(100 - slo.target).toFixed(3).replace(/\.?0+$/, "")}% of runs, about {fmtNum(Math.round(minutes))} minutes of failure over {slo.window_days} days.
+          The budget is {fmtPercent(100 - slo.target, 3)} of runs, about {fmtNum(Math.round(minutes))} minutes of failure over {slo.window_days} days.
           {excluded.length ? ` ${excluded.length} excluded run${excluded.length > 1 ? "s are" : " is"} left out, as are runs during maintenance windows.` : " Runs during maintenance windows are left out."}
         </div>
       </Panel>
@@ -227,7 +227,7 @@ function SloDetail({ ctx, id }: { ctx: Ctx; id: string }) {
       <Panel title="Checks" flush>
         <RankTable head={["check", "type", "every"]} onRow={(i) => ctx.go(`/synthetics/${slo.checks[i]}`)}
                    rows={slo.checks.map((cid) => { const c = all.find((x) => x.id === cid);
-                     return [<span className="link">{c?.name ?? "(deleted check)"} ›</span>, c?.type === "browser" ? "browser" : "HTTP", c ? `${c.frequency} min` : "—"]; })} />
+                     return [<span className="link">{c?.name ?? "(deleted check)"} ›</span>, c?.type === "browser" ? "browser" : "HTTP", c ? `${c.frequency} min` : "–"]; })} />
       </Panel>
     </>
   );
@@ -310,7 +310,7 @@ function SloForm({ ctx, existing }: { ctx: Ctx; existing?: Slo }) {
               </select>
             </label>
           </div>
-          <div className="faint">Error budget: {(100 - s.target).toFixed(3).replace(/\.?0+$/, "")}% of runs, about {fmtNum(Math.round(minutes))} minutes of failure in {s.window_days} days.</div>
+          <div className="faint">Error budget: {fmtPercent(100 - s.target, 3)} of runs, about {fmtNum(Math.round(minutes))} minutes of failure in {s.window_days} days.</div>
         </section>
         {error && <div className="form-error" role="alert" style={{ marginTop: 10 }}>{error}</div>}
         <div className="toolbar" style={{ marginTop: 14 }}>

@@ -5,7 +5,7 @@
 // percentile (as Google rates them) with the share of good ones, pages, JavaScript errors, failing
 // or slow API calls (each linked to its backend trace) and browsers; a visit opens with its events.
 import { useState } from "react";
-import { fmtNum, fmtTime } from "../lib/format";
+import { fmtDuration, fmtFixed, fmtNum, fmtTime } from "../lib/format";
 import { sqlString as q } from "../lib/sql";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
@@ -21,10 +21,10 @@ const N = (k: string) => `TRY_CAST(attributes['${k}'] AS DOUBLE)`;
 const rows = (r: Result | null) => (r ? records(r) : []);
 // Google's thresholds (web.dev): good up to the first, poor above the second
 export const VITALS: [string, string, number, number, (v: number) => string][] = [
-  ["LCP", "Largest Contentful Paint", 2500, 4000, (v) => `${(v / 1000).toFixed(2)} s`],
+  ["LCP", "Largest Contentful Paint", 2500, 4000, (v) => fmtDuration(v)],
   ["INP", "Interaction to Next Paint", 200, 500, (v) => `${Math.round(v)} ms`],
-  ["CLS", "Cumulative Layout Shift", 0.1, 0.25, (v) => v.toFixed(3)],
-  ["FCP", "First Contentful Paint", 1800, 3000, (v) => `${(v / 1000).toFixed(2)} s`],
+  ["CLS", "Cumulative Layout Shift", 0.1, 0.25, (v) => fmtFixed(v, 3)],
+  ["FCP", "First Contentful Paint", 1800, 3000, (v) => fmtDuration(v)],
   ["TTFB", "Time to First Byte", 800, 1800, (v) => `${Math.round(v)} ms`],
 ];
 export const rate = (name: string, v: number) => {
@@ -113,7 +113,7 @@ function Site({ ctx, app, w, k }: { ctx: Ctx; app: string; w: { start: string; e
       <div className="cards" style={{ gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}>
         <Card label="Page views" value={fmtNum(Number(t.views ?? 0))} />
         <Card label="Visits" value={fmtNum(Number(t.visits ?? 0))} sub="sessions (30 min without activity ends one)" />
-        <Card label="Page load (p75)" value={t.load75 == null ? "–" : `${(Number(t.load75) / 1000).toFixed(2)} s`} sub="full page loads" />
+        <Card label="Page load (p75)" value={t.load75 == null ? "–" : fmtDuration(Number(t.load75))} sub="full page loads" />
         <Card label="JavaScript errors" value={fmtNum(Number(t.errors ?? 0))} tone={Number(t.errors) ? "bad" : undefined} />
         <Card label="Failed API calls" value={fmtNum(Number(t.failed_calls ?? 0))} sub="5xx or no answer" tone={Number(t.failed_calls) ? "bad" : undefined} />
       </div>
@@ -152,8 +152,8 @@ function Site({ ctx, app, w, k }: { ctx: Ctx; app: string; w: { start: string; e
                 <tr key={String(r.page)}>
                   <td className="mono" title={String(r.page)}>{String(r.page || "/")}</td>
                   <td className="num">{fmtNum(Number(r.views ?? 0))}</td>
-                  <td className="num">{r.load75 == null ? "–" : `${(Number(r.load75) / 1000).toFixed(2)} s`}</td>
-                  <td className={`num ${tone("LCP", r.lcp75)}`}>{r.lcp75 == null ? "–" : `${(Number(r.lcp75) / 1000).toFixed(2)} s`}</td>
+                  <td className="num">{r.load75 == null ? "–" : fmtDuration(Number(r.load75))}</td>
+                  <td className={`num ${tone("LCP", r.lcp75)}`}>{r.lcp75 == null ? "–" : fmtDuration(Number(r.lcp75))}</td>
                   <td className={`num ${tone("INP", r.inp75)}`}>{r.inp75 == null ? "–" : `${Math.round(Number(r.inp75))} ms`}</td>
                   <td className={`num${Number(r.errors) ? " bad" : ""}`}>{fmtNum(Number(r.errors ?? 0))}</td>
                 </tr>

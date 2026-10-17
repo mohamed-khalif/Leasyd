@@ -2,7 +2,7 @@
 // (endpoint + API keys, a new key shown once), and the team (invite, remove). Owners change keys
 // and people; members see them.
 import { FormEvent, useEffect, useState } from "react";
-import { fmtNum, fmtUnit } from "../lib/format";
+import { fmtNum, fmtUnit, fmtUnitPrice } from "../lib/format";
 import { account, Account, KeyScope, rumSnippet } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
@@ -204,11 +204,11 @@ function GpuPrices({ owner }: { owner: boolean }) {
         <thead><tr><th style={{ width: "34%" }}>GPU model matches</th><th>Name</th><th className="num">US$ per GPU hour</th><th>Source</th>{owner && <th />}</tr></thead>
         <tbody>
           {(own ?? []).map((p, i) => (
-            <tr key={"own" + i}><td className="mono">{p.pattern}</td><td>{p.label}</td><td className="num">{p.usd_per_hour.toFixed(2)}</td><td>yours</td>
+            <tr key={"own" + i}><td className="mono">{p.pattern}</td><td>{p.label}</td><td className="num">{fmtUnitPrice(p.usd_per_hour)}</td><td>yours</td>
               {owner && <td className="num"><button className="linkbtn danger" onClick={() => save(own!.filter((_, j) => j !== i))}>Remove</button></td>}</tr>
           ))}
           {DEFAULT_GPU_PRICES.map(([pattern, label, usd]) => (
-            <tr key={pattern} className="faint"><td className="mono">{pattern}</td><td>{label}</td><td className="num">{usd.toFixed(2)}</td>
+            <tr key={pattern} className="faint"><td className="mono">{pattern}</td><td>{label}</td><td className="num">{fmtUnitPrice(usd)}</td>
               <td>default (AWS on-demand)</td>{owner && <td />}</tr>
           ))}
         </tbody>

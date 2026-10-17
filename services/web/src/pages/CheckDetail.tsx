@@ -1,7 +1,7 @@
 // One synthetic check: Overview (configuration, uptime, timings), Check runs (every run, with a
 // side panel showing the run's steps, requests and responses) and Settings.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fmtMs, fmtNum, fmtTs } from "../lib/format";
+import { fmtAgo, fmtDuration, fmtMs, fmtNum, fmtTs } from "../lib/format";
 import { BrowserStep, Check, CheckResult, checks, notExcluded, records, Step } from "../api";
 import type { Ctx } from "../App";
 import { Block, Card, Drawer, StatusStrip, Tabs } from "../components/Charts";
@@ -31,16 +31,8 @@ function toRun(r: Record<string, unknown>): Run {
            screenshots: String(a["check.screenshots"] ?? "").split(",").filter(Boolean).map(Number) };
 }
 
-const ago = (iso: string) => {
-  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
-  return s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
-};
 /** A URL with the check's (non-secret) variables filled in, for display. */
 const withVars = (url: string, vars: Record<string, string>) => url.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, k) => vars[k] ?? m);
-const span = (ms: number) => {
-  const m = ms / 60000;
-  return m < 90 ? `${Math.max(1, Math.round(m))} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} days`;
-};
 
 export function CheckDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const [check, setCheck] = useState<Check | null>(null);
@@ -132,7 +124,7 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
   const counted = p.runList.filter((r) => !r.excluded && !p.exRuns.includes(r.id));
   const t = tally.data?.rows[0], total = t ? Number(t[0]) : 0, fails = t ? Math.round(total - Number(t[1] ?? 0)) : 0;
   const lastFail = counted.find((r) => !r.ok), last = p.runList[0];
-  const upFor = !last ? "—" : !last.ok ? "down" : lastFail ? span(Date.now() - Date.parse(lastFail.ts)) : `> ${span(Date.now() - Date.parse(p.w.start))}`;
+  const upFor = !last ? "–" : !last.ok ? "down" : lastFail ? fmtDuration(Date.now() - Date.parse(lastFail.ts)) : `> ${fmtDuration(Date.now() - Date.parse(p.w.start))}`;
   const share = (q: typeof tally) => { const r = q.data?.rows[0]; return r && Number(r[0]) ? Number(r[1] ?? 0) / Number(r[0]) : null; };
   const uptime = share(tally), before = share(prev);
   const excludedRuns = everyRun.data && t ? Math.max(0, Number(everyRun.data.rows[0]?.[0] ?? 0) - total) : null;
@@ -149,7 +141,7 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
       <div className="grid">
         <Panel title="Configuration" span={5}>
           <div className="config">
-            <span className="k">Target</span><span className="mono" style={{ wordBreak: "break-all" }}>{first ? ("url" in first && first.url ? withVars(first.url, check.variables) : describeStep(first)) : "—"}</span>
+            <span className="k">Target</span><span className="mono" style={{ wordBreak: "break-all" }}>{first ? ("url" in first && first.url ? withVars(first.url, check.variables) : describeStep(first)) : "–"}</span>
             <span className="k">Steps</span><span>{check.steps.length}{check.steps.length > 1 ? ` (${(check.steps as (Step | BrowserStep)[]).map((st) => st.name).join(" → ")})` : ""}</span>
             <span className="k">Expected</span>
             <span>{isBrowser(check) ? `every step succeeds${(check.steps as BrowserStep[]).some((st) => st.action.startsWith("assert")) ? " and every assertion holds" : ""}`
@@ -161,13 +153,13 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
         </Panel>
         <div className="span-7">
           <div className="cards" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-            <Card label="Uptime" value={uptime == null ? (t ? "—" : "…") : pct(uptime)} tone={uptime == null ? undefined : uptime >= 0.99 ? "ok" : "bad"}
+            <Card label="Uptime" value={uptime == null ? (t ? "–" : "…") : pct(uptime)} tone={uptime == null ? undefined : uptime >= 0.99 ? "ok" : "bad"}
                   sub={`${period}${before != null ? ` · ${pct(before)} the ${period.replace(/^last /, "")} before` : ""}`} />
             <Card label="Excluded runs" value={excludedRuns == null ? "…" : fmtNum(excludedRuns)}
                   sub="false alarms and maintenance windows; not counted" />
-            <Card label="Average duration" value={s && s[0] != null ? `${fmtNum(Number(s[0]))} ms` : "—"} sub={s && s[1] != null ? `p95 ${fmtNum(Number(s[1]))} ms` : undefined} />
+            <Card label="Average duration" value={s && s[0] != null ? `${fmtNum(Number(s[0]))} ms` : "–"} sub={s && s[1] != null ? `p95 ${fmtNum(Number(s[1]))} ms` : undefined} />
             <Card label="Failed runs" value={t ? fmtNum(fails) : "…"} tone={fails ? "bad" : undefined} sub={`of ${fmtNum(total)} in ${ctx.range.label.toLowerCase()}`} />
-            <Card label="Last check" value={last ? ago(last.ts) : "—"} tone={last ? (last.ok ? "ok" : "bad") : undefined} sub={last ? (last.ok ? "passed" : "failed") : undefined}
+            <Card label="Last check" value={last ? fmtAgo(last.ts) : "–"} tone={last ? (last.ok ? "ok" : "bad") : undefined} sub={last ? (last.ok ? "passed" : "failed") : undefined}
                   onClick={last ? () => p.onRun(last) : undefined} />
             {isBrowser(check) || tls.data?.rows[0]?.[0] == null
               ? <Card label="Currently up for" value={upFor} tone={last && !last.ok ? "bad" : undefined} />
@@ -194,7 +186,7 @@ function Overview(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>
           <RankTable head={["#", "step", "avg", "p95"]} numCols={2}
                      rows={(check.steps as (Step | BrowserStep)[]).map((st, i) => {
                        const r = stepTimes.get(i + 1);
-                       return [String(i + 1), st.name, r ? `${fmtNum(Number(r["avg(value)"]))} ms` : "—", r ? `${fmtNum(Number(r["p95(value)"]))} ms` : "—"];
+                       return [String(i + 1), st.name, r ? `${fmtNum(Number(r["avg(value)"]))} ms` : "–", r ? `${fmtNum(Number(r["p95(value)"]))} ms` : "–"];
                      })} />
         </Panel>
       </div>
@@ -248,8 +240,8 @@ function Runs(p: { ctx: Ctx; check: Check; runs: ReturnType<typeof useQuery>; ru
                         <td><span className={`pill ${r.ok ? "ok" : "bad"}`}>{r.ok ? "passed" : "failed"}</span></td>
                         <td className="muted">us-east-1</td>
                         <td className="num">0</td>
-                        <td className="num">{r.ms != null ? fmtMs(r.ms * 1e6) : "—"}</td>
-                        <td className="num">{r.status ?? "—"}</td>
+                        <td className="num">{r.ms != null ? fmtMs(r.ms * 1e6) : "–"}</td>
+                        <td className="num">{r.status ?? "–"}</td>
                         <td title={r.failure || ex || undefined}>{r.failure ? r.failure : ex ? <span className="faint">{ex}</span> : <span className="faint">none</span>}</td>
                         <td onClick={(e) => e.stopPropagation()}>
                           {r.excluded ? <span className="faint" title={r.excluded}>maintenance</span>
@@ -319,7 +311,7 @@ function RunPanel(p: { ctx: Ctx; check: Check; run: Run; excludedBy?: { reason: 
             <div className="config">
               <span className="k">Result</span><span style={{ color: p.run.ok ? OK : "var(--sev-error)" }}>{p.run.ok ? "Passed" : `Failed: ${p.run.failure}`}</span>
               <span className="k">Started</span><span className="mono">{fmtTs(p.run.ts)}</span>
-              <span className="k">Duration</span><span className="mono">{p.run.ms != null ? fmtMs(p.run.ms * 1e6) : "—"}</span>
+              <span className="k">Duration</span><span className="mono">{p.run.ms != null ? fmtMs(p.run.ms * 1e6) : "–"}</span>
               <span className="k">Location</span><span>{LOCATION}</span>
               <span className="k">Retries</span><span>0</span>
               <span className="k">Run ID</span><span className="mono faint">{p.run.id}</span>
@@ -446,8 +438,8 @@ function Settings({ ctx, check }: { ctx: Ctx; check: Check }) {
           <span className="k">Location</span><span>{LOCATION}</span>
           <span className="k">Timeout</span><span>{fmtNum(check.timeout_ms / 1000)} s</span>
           <span className="k">State</span><span>{check.enabled ? "Running" : "Paused"}</span>
-          <span className="k">Variables</span><span className="mono">{Object.keys(check.variables).length ? Object.entries(check.variables).map(([k, v]) => `{${k}} = ${v}`).join(" · ") : "—"}</span>
-          <span className="k">Secrets</span><span className="mono">{check.secret_names.length ? check.secret_names.map((s) => `{${s}}`).join(" ") + " (values are never shown)" : "—"}</span>
+          <span className="k">Variables</span><span className="mono">{Object.keys(check.variables).length ? Object.entries(check.variables).map(([k, v]) => `{${k}} = ${v}`).join(" · ") : "–"}</span>
+          <span className="k">Secrets</span><span className="mono">{check.secret_names.length ? check.secret_names.map((s) => `{${s}}`).join(" ") + " (values are never shown)" : "–"}</span>
           <span className="k">Created</span><span>{fmtTs(check.created_at).slice(0, 16)}{check.created_by ? ` by ${check.created_by}` : ""}</span>
           <span className="k">Changed</span><span>{fmtTs(check.updated_at).slice(0, 16)}</span>
         </div>

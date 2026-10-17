@@ -2,7 +2,7 @@
 // checks), volumes, then folding sections for tracing, logging, metrics and alerting, each with
 // a way into its explorer.
 import { useMemo } from "react";
-import { fmtMs, fmtNum } from "../lib/format";
+import { fmtMs, fmtNum, fmtPercent } from "../lib/format";
 import { Check, Query, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { CheckListError, useCheckList } from "../checkList";
@@ -89,7 +89,7 @@ export function Insights({ ctx }: { ctx: Ctx }) {
             <div className="cards" style={{ padding: 12, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
               <Card label="Services" value={services.data ? fmtNum(svcCount) : "…"} sub="sending traces" onClick={() => ctx.go("/traces")} />
               <Card label="Operations" value={operations.data ? fmtNum(opCount) + (opCount >= 10000 ? "+" : "") : "…"} sub="distinct span names" />
-              <Card label="Errors" value={errPct == null ? "…" : `${errPct.toFixed(errPct < 1 ? 2 : 1)}%`} tone={errPct != null && errPct >= 1 ? "bad" : undefined} sub="of spans failed" />
+              <Card label="Errors" value={errPct == null ? "…" : fmtPercent(errPct)} tone={errPct != null && errPct >= 1 ? "bad" : undefined} sub="of spans failed" />
             </div>
           </div>
         </div>
@@ -188,7 +188,7 @@ function LatencyTable({ ctx }: { ctx: Ctx }) {
     aggs: [{ fn: "count" }, { fn: "p50", field: "duration_ns" }, { fn: "p95", field: "duration_ns" }, { fn: "p99", field: "duration_ns" }],
   });
   const rows = q.data?.rows ?? [];
-  const d = (v: unknown) => (v == null ? "—" : fmtMs(Number(v)));
+  const d = (v: unknown) => (v == null ? "–" : fmtMs(Number(v)));
   return (
     <Panel title="Services" flush>
       <Loads q={q} empty={!rows.length} height={160}>
@@ -226,7 +226,7 @@ function Logging({ ctx, b, ts }: { ctx: Ctx; b: number; ts: string }) {
         <Panel title="Services by log count" span={4} flush>
           <Loads q={bySvc} empty={!svcRows.length} height={200}>
             {() => <RankTable head={["service", "error & fatal", "logs"]} numCols={2} maxHeight={250}
-                              rows={svcRows.map((r) => [String(r.service), errs.get(String(r.service)) ? fmtNum(errs.get(String(r.service))!) : "—", fmtNum(Number(r.count))])}
+                              rows={svcRows.map((r) => [String(r.service), errs.get(String(r.service)) ? fmtNum(errs.get(String(r.service))!) : "–", fmtNum(Number(r.count))])}
                               onRow={(i) => ctx.go(`/logs?service=${encodeURIComponent(String(svcRows[i].service))}`)} />}
           </Loads>
         </Panel>

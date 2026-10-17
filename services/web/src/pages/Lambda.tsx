@@ -5,7 +5,7 @@
 // (its entry spans); an invocation opens with its duration against the function's others, its
 // payload (the aws.lambda.event or faas.event attribute, when recorded), its logs and its trace.
 import { useMemo, useState } from "react";
-import { fmtMs, fmtNum, fmtTime } from "../lib/format";
+import { fmtClock, fmtDateTime, fmtMs, fmtNum, fmtPercent, fmtTime } from "../lib/format";
 import { sqlString as q } from "../lib/sql";
 import { records, Result } from "../api";
 import type { Ctx } from "../App";
@@ -28,7 +28,7 @@ const CW_AGGS = `sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') 
   sum(sum) FILTER (WHERE metric_name = 'aws.lambda.errors') AS e,
   sum(sum) FILTER (WHERE metric_name = 'aws.lambda.duration') / nullif(sum(count) FILTER (WHERE metric_name = 'aws.lambda.duration'), 0) AS ms`;
 const rows = (r: Result | null) => (r ? records(r) : []);
-const pct = (e: number, n: number) => (n ? (e / n) * 100 : 0);
+const errRate = (e: number, n: number) => (n ? (e / n) * 100 : 0);
 
 type Fn = { name: string; n: number; e: number; ms: number; region: string; account: string; traced: boolean; cloudwatch: boolean };
 
@@ -84,7 +84,7 @@ function Functions({ ctx }: { ctx: Ctx }) {
                   <td>{f.region}</td>
                   <td className="num">{fmtNum(f.n)}</td>
                   <td className={`num${f.e ? " bad" : ""}`}>{fmtNum(f.e)}</td>
-                  <td className={`num${pct(f.e, f.n) >= 1 ? " bad" : ""}`}>{pct(f.e, f.n).toFixed(2)}%</td>
+                  <td className={`num${errRate(f.e, f.n) >= 1 ? " bad" : ""}`}>{fmtPercent(errRate(f.e, f.n))}</td>
                   <td className="num">{fmtMs(f.ms * 1e6)}</td>
                   <td className="faint" style={{ whiteSpace: "nowrap" }}>{[f.traced && "traces", f.cloudwatch && "CloudWatch"].filter(Boolean).join(", ")}</td>
                 </tr>
@@ -253,7 +253,7 @@ function InvocationPanel({ ctx, fn, inv, onClose }: { ctx: Ctx; fn: string; inv:
       <div className="svc-panel-body">
         {tab === "overview" && (
           <>
-            <KV entries={[["Start", new Date(start).toLocaleString()], ["Duration", fmtMs(inv.dur)],
+            <KV entries={[["Start", fmtDateTime(start, true)], ["Duration", fmtMs(inv.dur)],
                           ["Cold start", inv.cold === "true" ? "yes" : inv.cold === "false" ? "no" : ""], ["Trace ID", inv.trace_id]]} />
             {payload != null && <button className="linkbtn" onClick={() => setTab("payload")}>See the payload →</button>}
             <DurationCompare span={span} noun="invocation" />
@@ -273,7 +273,7 @@ function InvocationPanel({ ctx, fn, inv, onClose }: { ctx: Ctx; fn: string; inv:
               <div className="lambda-logs">
                 {rows(logs.data).map((r, i) => (
                   <div key={i} className={`lambda-log${/ERROR|FATAL/i.test(String(r.severity_text)) ? " bad" : ""}`}>
-                    <span className="faint mono">{new Date(Date.parse(String(r.ts))).toLocaleTimeString()}</span>
+                    <span className="faint mono">{fmtClock(String(r.ts))}</span>
                     <span className="mono">{String(r.severity_text ?? "")}</span>
                     <span>{typeof r.body === "object" ? JSON.stringify(r.body) : String(r.body ?? "")}</span>
                   </div>

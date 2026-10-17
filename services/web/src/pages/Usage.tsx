@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fmtNum } from "../lib/format";
+import { fmtInt, fmtNum, fmtUnitPrice } from "../lib/format";
 import { account, Meter, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { Loads, Panel } from "../components/Panel";
@@ -80,7 +80,7 @@ export function Usage({ ctx }: { ctx: Ctx }) {
           <table className="price-mini">
             <thead><tr><th /><th>Ingest</th><th>Storage (30 days)</th></tr></thead>
             <tbody>{SIGNALS.map((s) => (
-              <tr key={s}><td>{PRICE_LABEL[s]}</td><td>${PRICE[s].ingest.toFixed(3)}</td><td>${PRICE[s].storage.toFixed(2)}</td></tr>
+              <tr key={s}><td>{PRICE_LABEL[s]}</td><td>{fmtUnitPrice(PRICE[s].ingest)}</td><td>{fmtUnitPrice(PRICE[s].storage)}</td></tr>
             ))}</tbody>
           </table>
           <div className="faint" style={{ marginTop: 14, fontSize: 12 }}>
@@ -104,7 +104,7 @@ export function Usage({ ctx }: { ctx: Ctx }) {
                 </Loads>
               </Panel>
               <Panel title={`Total ${PRICE_LABEL[s]}`} span={4}>
-                <Loads q={q[s]} height={84}>{() => <Stat value={month(s).toLocaleString("en-US")} small />}</Loads>
+                <Loads q={q[s]} height={84}>{() => <Stat value={fmtInt(month(s))} small />}</Loads>
               </Panel>
             </div>
           </div>

@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { MaintenanceWindow, windows, WindowSchedule } from "../api";
 import type { Ctx } from "../App";
+import { fmtDateTime } from "../lib/format";
+import { LOCAL_TZ, timeZones, zonedDayMinute } from "../lib/timeZones";
 import { CheckListError, useCheckList } from "../checkList";
 import { Panel } from "../components/Panel";
 import { RankTable } from "../components/RankTable";
@@ -10,7 +12,6 @@ import { RankTable } from "../components/RankTable";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const DAY_NAMES: Record<string, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
-const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 export function Maintenance({ ctx, sub }: { ctx: Ctx; sub?: string }) {
   if (sub === "new") return <WindowForm ctx={ctx} />;
@@ -21,8 +22,7 @@ export function Maintenance({ ctx, sub }: { ctx: Ctx; sub?: string }) {
 /** "Every Tue, Thu 22:00 for 1 h (Europe/London)" or "1 Oct 22:00 – 23:30". */
 export function describeSchedule(s: WindowSchedule): string {
   if (s.type === "once") {
-    const f = (t: string) => new Date(t).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-    return `${f(s.start)} – ${f(s.end)}`;
+    return `${fmtDateTime(s.start)} – ${fmtDateTime(s.end)}`;
   }
   const h = Math.floor(s.duration_minutes / 60), m = s.duration_minutes % 60;
   const len = [h ? `${h} h` : "", m ? `${m} min` : ""].filter(Boolean).join(" ");
@@ -34,11 +34,7 @@ export function describeSchedule(s: WindowSchedule): string {
 export function isOpen(s: WindowSchedule, now = new Date()): boolean {
   if (s.type === "once") return Date.parse(s.start) <= now.getTime() && now.getTime() < Date.parse(s.end);
   // The local weekday and minute of the day in the window's time zone, today and yesterday.
-  const parts = (t: Date) => {
-    const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: s.timezone, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
-      .formatToParts(t).map((x) => [x.type, x.value]));
-    return { day: String(p.weekday).toLowerCase().slice(0, 3), minute: Number(p.hour) * 60 + Number(p.minute) };
-  };
+  const parts = (t: Date) => zonedDayMinute(t, s.timezone);
   const [hh, mm] = s.start.split(":").map(Number), opens = hh * 60 + mm;
   const today = parts(now), yesterday = parts(new Date(now.getTime() - 86_400_000));
   if (s.days.includes(today.day) && today.minute >= opens && today.minute < opens + s.duration_minutes) return true;
@@ -108,7 +104,7 @@ function WindowForm({ ctx, existing }: { ctx: Ctx; existing?: MaintenanceWindow 
   const [tz, setTz] = useState(weekly?.timezone ?? LOCAL_TZ);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const zones = [...new Set([tz, "UTC", LOCAL_TZ, ...((Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [])])];
+  const zones = [...new Set([tz, "UTC", LOCAL_TZ, ...timeZones()])];
 
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setBusy(true); setError(null);

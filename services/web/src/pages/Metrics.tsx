@@ -70,7 +70,7 @@ function MetricList({ ctx }: { ctx: Ctx }) {
   const open = (name: string) => ctx.go(`/metrics?m=${encodeURIComponent(name)}`);
   const collapsedByDefault = rows.length > 30 && !filter.trim();
   const isOpen = (p: string) => folded[p] ?? !collapsedByDefault;
-  const cardText = (n?: number) => (n == null ? (card.data ? "—" : "…") : fmtNum(n) + (card.data?.truncated ? "+" : ""));
+  const cardText = (n?: number) => (n == null ? (card.data ? "–" : "…") : fmtNum(n) + (card.data?.truncated ? "+" : ""));
   const tiles = rows.map((r) => {
     const name = String(r.metric_name), n = size === "cardinality" ? series.get(name) ?? 0 : Number(r.count);
     return { label: name, value: n, sub: size === "cardinality" ? `${fmtNum(Number(r.count))} data points` : `${cardText(series.get(name))} series` };
@@ -120,7 +120,7 @@ function MetricList({ ctx }: { ctx: Ctx }) {
                           <tr key={name} className={`tree-row${ms.length > 1 ? " child" : ""}`} onClick={() => open(name)}>
                             <td><span className="link">{name}</span></td>
                             <td className="muted">{typeLabel(info(r))}</td>
-                            <td className="muted">{unitLabel(String(r.unit ?? "")) || "—"}</td>
+                            <td className="muted">{unitLabel(String(r.unit ?? "")) || "–"}</td>
                             <td className="num">{fmtNum(Number(r.count))}</td>
                             <td className="num">{cardText(series.get(name))}</td>
                             <td className="num">{fmtNum(services.get(name) ?? 0)}</td>
