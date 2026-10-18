@@ -6,7 +6,7 @@
                                       and API keys (never the keys themselves), and who you are
   POST   /v1/app/account/users        owners: invite {email, role?}
   DELETE /v1/app/account/users/{email}   owners: remove someone (not yourself)
-  POST   /v1/app/account/keys         owners: a new API key {scope: ingest | read}, shown once
+  POST   /v1/app/account/keys         owners: a new API key {scope: ingest | read, name?}, shown once
   DELETE /v1/app/account/keys/{id}    owners: revoke a key
   GET  /v1/app/account/drop-rules     the tenant's drop rules (data discarded as it arrives)
   PUT  /v1/app/account/drop-rules     owners: replace them {rules: [...]} (see check_drop_rules)
@@ -188,6 +188,7 @@ def account(tenant, email, method, parts, body, params=None):
         st, us = _admin("status", tenant), _admin("users", tenant)
         keys = [{"key_id": k["api_key_id"], "scope": k.get("scope", "ingest"), "status": k["status"],
                  "created_at": k.get("created_at"), "expires_at": k.get("expires_at"),
+                 **({"name": k["name"]} if k.get("name") else {}),
                  **({"origins": k.get("origins")} if k.get("scope") == "browser" else {})}
                 for k in st["keys"] if k["status"] in ("active", "expiring")]
         return 200, {"tenant": tenant, "company": st.get("company") or tenant, "plan": st.get("plan"),
@@ -247,9 +248,12 @@ def account(tenant, email, method, parts, body, params=None):
             raise Refused(400, f"at most {MAX_KEYS} keys; revoke one first")
         scope = body.get("scope", "ingest")
         extra = {"origins": body.get("origins")} if scope == "browser" else {}
+        if body.get("name") not in (None, ""):
+            extra["name"] = body.get("name")
         out = _admin("add-key", tenant, scope=scope, **extra)
         print(json.dumps({"key_created": out["key_id"], "tenant": tenant, "by": email, "scope": scope}))
         return 201, {"key_id": out["key_id"], "scope": out["scope"], "api_key": out["api_key"],
+                     **({"name": out["name"]} if out.get("name") else {}),
                      **({"origins": out["origins"]} if "origins" in out else {})}
     if what == "keys" and method == "DELETE" and ident and _KEY_ID.match(ident):
         out = _admin("revoke", tenant, key_id=ident)

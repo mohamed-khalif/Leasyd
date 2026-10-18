@@ -246,3 +246,19 @@ def test_read_only_viewer(acc, adm):  # noqa: F811
                                ("DELETE", "users/owner%40shop.com", None)]:
         assert app(acc, "demo@leasyd.com", "demo-shop", method, path, body) == (403, {"error": acc.VIEWER_REFUSED})
     assert len(app(acc, "owner@shop.com", "demo-shop")[1]["users"]) == 2  # owners still see everyone
+
+
+def test_keys_can_have_names(acc, adm):  # noqa: F811
+    """A key may be named ("prod ECS") when created; the list shows the name. Names are trimmed,
+    at most 60 characters, and plain text."""
+    call(adm, "create", tenant="acme")
+    call(adm, "invite-user", tenant="acme", email="bo@acme.com", role="owner", send_email=False)
+    status, made = app(acc, "bo@acme.com", "acme", "POST", "keys", {"scope": "ingest", "name": "  prod ECS  "})
+    assert status == 201 and made["name"] == "prod ECS"
+    assert app(acc, "bo@acme.com", "acme", "POST", "keys", {"scope": "read"})[0] == 201   # a name is optional
+    keys = {k["key_id"]: k for k in app(acc, "bo@acme.com", "acme")[1]["keys"]}
+    assert keys[made["key_id"]]["name"] == "prod ECS"
+    assert sum(1 for k in keys.values() if "name" not in k or not k["name"]) >= 1
+    for bad in ["x" * 61, "line\nbreak", 5]:
+        status, out = app(acc, "bo@acme.com", "acme", "POST", "keys", {"scope": "ingest", "name": bad})
+        assert status == 400 and "name" in out["error"], (bad, status, out)

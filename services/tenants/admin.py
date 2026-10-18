@@ -17,7 +17,7 @@ Invoke with {"action": ..., ...}; infra/tenant.sh wraps it.
                                  name, then invokes this): a free-plan tenant without keys (its
                                  owner creates them in the app), and the owner's login, welcomed
                                  by email
-  add-key {tenant, scope}        one more key of that scope (ingest or read), others unchanged
+  add-key {tenant, scope, name?}  one more key of that scope (ingest or read), others unchanged; name: a label
   set-cap {tenant, daily_gb}     the most data a day ingest accepts (null: the plan's; 0: no cap)
   set-search {tenant, units_per_day}  the daily search allowance (null: the plan's; 0: no limit)
   upgrade {tenant}               a trial (free plan) becomes a paying account: standard plan, its
@@ -260,15 +260,28 @@ def signup(tenant, email, company, context=None):
     return {"tenant": tenant, "email": out["email"], "status": "signed up", "email_sent": out["email_sent"]}
 
 
-def add_key(tenant, scope="ingest", origins=None, context=None):
+def add_key(tenant, scope="ingest", origins=None, name=None, context=None):
     if scope not in SCOPES:
         raise Refused(f"unknown scope {scope!r}; one of {sorted(SCOPES)}")
+    name = check_key_name(name)
     rec = _active(tenant)
     if scope == "browser":
         origins = check_origins(origins)
-    key, key_id = _issue_key(tenant, rec.get("plan", "standard"), scope, origins)
+    key, key_id = _issue_key(tenant, rec.get("plan", "standard"), scope, origins, name)
     return {"tenant": tenant, "scope": scope, "key_id": key_id, "api_key": key,
-            **({"origins": origins} if scope == "browser" else {})}
+            **({"origins": origins} if scope == "browser" else {}), **({"name": name} if name else {})}
+
+
+def check_key_name(name):
+    """A key's optional name ("prod ECS"): plain text, trimmed, at most KEY_NAME_MAX characters."""
+    if name is None or name == "":
+        return None
+    if not isinstance(name, str) or any(ord(c) < 32 or ord(c) == 127 for c in name) or len(name.strip()) > KEY_NAME_MAX:
+        raise Refused(f"name: plain text of at most {KEY_NAME_MAX} characters, e.g. prod ECS")
+    return name.strip() or None
+
+
+KEY_NAME_MAX = 60
 
 
 def check_origins(origins):
@@ -923,16 +936,17 @@ def _active(tenant):
     return rec
 
 
-def _issue_key(tenant, plan, scope="ingest", origins=None):
+def _issue_key(tenant, plan, scope="ingest", origins=None, name=None):
     if scope == "browser":   # public; checked by obs-ingest itself, never an API Gateway key
         key = "pub_" + "".join(secrets.choice(_KEY_CHARS) for _ in range(32))
         item = {"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active", "scope": scope,
-                "plan": plan, "created_at": _iso(_now()), "api_key_id": "b" + secrets.token_hex(5), "origins": origins}
+                "plan": plan, "created_at": _iso(_now()), "api_key_id": "b" + secrets.token_hex(5), "origins": origins,
+                **({"name": name} if name else {})}
         tenants.put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
         return key, item["api_key_id"]
     key = "obs_" + "".join(secrets.choice(_KEY_CHARS) for _ in range(40))
     item = {"pk": f"key#{key_hash(key)}", "tenant": tenant, "status": "active", "scope": scope,
-            "plan": plan, "created_at": _iso(_now())}
+            "plan": plan, "created_at": _iso(_now()), **({"name": name} if name else {})}
     pooled = _pool_take(plan)
     if pooled:
         item.update(api_key_id=pooled["id"], gateway_key=pooled["value"])
