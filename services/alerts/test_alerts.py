@@ -298,6 +298,67 @@ def test_schedule_runs_check_rules_every_minute_and_slos_every_five(aws, monkeyp
     assert sorted(out["check_rules"]) == sorted([every1, every5])             # minute 5: both, and SLO rules too
 
 
+def test_failed_evaluations_never_change_alerts_and_the_third_in_a_row_is_told_once(aws, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    prom, sent = FakeProm(), []
+    monkeypatch.setattr(alerts, "_invoke", prom)
+    monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    rule = query_rule("acme", ch, degraded=None)
+    item = alerts._plain(alerts._get(f"alert#acme#{rule['id']}", "acme"))
+    t0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    ev = lambda m: alerts._safe_eval_query(item, t0 + timedelta(minutes=m))  # noqa: E731
+    prom.series = [({"service_name": "checkout"}, 9.0)]
+    ev(0)
+    assert len(sent) == 1 and "FIRING" in sent[0]["title"]
+    sent.clear()
+    prom.error = "the query engine is unavailable"
+    for m in (1, 2):
+        ev(m)
+    assert not sent                                                            # 2 failures: not yet
+    assert call("acme", "GET", "rules")[1]["items"][0]["firing"] == ["service_name=checkout (critical)"]   # still firing
+    ev(3)
+    assert len(sent) == 1 and "CAN'T EVALUATE" in sent[0]["title"] and sent[0]["payload"]["state"] == "eval_failed"
+    assert "firing ones stay firing" in sent[0]["text"]
+    for m in (4, 5, 6):
+        ev(m)
+    assert len(sent) == 1                                                      # told once, not every minute
+    prom.error = None
+    ev(7)                                                                      # works again: still firing, nothing new to say
+    assert len(sent) == 1 and call("acme", "GET", "rules")[1]["items"][0]["firing"] == ["service_name=checkout (critical)"]
+    prom.error = "boom"
+    for m in (8, 9):
+        ev(m)
+    assert len(sent) == 1                                                      # the count starts again after a success
+    ev(10)
+    assert len(sent) == 2 and "CAN'T EVALUATE" in sent[1]["title"]
+
+
+def test_a_failing_slo_rule_keeps_its_state_and_is_told_once(aws, monkeypatch):
+    sent = []
+    monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    s, rule = call("acme", "POST", "rules", {"name": "Budget", "type": "slo_burn", "slo": "sssstttttttt", "burn_rate": 10, "channels": [ch]})
+    numbers = {"week": (995, 1000), "hour": (50, 60), "error": None}
+    def fake_query(q):
+        if numbers["error"]:
+            raise RuntimeError(numbers["error"])
+        recent = alerts.datetime.fromisoformat(q["start"].replace("Z", "+00:00")) > alerts.datetime.now(alerts.timezone.utc) - alerts.timedelta(hours=2)
+        good, total = numbers["hour" if recent else "week"]
+        return {"columns": ["sum(value)", "count"], "rows": [[good, total]]}
+    monkeypatch.setattr(alerts, "_query", fake_query)
+    alerts.evaluate()
+    assert len(sent) == 1 and "FIRING" in sent[0]["title"]
+    numbers["error"] = "query failed: timeout"
+    for _ in range(2):
+        alerts.evaluate()
+    assert len(sent) == 1
+    alerts.evaluate()
+    assert len(sent) == 2 and "CAN'T EVALUATE" in sent[1]["title"]
+    assert alerts._state("acme", rule["id"], "sssstttttttt").get("firing")   # still firing
+    assert "query failed" not in sent[1]["text"]                               # an internal error isn't passed on
+
+
 # ------------------------------------------------------------------ dashboards
 
 def dash_call(tenant, method, dash_id=None, body=None):

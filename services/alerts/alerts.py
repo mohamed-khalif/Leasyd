@@ -185,6 +185,7 @@ def validate_rule(body, checks, slos, channels):
 OPS = {">": lambda a, b: a > b, ">=": lambda a, b: a >= b, "<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
        "==": lambda a, b: a == b, "!=": lambda a, b: a != b}
 LAG_S = 60            # check rules look at the data as of a minute ago (it is searchable within ~30 s)
+GRACE = 3             # evaluations in a row that failed (or, for a firing alert, had no data) before the channels are told
 MAX_SERIES_PER_RULE = 500
 
 
@@ -329,8 +330,11 @@ def post(url, body, headers, timeout=10):
         sock.close()
 
 
+WORDS = {"firing": "FIRING", "resolved": "RESOLVED", "no_data": "NO DATA", "eval_failed": "CAN'T EVALUATE"}
+
+
 def message(tenant, rule, state, subject, detail, link):
-    word = "FIRING" if state == "firing" else "RESOLVED"
+    word = WORDS[state]
     title = f"[Leasyd] {word}: {rule['name']} — {subject}"
     text = f"{detail}\n\nOpen in Leasyd: {link}\nRule: {rule['name']}"
     return {"title": title, "text": text, "payload": {
@@ -358,9 +362,9 @@ def record(tenant, rule, state, subject, detail, link, results):
              "alert.failed_channels": ",".join(c for c, r in results.items() if r) or None}
     doc = {"resourceLogs": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "alerts"}}]},
                              "scopeLogs": [{"scope": {"name": "leasyd.alerts"}, "logRecords": [{
-                                 "timeUnixNano": now, "severityNumber": 13 if state == "firing" else 9,
-                                 "severityText": "WARN" if state == "firing" else "INFO",
-                                 "body": {"stringValue": f"{'FIRING' if state == 'firing' else 'RESOLVED'}: {rule['name']} — {subject}. {detail}"},
+                                 "timeUnixNano": now, "severityNumber": 9 if state == "resolved" else 13,
+                                 "severityText": "INFO" if state == "resolved" else "WARN",
+                                 "body": {"stringValue": f"{WORDS[state]}: {rule['name']} — {subject}. {detail}"},
                                  "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in attrs.items() if v is not None]}]}]}]}
     records = list(ingest.to_records("logs", doc))
     if ingest.RECORD_COMPRESSION == "gzip":
@@ -495,7 +499,9 @@ def evaluate(event=None, context=None):
             s = slo_status(tenant, slo, excluded, now)
         except Exception as e:  # noqa: BLE001  one tenant's failed query mustn't stop the rest
             print(json.dumps({"slo_rule_failed": _id_of(rule), "tenant": tenant, "error": str(e)[:300]}))
+            _eval_failed(rule, e, f"{APP_URL}/#/slos/{rule['slo']}")
             continue
+        _eval_ok(rule, _state(tenant, _id_of(rule), EVAL_KEY))
         reasons = []
         if rule.get("burn_rate") is not None and s["burn1h"] is not None and s["burn1h"] >= float(rule["burn_rate"]):
             reasons.append(f"burning its error budget {s['burn1h']:.1f}× too fast over the last hour")
@@ -557,7 +563,32 @@ def _safe_eval_query(rule, now):
         return evaluate_query_rule(rule, now)
     except Exception as e:  # noqa: BLE001  one rule's failure mustn't stop the rest
         print(json.dumps({"check_rule_failed": _id_of(rule), "tenant": rule.get("tenant"), "error": str(e)[:300]}))
+        _eval_failed(rule, e, f"{APP_URL}/#/query?promql={quote(rule['promql'])}")
         return None
+
+
+EVAL_KEY = "_eval"     # astate#<tenant>#<rule>#_eval: the rule's failed evaluations in a row (not a series)
+
+
+def _eval_failed(rule, error, link):
+    """A failed evaluation changes none of the rule's alerts (firing stay firing). The GRACE-th in
+    a row tells the rule's channels once that it can't be evaluated; a success starts the count again."""
+    tenant, rid = rule["tenant"], _id_of(rule)
+    st = _state(tenant, rid, EVAL_KEY)
+    failures = int(st.get("failures", 0)) + 1
+    told = bool(st.get("told"))
+    if failures >= GRACE and not told:
+        why = str(error) if isinstance(error, Refused) else "Leasyd's query service didn't answer"
+        fire(tenant, rule, "eval_failed", "the rule",
+             f"Leasyd couldn't evaluate this alert {failures} times in a row ({why}), so it can't tell whether something "
+             "is wrong. Its alerts stay as they were (firing ones stay firing) until it can.", link)
+        told = True
+    _set_state(tenant, rid, EVAL_KEY, failures=failures, told=told)
+
+
+def _eval_ok(rule, had_failures):
+    if had_failures:
+        client("table").delete_item(Key={"pk": f"astate#{rule['tenant']}#{_id_of(rule)}#{EVAL_KEY}"})
 
 
 def evaluate_query_rule(rule, now):
@@ -567,6 +598,7 @@ def evaluate_query_rule(rule, now):
     at = (int(now.timestamp()) - LAG_S) // 10 * 10
     results = run_promql(tenant, rule["promql"], at)[:MAX_SERIES_PER_RULE]
     states = {s["pk"].split("#", 3)[3]: s for s in _items(tenant, f"astate#{tenant}#{rid}#")}
+    _eval_ok(rule, states.pop(EVAL_KEY, None))
     hold = int(rule.get("for_minutes") or 0) * 60
     changes = {"critical": [], "degraded": [], "ok": []}
     seen = set()
