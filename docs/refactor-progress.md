@@ -131,6 +131,12 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 
 ## Trust fixes: no false "all clear" (agreed 2026-10-18, before any agent work)
 - [x] Alert design proposed: docs/alert-trust-design.md (no-data state, per-rule setting, failed evaluations notified after 3, account data-stopped safety net, SLO and check cases)
-- [ ] Design approved (waiting: default for existing rules, grace period, outage guard)
-- [ ] A1-A6 alerts, one commit each, failing test first
-- [ ] P1-P6 pages show "couldn't load", one commit each, failing test first
+- [x] Approved 2026-10-18 in its simplest safe form: missing data or a failed evaluation never resolves a firing alert ("no data"); one NO DATA after 3 checks without data, one CAN'T EVALUATE after 3 failed evaluations; existing alerts get it with no state change at deploy
+- [x] A1 failed evaluations (9e2aa17); A2 query rules, missing data and NaN (1b6924e); A3 SLOs without runs, checks that stopped running (21cc8df); A4 rules list and history show it, docs (485a70d)
+- [x] P1 Home (1f49376); P2 SLOs (68bdafa); P3 Usage & cost (333a26b); P4 Kubernetes (34c7a11); P5 GPUs (4d56dea); P6 Drop rules and AI list (this commit)
+- [ ] Post-launch follow-ups (not built, by decision):
+  - "Still sending" refinement: tell "the service stopped" apart from "the account's data stopped" (meters), and a per-alert "no data means zero" setting (today: `or vector(0)` in the query)
+  - Leasyd-wide outage guard: hold customers' CAN'T EVALUATE while Leasyd itself is down
+  - An "evaluating again" message after CAN'T EVALUATE (today the badge clears; history isn't written)
+  - Close (rather than "no data") a check-failing alert when its check is deleted or paused on purpose
+  - Remove a deleted check's id from rules that name it

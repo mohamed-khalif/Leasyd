@@ -18,7 +18,9 @@ export function Ai({ ctx, path, params }: { ctx: Ctx; path: string; params: URLS
   const id = path.split("/")[2] || null;
   const [list, setList] = useState<{ id: string; title: string; status: string; updated_at: string }[]>([]);
   const [enabled, setEnabled] = useState(true);
-  const loadList = () => ai.list().then((r) => { setList(r.conversations); setEnabled(r.enabled); }, () => undefined);
+  const [listError, setListError] = useState<string | null>(null);
+  const loadList = () => ai.list().then((r) => { setList(r.conversations); setEnabled(r.enabled); setListError(null); },
+    (e: Error) => setListError(e.message));
   useEffect(() => { loadList(); }, [id]);    
 
   // A question handed over from another page (?ask=...): ask it once, then show the conversation.
@@ -38,7 +40,8 @@ export function Ai({ ctx, path, params }: { ctx: Ctx; path: string; params: URLS
       <aside className="panel ai-history">
         <button className="btn primary" onClick={() => ctx.go("/ai")}>＋ New question</button>
         <div className="ai-history-head">Recent</div>
-        {list.length === 0 && <div className="faint" style={{ padding: "0 12px" }}>Your questions show up here.</div>}
+        {listError ? <div className="form-error" style={{ padding: "0 12px" }}>Couldn't load your questions: {listError}</div>
+          : list.length === 0 && <div className="faint" style={{ padding: "0 12px" }}>Your questions show up here.</div>}
         {list.map((c) => (
           <button key={c.id} className={`ai-history-item${c.id === id ? " on" : ""}`} onClick={() => ctx.go(`/ai/${c.id}`)} title={c.title}>
             {c.status === "running" && <span className="ai-dot" />}{c.title}

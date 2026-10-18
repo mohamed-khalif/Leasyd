@@ -4,7 +4,7 @@
 // everyone sees them. A rule's preview counts what it would have matched in the last 24 hours of
 // stored data (a query with the same conditions), and what that would save a month.
 import { useEffect, useMemo, useState } from "react";
-import { fmtNum, fmtPercent, fmtUnitPrice } from "../lib/format";
+import { fmtNum, fmtPercent, fmtUnitPrice, NONE } from "../lib/format";
 import { account, DropCondition, DropRule, Meter, query, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
@@ -46,7 +46,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
   const { account: acc, error: roleError } = useAccount(ctx.tick);
   const owner = acc?.you.role === "owner";
   const [limits, setLimits] = useState({ rules: 50, conditions: 5 });
-  const [today, setToday] = useState<Meter | null>(null);
+  const [today, setToday] = useState<Meter | null | "error">(null);
   const [editing, setEditing] = useState<{ index: number; rule: DropRule } | null>(null);
   const [previews, setPreviews] = useState<Record<string, Preview>>({});
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +56,7 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
   useEffect(() => {
     account.dropRules().then((r) => { setRules(r.rules); setSaved(JSON.stringify(r.rules)); setLimits(r.limits); },
       (e: Error) => setError(e.message));
-    account.meters(1).then((r) => setToday(r.days?.[0] ?? null), () => undefined);
+    account.meters(1).then((r) => setToday(r.days?.[0] ?? null), () => setToday("error"));
   }, [ctx.tick]);
 
   const preview = (r: DropRule) => {
@@ -102,12 +102,14 @@ export function DropRules({ ctx }: { ctx: Ctx }) {
 
       <div className="drop-cards">
         {SIGNALS.map((s) => {
-          const inn = today?.[`in_${s}`] ?? 0, out = today?.[`dropped_${s}`] ?? 0;
+          const day = today === "error" ? null : today;
+          const inn = day?.[`in_${s}`] ?? 0, out = day?.[`dropped_${s}`] ?? 0;
           return (
             <div key={s} className="drop-card">
               <span className="faint">{SIGNAL_NAME[s]} dropped today (UTC)</span>
-              <b>{fmtNum(out)}</b>
-              <span className="faint">{inn ? `of ${fmtNum(inn)} received (${fmtPercent((out / inn) * 100)}) · saves ${usd((out / 1e6) * PRICE[s].storage)} today` : "nothing received yet today"}</span>
+              <b>{today === "error" ? NONE : fmtNum(out)}</b>
+              <span className="faint">{today === "error" ? "couldn't load today's counts"
+                : inn ? `of ${fmtNum(inn)} received (${fmtPercent((out / inn) * 100)}) · saves ${usd((out / 1e6) * PRICE[s].storage)} today` : "nothing received yet today"}</span>
             </div>
           );
         })}

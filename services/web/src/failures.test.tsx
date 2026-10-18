@@ -134,3 +134,15 @@ test("GPUs: unreadable data is 'couldn't load', never $0 spend, nothing to recla
   assert.match(health, /GPUs with XID errors–couldn't load/);
   assert.doesNotMatch(health, /GPUs with XID errors0/);
 });
+
+test("Drop rules: today's meter unreadable is 'couldn't load', not 'nothing received'", async () => {
+  const text = await pageText("/drop-rules", { "GET /v1/app/account/meters": 500 });
+  assert.doesNotMatch(text, /nothing received yet today/);
+  assert.match(text, /couldn't load today's counts/);
+});
+
+test("Leasyd AI: the list of questions unreadable is 'couldn't load', not empty", async () => {
+  const text = await pageText("/ai", { "GET /v1/app/ai/conversations": 500 });
+  assert.doesNotMatch(text, /Your questions show up here/);
+  assert.match(text, /Couldn't load your questions/);
+});

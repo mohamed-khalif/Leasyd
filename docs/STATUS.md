@@ -66,6 +66,13 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
 Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.*`.
 
+### No false "all clear" (2026-10-18; pending deploy: alerts + web)
+Alerts: missing data or a failed evaluation never resolves a firing alert; it shows "no data", and one NO DATA
+(after 3 checks without data) or CAN'T EVALUATE (after 3 failed evaluations) message is sent; SLOs without runs and
+check alerts whose check stopped running do the same. Web: Home, SLOs, Usage & cost, Kubernetes, GPUs, Drop rules and
+the AI list show "couldn't load" instead of healthy, $0 or empty when a request fails. Deploy: `infra/deploy-phaseA1.sh`
+then `infra/deploy-phaseW1.sh`.
+
 ### Web app clean-up verified (2026-10-18, Phase 7)
 Before/after on production builds and in CloudWatch: `docs/phase7-report.md`. Three fixes from it (a 300 ms wait on each
 page's first visit, one "now" on Dashboards and SLOs, Usage & cost not waiting for the account); pending deploy (web).

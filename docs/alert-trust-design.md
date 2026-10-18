@@ -1,6 +1,6 @@
 # Alerts never say "all clear" without evidence: design proposal
 
-Status: **proposal, waiting for approval (2026-10-18).** Nothing is built yet. Code references are to `services/alerts/alerts.py` unless stated.
+Status: **built in its simplest safe form (2026-10-18)**; see `docs/refactor-progress.md` ("Trust fixes"). Not built, by decision: the per-alert setting (customers use `or vector(0)` instead), the account data-stopped safety net, the outage guard, "closed" for paused checks and the "evaluating again" message. They are listed there as post-launch follow-ups. Code references are to `services/alerts/alerts.py` unless stated.
 
 ## Problems today
 
