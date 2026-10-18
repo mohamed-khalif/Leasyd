@@ -1,7 +1,7 @@
 """API Gateway authorizer: API key -> tenant.
 
 Customers' OpenTelemetry SDKs send `x-api-key: <key>`; a customer's Firehose (CloudWatch
-metric streams, POST /v1/aws/cloudwatch-metrics) sends it as X-Amz-Firehose-Access-Key. The key's SHA-256 is
+metric streams and log subscriptions, POST /v1/aws/cloudwatch-metrics and -logs) sends it as X-Amz-Firehose-Access-Key. The key's SHA-256 is
 looked up in the obs-tenants table (keys themselves are never stored). On a
 match the request is allowed, the tenant is passed to the ingest Lambda in
 requestContext.authorizer (which only the authorizer can set), and the key's
@@ -14,7 +14,7 @@ A key is accepted while its status is "active", or "expiring" (replaced by a
 rotation) until its expires_at.
 
 Each key has a scope (keys created before scopes existed are "ingest"):
-  ingest  POST /v1/logs, /v1/traces, /v1/metrics, /v1/aws/cloudwatch-metrics   (customers' SDKs, Firehose)
+  ingest  POST /v1/logs, /v1/traces, /v1/metrics, /v1/aws/cloudwatch-metrics, /v1/aws/cloudwatch-logs   (customers' SDKs, Firehose)
   read    POST /v1/query, GET /v1/query/{job}    (dashboards, scripts, the UI)
           /v1/mcp                                 (the MCP server, for AI agents)
 so a key embedded in an application can send data but never read it back.
@@ -39,7 +39,9 @@ import boto3
 TABLE = os.environ["TENANTS_TABLE"]
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 
-ROUTES = {"ingest": ["POST/v1/logs", "POST/v1/traces", "POST/v1/metrics", "POST/v1/aws/cloudwatch-metrics"], "read": ["POST/v1/query", "GET/v1/query/*", "DELETE/v1/query/*", "*/v1/mcp"]}
+ROUTES = {"ingest": ["POST/v1/logs", "POST/v1/traces", "POST/v1/metrics", "POST/v1/aws/cloudwatch-metrics",
+                     "POST/v1/aws/cloudwatch-logs"],
+          "read": ["POST/v1/query", "GET/v1/query/*", "DELETE/v1/query/*", "*/v1/mcp"]}
 
 ddb = boto3.client("dynamodb")
 

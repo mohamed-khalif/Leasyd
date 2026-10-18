@@ -309,6 +309,9 @@ Resources:
   CloudWatchMetricsResource:
     Type: AWS::ApiGateway::Resource
     Properties: { RestApiId: !Ref Api, ParentId: !Ref AwsResource, PathPart: cloudwatch-metrics }
+  CloudWatchLogsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AwsResource, PathPart: cloudwatch-logs }
   # Web monitoring (real users): the browser script's events, with a public browser key (services/ingest/rum.py
   # checks it and the page's origin); no API key, so browsers can send it from any customer site.
   RumResource:
@@ -385,6 +388,23 @@ Resources:
     Properties:
       RestApiId: !Ref Api
       ResourceId: !Ref CloudWatchMetricsResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref FirehoseAuthorizer
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations"
+        TimeoutInMillis: 29000
+
+  # CloudWatch Logs subscriptions from a customer's account, the same way
+  # (examples/aws/cloudwatch-logs.yaml); ingest converts them to logs.
+  CloudWatchLogsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref CloudWatchLogsResource
       HttpMethod: POST
       AuthorizationType: CUSTOM
       AuthorizerId: !Ref FirehoseAuthorizer
@@ -1062,9 +1082,9 @@ Resources:
       ResponseTemplates:
         application/json: '{"message": "Leasyd is temporarily unavailable; retry shortly"}'
 
-  DeploymentV21:
+  DeploymentV22:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, QueryMethod, QueryJobMethod, QueryJobCancelMethod, McpMethod, RumMethod, InvalidApiKeyResponse,
+    DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, CloudWatchLogsMethod, QueryMethod, QueryJobMethod, QueryJobCancelMethod, McpMethod, RumMethod, InvalidApiKeyResponse,
                 Default5xxResponse, IntegrationFailureResponse]
     Properties:
       RestApiId: !Ref Api
@@ -1076,7 +1096,7 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV21
+      DeploymentId: !Ref DeploymentV22
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

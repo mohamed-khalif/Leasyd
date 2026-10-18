@@ -472,6 +472,173 @@ def test_cloudwatch_bad_requests_answer_as_firehose_expects(fh, body):
     assert b["requestId"] == "r9" and b["errorMessage"] and not fh.puts
 
 
+# ------------------------------------------------------------------ CloudWatch Logs subscriptions (Firehose)
+
+def cwl_message(group="/aws/lambda/checkout", stream="2026/09/26/[$LATEST]ab12", messages=("hello",), kind="DATA_MESSAGE"):
+    return {"messageType": kind, "owner": "123456789012", "logGroup": group, "logStream": stream,
+            "subscriptionFilters": ["leasyd"],
+            "logEvents": [{"id": f"e{i}", "timestamp": H20 // 10**6 + i, "message": m} for i, m in enumerate(messages)]}
+
+
+def cwl_event(*messages, plain=False, region="eu-west-1"):
+    records = [{"data": base64.b64encode(json.dumps(m).encode() if plain else gzip.compress(json.dumps(m).encode())).decode()}
+               for m in messages]
+    h = {"X-Amz-Firehose-Request-Id": "req-2"}
+    if region:
+        h["X-Amz-Firehose-Common-Attributes"] = json.dumps({"commonAttributes": {"cloud.region": region}})
+    return event(json.dumps({"requestId": "req-2", "timestamp": 1, "records": records}).encode(),
+                 ctype="application/json", path="/v1/aws/cloudwatch-logs", headers=h)
+
+
+def by_service(doc):
+    return {next(a["value"]["stringValue"] for a in r["resource"]["attributes"] if a["key"] == "service.name"): r
+            for r in doc["resourceLogs"]}
+
+
+def flat(attrs):
+    return {a["key"]: next(iter(a["value"].values())) for a in attrs}
+
+
+def test_cloudwatch_logs_become_logs(fh):
+    out = ingest.handler(cwl_event(
+        cwl_message(messages=["START RequestId: 0f8e3c2a-1b2c-4d5e-8f90-123456789abc Version: $LATEST\n",
+                              "2026-09-26T20:00:00.000Z\t0f8e3c2a-1b2c-4d5e-8f90-123456789abc\tERROR\tbank timeout\n"]),
+        cwl_message(kind="CONTROL_MESSAGE", messages=["CWL CONTROL MESSAGE: Checking health of destination Firehose."]),
+        cwl_message(group="/ecs/shop", stream="ecs/payments/0123456789abcdef0123456789abcdef", messages=["WARN: slow"]),
+        plain=False), None)
+    assert out["statusCode"] == 200
+    assert json.loads(out["body"])["requestId"] == "req-2" and "errorMessage" not in json.loads(out["body"])
+    assert {s for s, _ in fh.puts} == {"obs-t-acme-logs"}
+    [doc] = lines(fh)
+    res = by_service(doc)
+    assert set(res) == {"checkout", "payments"}
+    assert flat(res["checkout"]["resource"]["attributes"]) == {
+        "service.name": "checkout", "cloud.provider": "aws", "cloud.account.id": "123456789012", "cloud.region": "eu-west-1",
+        "aws.log.group.names": "/aws/lambda/checkout", "cloud.platform": "aws_lambda", "faas.name": "checkout"}
+    start, err = res["checkout"]["scopeLogs"][0]["logRecords"]
+    assert start["body"]["stringValue"].startswith("START RequestId") and start["severityNumber"] == 9
+    assert flat(start["attributes"])["aws.lambda.platform"] == "start"
+    assert err["severityNumber"] == 17 and err["severityText"] == "ERROR" and err["timeUnixNano"] == str(H20 // 10**6 * 10**6 + 10**6)
+    assert flat(err["attributes"]) == {"aws.log.event.id": "e1", "aws.log.stream.names": "2026/09/26/[$LATEST]ab12"}
+    pay = res["payments"]
+    assert flat(pay["resource"]["attributes"])["container.name"] == "payments"
+    assert flat(pay["resource"]["attributes"])["aws.ecs.task.id"] == "0123456789abcdef0123456789abcdef"
+    assert pay["scopeLogs"][0]["logRecords"][0]["severityNumber"] == 13
+
+
+def test_cloudwatch_logs_plain_records_and_no_region():
+    import cloudwatch_logs as cwl
+    body = json.dumps({"requestId": "r", "records": [
+        {"data": base64.b64encode((json.dumps(cwl_message()) + "\n" + json.dumps(cwl_message(messages=("b",)))).encode()).decode()}]})
+    rid, msgs = cwl.firehose_messages(body.encode())
+    assert rid == "r" and len(msgs) == 2
+    doc = cwl.to_otlp(msgs)
+    [r] = doc["resourceLogs"]
+    assert "cloud.region" not in flat(r["resource"]["attributes"])
+    assert [x["body"]["stringValue"] for x in r["scopeLogs"][0]["logRecords"]] == ["hello", "b"]
+
+
+@pytest.mark.parametrize("group,stream,service,extra", [
+    ("/aws/lambda/checkout", "2026/x", "checkout", {"faas.name": "checkout"}),
+    ("/ecs/shop", "web/nginx/0123456789abcdef0123456789abcdef", "nginx", {"container.name": "nginx"}),
+    ("/aws/rds/instance/orders-db/postgresql", "orders-db.0", "orders-db", {"db.log.type": "postgresql"}),
+    ("/aws/rds/cluster/aurora-1/slowquery", "s", "aurora-1", {"db.log.type": "slowquery"}),
+    ("API-Gateway-Execution-Logs_abc123/prod", "s", "apigateway-abc123", {"aws.apigateway.stage": "prod"}),
+    ("/vpc/flow-logs", "eni-1", "vpc/flow-logs", {}),
+    ("my-app", "i-0abc", "my-app", {})])
+def test_cloudwatch_log_group_service_names(group, stream, service, extra):
+    import cloudwatch_logs as cwl
+    got, attrs = cwl.service_of(group, stream)
+    assert got == service and extra.items() <= attrs.items()
+
+
+def rec(message):
+    import cloudwatch_logs as cwl
+    return cwl.to_record({"id": "1", "timestamp": H20 // 10**6, "message": message})
+
+
+@pytest.mark.parametrize("message,sev", [
+    ("[ERROR]\t2026-09-26T20:00:00.000Z\t0f8e3c2a-1b2c-4d5e-8f90-123456789abc\tboom", 17),
+    ("[WARNING] disk", 13),
+    ("2026-09-26 20:00:00 DEBUG cache miss", 5),
+    ("time=2026 level=error msg=x", 17),
+    ("FATAL: out of memory", 21),
+    ("Info about nothing", 0),
+    ("GET /health 200", 0)])
+def test_cloudwatch_log_text_severity(message, sev):
+    r = rec(message)
+    assert r.get("severityNumber", 0) == sev
+
+
+def test_cloudwatch_log_json_message():
+    r = rec(json.dumps({"level": "warn", "message": "slow bank", "trace_id": "5B8EFFF798038103D269B633813FC60C",
+                        "span_id": "0123456789abcdef", "order": 42, "user": {"tier": "gold"}, "ok": True}) + "\n")
+    assert r["body"]["stringValue"] == "slow bank" and r["severityNumber"] == 13
+    assert r["traceId"] == "5b8efff798038103d269b633813fc60c" and r["spanId"] == "0123456789abcdef"
+    a = {x["key"]: x["value"] for x in r["attributes"]}
+    assert a["order"] == {"intValue": "42"} and a["ok"] == {"boolValue": True}
+    assert a["user"] == {"stringValue": '{"tier":"gold"}'}
+    assert "level" not in a and "message" not in a
+
+
+def test_cloudwatch_log_xray_trace_id():
+    r = rec(json.dumps({"msg": "x", "AWS-XRAY-TRACE-ID": "Root=1-5f84c7a1-8f1e2d3c4b5a69788796a5b4;Parent=1"}))
+    assert r["traceId"] == "5f84c7a18f1e2d3c4b5a69788796a5b4"
+    assert rec("XRAY TraceId: 1-5f84c7a1-8f1e2d3c4b5a69788796a5b4\tSegmentId: 1")["traceId"] == "5f84c7a18f1e2d3c4b5a69788796a5b4"
+    assert "traceId" not in rec("no trace here")
+
+
+def test_cloudwatch_log_lambda_report_lines():
+    r = rec("REPORT RequestId: 0f8e3c2a-1b2c-4d5e-8f90-123456789abc\tDuration: 812.35 ms\tBilled Duration: 813 ms\t"
+            "Memory Size: 128 MB\tMax Memory Used: 71 MB\tInit Duration: 152.40 ms\t\n")
+    a = flat(r["attributes"])
+    assert a["aws.lambda.platform"] == "report" and a["faas.invocation_id"] == "0f8e3c2a-1b2c-4d5e-8f90-123456789abc"
+    assert (a["aws.lambda.duration_ms"], a["aws.lambda.billed_duration_ms"], a["aws.lambda.memory_size_mb"],
+            a["aws.lambda.max_memory_used_mb"], a["aws.lambda.init_duration_ms"]) == (812.35, "813", "128", "71", 152.4)
+    assert a["faas.coldstart"] is True and r["severityNumber"] == 9
+    warm = flat(rec("REPORT RequestId: 0f8e3c2a-1b2c-4d5e-8f90-123456789abc\tDuration: 2.0 ms\tBilled Duration: 3 ms\t")["attributes"])
+    assert warm["faas.coldstart"] is False
+    j = flat(rec(json.dumps({"time": "2026-09-26T20:00:00Z", "type": "platform.report", "record": {
+        "requestId": "r-1", "metrics": {"durationMs": 5.5, "billedDurationMs": 6, "memorySizeMB": 128, "maxMemoryUsedMB": 70}}}))["attributes"])
+    assert j["aws.lambda.duration_ms"] == 5.5 and j["faas.invocation_id"] == "r-1" and j["faas.coldstart"] is False
+
+
+def test_cloudwatch_logs_drop_rules_apply(metered, fh):
+    rules = [{"id": "r1", "name": "Lambda start/end", "signal": "logs", "enabled": True, "keep_percent": 0,
+              "conditions": [{"field": "attributes.aws.lambda.platform", "op": "in", "value": ["start", "end"]}]}]
+    metered.put_item(TableName="obs-tenants", Item={"pk": {"S": "drop#acme"}, "rules_json": {"S": json.dumps(rules)}})
+    out = ingest.handler(cwl_event(cwl_message(messages=[
+        "START RequestId: 0f8e3c2a-1b2c-4d5e-8f90-123456789abc Version: $LATEST",
+        "hello",
+        "END RequestId: 0f8e3c2a-1b2c-4d5e-8f90-123456789abc"])), None)
+    assert out["statusCode"] == 200
+    [doc] = lines(fh)
+    assert [r["body"]["stringValue"] for r in doc["resourceLogs"][0]["scopeLogs"][0]["logRecords"]] == ["hello"]
+
+
+def test_cloudwatch_logs_only_control_messages_store_nothing(fh):
+    out = ingest.handler(cwl_event(cwl_message(kind="CONTROL_MESSAGE")), None)
+    assert out["statusCode"] == 200 and not fh.puts
+
+
+@pytest.mark.parametrize("data", [b"opentelemetry bytes", b"\x1f\x8bnot really gzip", b"[1, 2]x"])
+def test_cloudwatch_logs_bad_records_answer_as_firehose_expects(fh, data):
+    body = json.dumps({"requestId": "r9", "records": [{"data": base64.b64encode(data).decode()}]}).encode()
+    out = ingest.handler(event(body, ctype="application/json", path="/v1/aws/cloudwatch-logs",
+                               headers={"X-Amz-Firehose-Request-Id": "r9"}), None)
+    assert out["statusCode"] == 400
+    b = json.loads(out["body"])
+    assert b["requestId"] == "r9" and b["errorMessage"] and not fh.puts
+
+
+def test_cloudwatch_logs_record_size_guard(monkeypatch):
+    import cloudwatch_logs as cwl
+    monkeypatch.setattr(cwl, "MAX_RECORD_BYTES", 1000)
+    big = gzip.compress(json.dumps(cwl_message(messages=["x" * 5000])).encode())
+    with pytest.raises(cwl.BadRequest, match="too large"):
+        cwl.firehose_messages(json.dumps({"records": [{"data": base64.b64encode(big).decode()}]}).encode())
+
+
 # ------------------------------------------------------------------ drop rules
 
 def test_drop_rules_drop_and_meter_per_signal(metered, fh):

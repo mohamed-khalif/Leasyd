@@ -2,7 +2,8 @@
 
 POST /v1/logs | /v1/traces | /v1/metrics, body OTLP protobuf or JSON,
 optionally gzip-encoded. POST /v1/aws/cloudwatch-metrics takes a customer's
-CloudWatch metric stream through their Firehose (cloudwatch.py) as metrics. The request is converted to one OTLP JSON line per
+CloudWatch metric stream through their Firehose (cloudwatch.py) as metrics, and
+POST /v1/aws/cloudwatch-logs their CloudWatch Logs subscriptions (cloudwatch_logs.py) as logs. The request is converted to one OTLP JSON line per
 Firehose record and put on the tenant's own delivery stream
 (obs-t-<tenant>-<signal>), which batches it into
 s3://.../_incoming/tenant=<T>/<signal>/dt=/hour=/ for compaction.
@@ -40,6 +41,7 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportM
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest, ExportTraceServiceResponse
 
 import cloudwatch
+import cloudwatch_logs
 import droprules
 
 STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "obs-t-")
@@ -94,8 +96,8 @@ def handler(event, context):
         if not tenant or not _TENANT.match(tenant):
             raise HttpError(401, "no tenant for this API key")
         signal = (event.get("path") or "").rstrip("/").rsplit("/", 1)[-1]
-        if signal == "cloudwatch-metrics":
-            return firehose_handler(event, tenant)
+        if signal in ("cloudwatch-metrics", "cloudwatch-logs"):
+            return firehose_handler(event, tenant, signal)
         if signal not in SIGNALS:
             raise HttpError(404, f"unknown signal path {event.get('path')!r}")
         headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
@@ -146,18 +148,19 @@ def accept(tenant, signal, doc, drop=False, rejected=0):
             "items": received, "dropped": dropped}
 
 
-def firehose_handler(event, tenant):
-    """POST /v1/aws/cloudwatch-metrics from the customer's Firehose (HTTP endpoint destination): answers
-    as Firehose expects, {requestId, timestamp[, errorMessage]}; on an error Firehose retries, then keeps
-    the data in the customer's backup bucket."""
+def firehose_handler(event, tenant, path="cloudwatch-metrics"):
+    """POST /v1/aws/cloudwatch-metrics or /v1/aws/cloudwatch-logs from the customer's Firehose (HTTP endpoint
+    destination): answers as Firehose expects, {requestId, timestamp[, errorMessage]}; on an error Firehose
+    retries, then keeps the data in the customer's backup bucket."""
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     request_id = headers.get("x-amz-firehose-request-id", "")
+    signal, source = ("logs", "cloudwatch-logs") if path == "cloudwatch-logs" else ("metrics", "cloudwatch")
 
     def answer(status, error=None):
         body = {"requestId": request_id, "timestamp": int(time.time() * 1000)}
         if error:
             body["errorMessage"] = error
-            print(json.dumps({"status": status, "error": error, "source": "cloudwatch"}))
+            print(json.dumps({"status": status, "error": error, "source": source}))
         return {"statusCode": status, "headers": {"Content-Type": "application/json"}, "body": json.dumps(body)}
 
     closed = meter.closed(tenant)
@@ -165,17 +168,35 @@ def firehose_handler(event, tenant):
         return answer(403, closed)
     if meter.over_cap(tenant):
         return answer(429, "daily data limit reached; accepted again from 00:00 UTC")
+    rejected = 0
     try:
-        rid, lines = cloudwatch.firehose_lines(_body(event, headers))
+        if signal == "logs":
+            rid, items = cloudwatch_logs.firehose_messages(_body(event, headers))
+            doc = cloudwatch_logs.to_otlp(items, _firehose_attributes(headers).get("cloud.region", ""))
+            rejected, _ = reject_out_of_range("logs", doc)
+            top = "resourceLogs"
+        else:
+            rid, items = cloudwatch.firehose_lines(_body(event, headers))
+            doc = cloudwatch.to_otlp(items)
+            top = "resourceMetrics"
         request_id = request_id or rid
-        doc = cloudwatch.to_otlp(lines)
-        out = accept(tenant, "metrics", doc, drop=True) if doc["resourceMetrics"] else {"records": 0}
-    except cloudwatch.BadRequest as e:
+        out = accept(tenant, signal, doc, drop=True, rejected=rejected) if doc[top] else {"records": 0}
+    except (cloudwatch.BadRequest, cloudwatch_logs.BadRequest) as e:
         return answer(400, str(e))
     except HttpError as e:
         return answer(e.status, str(e))
-    print(json.dumps({"tenant": tenant, "signal": "metrics", "source": "cloudwatch", "lines": len(lines), **out}))
+    print(json.dumps({"tenant": tenant, "signal": signal, "source": source, "lines": len(items), **out,
+                      **({"rejected": rejected} if rejected else {})}))
     return answer(200)
+
+
+def _firehose_attributes(headers):
+    """Firehose's common attributes (set on the delivery stream's HTTP endpoint), e.g. {"cloud.region": "eu-west-1"}."""
+    try:
+        attrs = json.loads(headers.get("x-amz-firehose-common-attributes") or "{}").get("commonAttributes")
+    except (ValueError, AttributeError):
+        return {}
+    return {str(k): str(v) for k, v in attrs.items()} if isinstance(attrs, dict) else {}
 
 
 # ------------------------------------------------------------------ metering and daily caps
