@@ -1,5 +1,5 @@
 import type React from "react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, me } from "./api";
 import { idToken, signOut } from "./auth";
 import { getConfig } from "./config";
@@ -10,35 +10,59 @@ import { settingsPage } from "./pages/settings/menu";
 import { RANGES, Range, rangeFromKey } from "./time";
 import { hashParams, replaceHashParams } from "./hashParams";
 
-// Each page's code loads when it is first opened (one chunk per page).
-const Ai = lazy(() => import("./pages/Ai").then((m) => ({ default: m.Ai })));
-const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
-const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
-const GetStarted = lazy(() => import("./pages/GetStarted").then((m) => ({ default: m.GetStarted })));
-const DropRules = lazy(() => import("./pages/DropRules").then((m) => ({ default: m.DropRules })));
-const Logs = lazy(() => import("./pages/Logs").then((m) => ({ default: m.Logs })));
-const Traces = lazy(() => import("./pages/Traces").then((m) => ({ default: m.Traces })));
-const ServiceMap = lazy(() => import("./pages/ServiceMap").then((m) => ({ default: m.ServiceMap })));
-const Lambda = lazy(() => import("./pages/Lambda").then((m) => ({ default: m.Lambda })));
-const Web = lazy(() => import("./pages/Web").then((m) => ({ default: m.Web })));
-const Gpus = lazy(() => import("./pages/Gpus").then((m) => ({ default: m.Gpus })));
-const Kubernetes = lazy(() => import("./pages/Kubernetes").then((m) => ({ default: m.Kubernetes })));
-const Metrics = lazy(() => import("./pages/Metrics").then((m) => ({ default: m.Metrics })));
-const Synthetics = lazy(() => import("./pages/Synthetics").then((m) => ({ default: m.Synthetics })));
-const Slos = lazy(() => import("./pages/Slos").then((m) => ({ default: m.Slos })));
-const Alerts = lazy(() => import("./pages/Alerts").then((m) => ({ default: m.Alerts })));
-const QueryBuilder = lazy(() => import("./pages/QueryBuilder").then((m) => ({ default: m.QueryBuilder })));
-const Sql = lazy(() => import("./pages/Sql").then((m) => ({ default: m.Sql })));
-const Dashboards = lazy(() => import("./pages/Dashboards").then((m) => ({ default: m.Dashboards })));
+// Each page's code is its own chunk, loaded when the page is first opened, or, for the page a link
+// opens, at start-up next to the sign-in check (preloadPage). A page whose code is already here
+// renders at once: through React.lazy it would show the fallback first, and React then holds the
+// page back for at least 300 ms (its Suspense reveal throttle) on every first visit.
+type Page<P> = ((props: P) => React.ReactElement) & { preload: () => Promise<unknown> };
+function splitPage<P extends object>(load: () => Promise<React.ComponentType<P>>): Page<P> {
+  let done: React.ComponentType<P> | undefined, loading: Promise<React.ComponentType<P>> | undefined;
+  const preload = () => (loading ??= load().then((c) => (done = c)));
+  const Lazy = lazy(() => preload().then((c) => ({ default: c })));
+  const Show = (props: P) => { const C = done ?? Lazy; return <C {...props} />; };
+  return Object.assign(Show, { preload });
+}
+const Ai = splitPage(() => import("./pages/Ai").then((m) => m.Ai));
+const Settings = splitPage(() => import("./pages/Settings").then((m) => m.Settings));
+const Insights = splitPage(() => import("./pages/Insights").then((m) => m.Insights));
+const GetStarted = splitPage(() => import("./pages/GetStarted").then((m) => m.GetStarted));
+const DropRules = splitPage(() => import("./pages/DropRules").then((m) => m.DropRules));
+const Logs = splitPage(() => import("./pages/Logs").then((m) => m.Logs));
+const Traces = splitPage(() => import("./pages/Traces").then((m) => m.Traces));
+const ServiceMap = splitPage(() => import("./pages/ServiceMap").then((m) => m.ServiceMap));
+const Lambda = splitPage(() => import("./pages/Lambda").then((m) => m.Lambda));
+const Web = splitPage(() => import("./pages/Web").then((m) => m.Web));
+const Gpus = splitPage(() => import("./pages/Gpus").then((m) => m.Gpus));
+const Kubernetes = splitPage(() => import("./pages/Kubernetes").then((m) => m.Kubernetes));
+const Metrics = splitPage(() => import("./pages/Metrics").then((m) => m.Metrics));
+const Synthetics = splitPage(() => import("./pages/Synthetics").then((m) => m.Synthetics));
+const Slos = splitPage(() => import("./pages/Slos").then((m) => m.Slos));
+const Alerts = splitPage(() => import("./pages/Alerts").then((m) => m.Alerts));
+const QueryBuilder = splitPage(() => import("./pages/QueryBuilder").then((m) => m.QueryBuilder));
+const Sql = splitPage(() => import("./pages/Sql").then((m) => m.Sql));
+const Dashboards = splitPage(() => import("./pages/Dashboards").then((m) => m.Dashboards));
+
+/** The page each path opens, in the same order as App's routes (the last is Home). */
+const ROUTE_PAGES: [string, Page<never>][] = [["/traces", Traces], ["/services", ServiceMap], ["/web", Web], ["/gpus", Gpus],
+  ["/kubernetes", Kubernetes], ["/lambda", Lambda], ["/synthetics", Synthetics], ["/slos", Slos], ["/alerts", Alerts],
+  ["/dashboards", Dashboards], ["/query", QueryBuilder], ["/sql", Sql], ["/metrics", Metrics], ["/logs", Logs], ["/ai", Ai],
+  ["/start", GetStarted], ["/drop-rules", DropRules], ["/settings", Settings], ["/usage", Settings]];
+export const preloadPage = (hash: string) =>
+  (ROUTE_PAGES.find(([prefix]) => hash.startsWith(prefix))?.[1] ?? (Insights as Page<never>)).preload().catch(() => undefined);
 
 /** range: the time range; tick: bumped by Refresh; now: the page's one "now" (epoch ms) that its
  *  windows end at, set when the range changes, on Refresh and on opening a page. */
 export type Ctx = { range: Range; tick: number; now: number; go: (hash: string) => void };
 
 function useHash(): string {
-  const [hash, setHash] = useState(location.hash.slice(1) || "/");
+  const [hash, setHash] = useState(() => {
+    const h = location.hash.slice(1) || "/";
+    preloadPage(h);                              // the opened page's code, alongside config and the sign-in check
+    return h;
+  });
   useEffect(() => {
-    const on = () => setHash(location.hash.slice(1) || "/");
+    // A transition: the current page stays up while the next page's code loads (no fallback to hold back).
+    const on = () => { const h = location.hash.slice(1) || "/"; preloadPage(h); startTransition(() => setHash(h)); };
     addEventListener("hashchange", on);
     return () => removeEventListener("hashchange", on);
   }, []);
