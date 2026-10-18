@@ -292,15 +292,15 @@ type Results = { results: { q: { promql: string; legend?: string }; result: Prom
 type Names = Map<string, string> | null | undefined;
 const namesNeeded = (p: Panel) => !!p.queries?.some((q) => q.promql.includes("check_id"));
 
-function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range, tick: number, names: Names): Loaded {
+function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range, now: number, names: Names): Loaded {
   const [state, setState] = useState<Results>(null);
   const step = bucketSeconds(range);
-  const key = JSON.stringify([panel.queries, vars, range.key, range.from, range.to, tick]);
+  const key = JSON.stringify([panel.queries, vars, range.key, range.from, range.to, now]);
   useEffect(() => {
     if (panel.type === "text" || !panel.queries?.length) return;
     const ctl = new AbortController(), signal = ctl.signal;
     setState(null);
-    const w = rangeWindow(range);
+    const w = rangeWindow(range, now);   // the page's one "now": every panel asks for the same window
     // Number panels: one value over the page's whole range, at its end (minute-aligned).
     const at = Math.floor(Date.parse(w.end) / 60_000) * 60, rangeS = Math.max(60, Math.round((Date.parse(w.end) - Date.parse(w.start)) / 60_000) * 60);
     const run = (q: { promql: string }) => panel.type === "stat"
@@ -310,7 +310,7 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
     Promise.all(panel.queries.map((q) => run(q).then((result) => ({ q, result }))))   // api.ts runs at most 6 at once
       .then((results) => !signal.aborted && setState({ results }), (e: Error) => !signal.aborted && setState({ error: e.message }));
     return () => ctl.abort();
-  }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed: `key` encodes queries, variables, range and refresh
+  }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps -- keyed: `key` encodes queries, variables, range and the page's now (Refresh)
   // Series are named here, not when the answers come, so they pick up check names whenever those arrive.
   const waiting = namesNeeded(panel) && names === undefined;
   const nq = panel.queries?.length ?? 0;
@@ -342,7 +342,7 @@ function legend(template: string | undefined, metric: Record<string, string>, qi
 }
 
 function PanelCard({ ctx, panel, vars, names, edit, tools }: { ctx: Ctx; panel: Panel; vars: Record<string, string[]>; names: Names; edit: boolean; tools?: ReactNode }) {
-  const data = usePanelData(panel, vars, ctx.range, ctx.tick, names);
+  const data = usePanelData(panel, vars, ctx.range, ctx.now, names);
   const step = bucketSeconds(ctx.range);
   const fmt = (v: number) => fmtUnit(v, panel.unit ?? "", panel.decimals);
   const bodyH = panel.h * ROW_PX + (panel.h - 1) * 12 - 40;          // the grid row heights and gaps, less the header

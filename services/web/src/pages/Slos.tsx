@@ -9,7 +9,6 @@ import { Stat } from "../components/Stat";
 import { TimeSeries } from "../components/TimeSeries";
 import { customRange } from "../time";
 import { Loaded, useQuery } from "../useQuery";
-import { useNow } from "../useNow";
 
 // SLOs over synthetic checks, worked out from their results (the tenant's own metrics):
 //   availability  good = runs that passed          (synthetics.check.success = 1)
@@ -63,9 +62,9 @@ function sloQueries(slo: Slo, excluded: string[], start: number, end: number, bu
 const goodOf = (slo: Slo, r: Result | null, row = 0) => Number(r?.rows[row]?.[slo.type === "availability" ? r.columns.indexOf("sum(value)") : r.columns.indexOf("count")] ?? 0);
 const totalOf = (r: Result | null, row = 0) => Number(r?.rows[row]?.[r.columns.indexOf("count")] ?? 0);
 
-function useSlo(slo: Slo | null, excluded: string[], tick: number) {
-  const now = useNow(tick);
-  const key = `${slo?.id}:${slo?.updated_at ?? ""}:${excluded.length}:${tick}`;
+/** An SLO over its own window (window_days) and the last hour, both ending at the page's one "now". */
+function useSlo(slo: Slo | null, excluded: string[], now: number) {
+  const key = `${slo?.id}:${slo?.updated_at ?? ""}:${excluded.length}:${now}`;
   const q = slo ? sloQueries(slo, excluded, now - slo.window_days * DAY, now) : null;
   const h = slo ? sloQueries(slo, excluded, now - HOUR, now) : null;
   const good = useQuery(q?.good ?? null, "g" + key), total = useQuery(q && q.total !== q.good ? q.total : null, "t" + key);
@@ -126,7 +125,7 @@ function SloList({ ctx }: { ctx: Ctx }) {
 
 function SloRow({ slo, checks: all, ctx }: { slo: Slo; checks: Check[]; ctx: Ctx }) {
   const excluded = all.filter((c) => slo.checks.includes(c.id)).flatMap((c) => c.excluded_runs ?? []);
-  const { status, loaded } = useSlo(slo, excluded, ctx.tick);
+  const { status, loaded } = useSlo(slo, excluded, ctx.now);
   return (
     <tr onClick={() => ctx.go(`/slos/${slo.id}`)}>
       <td><span className="link">{slo.name} ›</span><div className="faint">{describe(slo, all)}</div></td>
@@ -151,7 +150,7 @@ function SloDetail({ ctx, id }: { ctx: Ctx; id: string }) {
   const list = useCheckList(ctx.tick), all = list.checks;
   useEffect(() => { slos.get(id).then(setSlo, (e: Error) => setError(e.message)); }, [id, ctx.tick]);
   const excluded = (all ?? []).filter((c) => slo?.checks.includes(c.id)).flatMap((c) => c.excluded_runs ?? []);
-  const { status, loaded, now } = useSlo(slo, excluded, ctx.tick);
+  const { status, loaded, now } = useSlo(slo, excluded, ctx.now);
   const daily = slo ? sloQueries(slo, excluded, now - slo.window_days * DAY, now, 86400) : null;
   const key = `${slo?.id}:${slo?.updated_at ?? ""}:${excluded.length}:${ctx.tick}`;   // changes once the SLO has loaded
   const dGood = useQuery(daily?.good ?? null, "dg" + key), dTotal = useQuery(daily && daily.total !== daily.good ? daily.total : null, "dt" + key);

@@ -17,7 +17,7 @@ async function idle() {
 }
 const ends = () => new Set(bodies.filter((b) => b.path === "/v1/app/query").map((b) => (b.body as { end?: string }).end).filter(Boolean));
 
-for (const route of ["/", "/services", "/kubernetes"]) {
+for (const route of ["/", "/services", "/kubernetes", "/dashboards/builtin-services", "/slos"]) {
   test(`every query on ${route} uses one window end`, async () => {
     location.hash = route;
     bodies.length = 0;
