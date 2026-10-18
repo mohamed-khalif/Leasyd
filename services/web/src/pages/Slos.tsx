@@ -70,7 +70,10 @@ function useSlo(slo: Slo | null, excluded: string[], now: number) {
   const good = useQuery(q?.good ?? null, "g" + key), total = useQuery(q && q.total !== q.good ? q.total : null, "t" + key);
   const good1h = useQuery(h?.good ?? null, "h" + key), total1h = useQuery(h && h.total !== h.good ? h.total : null, "i" + key);
   const perf = slo?.type === "performance";
-  const loaded: Loaded = { data: good.data && (!perf || total.data) ? good.data : null, error: good.error ?? total.error, loading: good.loading || total.loading };
+  // The last hour decides "at risk" (burn rate): without it the state can't be told, so it counts as not loaded.
+  const all = [good, total, good1h, total1h];
+  const loaded: Loaded = { data: good.data && (!perf || total.data) && good1h.data && (!perf || total1h.data) ? good.data : null,
+                           error: all.find((x) => x.error)?.error ?? null, loading: all.some((x) => x.loading) };
   const status = slo && loaded.data
     ? evaluate(slo.target, goodOf(slo, good.data), totalOf(perf ? total.data : good.data),
                goodOf(slo, good1h.data), totalOf(perf ? total1h.data : good1h.data))
@@ -130,7 +133,7 @@ function SloRow({ slo, checks: all, ctx }: { slo: Slo; checks: Check[]; ctx: Ctx
     <tr onClick={() => ctx.go(`/slos/${slo.id}`)}>
       <td><span className="link">{slo.name} ›</span><div className="faint">{describe(slo, all)}</div></td>
       <td className="mono">{slo.target}% · {slo.window_days} d</td>
-      <td className="mono">{loaded.error ? <span className="faint">error</span> : status ? pct(status.attainment) : "…"}</td>
+      <td className="mono">{loaded.error ? <span className="faint" title={loaded.error}>couldn't load</span> : status ? pct(status.attainment) : "…"}</td>
       <td><BudgetBar left={status?.budgetLeft ?? null} /> <span className="mono faint">{status ? budgetText(status.budgetLeft) : ""}</span></td>
       <td>{status && <span className="slo-state" style={{ color: stateColor(status.state), borderColor: stateColor(status.state) }}>{status.state}</span>}</td>
     </tr>

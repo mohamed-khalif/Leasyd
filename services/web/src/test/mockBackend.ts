@@ -18,6 +18,8 @@ export const bodies: { path: string; body: unknown }[] = [];
 /** "METHOD /path" (no query string) -> the status to fail it with, for error-path tests. "METHOD /path ~text"
  *  fails only requests whose body contains text (one query of a page, say). */
 export const failing = new Map<string, number>();
+/** Requests to fail by their parsed body (a query's time window, say), for error-path tests. */
+export const failWhen: { path: string; when: (body: Record<string, unknown>) => boolean; status: number }[] = [];
 
 function serve(method: string, url: string, body: string): Promise<Response> {
   return new Promise((resolve) => {
@@ -57,7 +59,8 @@ export async function installMockBackend() {
     if (method === "POST" && typeof init?.body === "string") bodies.push({ path: url.pathname, body: JSON.parse(init.body) });
     const body = typeof init?.body === "string" ? init.body : "";
     const fail = failing.get(`${method} ${url.pathname}`)
-      ?? [...failing].find(([k]) => k.startsWith(`${method} ${url.pathname} ~`) && body.includes(k.slice(`${method} ${url.pathname} ~`.length)))?.[1];
+      ?? [...failing].find(([k]) => k.startsWith(`${method} ${url.pathname} ~`) && body.includes(k.slice(`${method} ${url.pathname} ~`.length)))?.[1]
+      ?? failWhen.find((f) => f.path === url.pathname && body && f.when(JSON.parse(body)))?.status;
     if (fail) return new Response(JSON.stringify({ error: `forced ${fail}` }), { status: fail });
     inFlight++;
     try {

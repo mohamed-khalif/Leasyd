@@ -5,11 +5,11 @@ import { test, before, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { act } from "react";
 import { App } from "./App";
-import { failing, inFlight, installMockBackend, requests } from "./test/mockBackend";
+import { failing, failWhen, inFlight, installMockBackend, requests } from "./test/mockBackend";
 import { render, settle } from "./test/dom";
 
 before(installMockBackend);
-afterEach(() => failing.clear());
+afterEach(() => { failing.clear(); failWhen.length = 0; });
 
 async function idle() {
   for (let quiet = 0, i = 0; quiet < 3 && i < 100; i++) {
@@ -97,4 +97,12 @@ test("Home: check uptime unreadable is 'couldn't load', not every check healthy"
 test("Home: a card whose query failed says so instead of waiting for ever", async () => {
   const text = await pageText("/", { "POST /v1/app/query ~\"group_by\":[\"service\"]": 500 });
   assert.match(text, /Services–couldn't load/);
+});
+
+test("SLOs: the last hour unreadable is 'couldn't load', never 'healthy'", async () => {
+  failWhen.push({ path: "/v1/app/query", status: 500,
+                  when: (b) => typeof b.start === "string" && Date.parse(String(b.end)) - Date.parse(b.start) <= 3_600_000 });
+  const text = await pageText("/slos", {});
+  assert.doesNotMatch(text, /healthy/);
+  assert.match(text, /couldn't load/);
 });
