@@ -16,7 +16,6 @@ const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m
 const Insights = lazy(() => import("./pages/Insights").then((m) => ({ default: m.Insights })));
 const GetStarted = lazy(() => import("./pages/GetStarted").then((m) => ({ default: m.GetStarted })));
 const DropRules = lazy(() => import("./pages/DropRules").then((m) => ({ default: m.DropRules })));
-const Usage = lazy(() => import("./pages/Usage").then((m) => ({ default: m.Usage })));
 const Logs = lazy(() => import("./pages/Logs").then((m) => ({ default: m.Logs })));
 const Traces = lazy(() => import("./pages/Traces").then((m) => ({ default: m.Traces })));
 const ServiceMap = lazy(() => import("./pages/ServiceMap").then((m) => ({ default: m.ServiceMap })));
@@ -153,12 +152,10 @@ export function App() {
   } else if (path.startsWith("/drop-rules")) {
     page = <DropRules ctx={ctx} />;
     crumb = ["Account", "Drop rules"];
-  } else if (path.startsWith("/settings")) {
-    page = <Settings ctx={ctx} path={path} />;
-    crumb = ["Settings", settingsPage(path).label];
-  } else if (path.startsWith("/usage")) {
-    page = <Usage ctx={ctx} />;
-    crumb = ["Account", "Usage & Cost"];
+  } else if (path.startsWith("/settings") || path.startsWith("/usage")) {   // #/usage: the old Usage & Cost page
+    const at = path.startsWith("/usage") ? "/settings/usage" : path;
+    page = <Settings ctx={ctx} path={at} />;
+    crumb = ["Settings", settingsPage(at).label];
   } else {
     page = <Insights ctx={ctx} />;
     crumb = ["Leasyd", "Home"];

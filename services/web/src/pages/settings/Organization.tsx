@@ -1,6 +1,5 @@
-// Settings › Organization: the account itself, its people, and today's usage against its limits.
+// Settings › Organization: the account itself and its people.
 import { FormEvent, useState } from "react";
-import { fmtNum, fmtUnit } from "../../lib/format";
 import { account } from "../../api";
 import { Field, ownersOnly, Section, SettingsPage, SettingsProps } from "./parts";
 
@@ -67,37 +66,6 @@ export function Team({ acc, owner, busy, act }: SettingsProps) {
           </tbody>
         </table>
       </Section>
-    </SettingsPage>
-  );
-}
-
-const meterColor = (f: number) => (f >= 1 ? "var(--sev-error)" : f > 0.8 ? "var(--sev-warn)" : "var(--accent)");
-
-export function Usage({ acc }: SettingsProps) {
-  const cap = acc.daily_cap_bytes ?? null, used = acc.today?.bytes ?? 0;
-  const share = cap ? Math.min(1, used / cap) : 0;
-  const allowance = acc.searches?.units_per_day ?? null, searched = acc.searches?.units_today ?? 0;
-  const searchShare = allowance ? Math.min(1, searched / allowance) : 0;
-  return (
-    <SettingsPage title="Usage" lead={<>Today so far. For the month and the cost, see <a href="#/usage">Usage &amp; Cost</a>.</>}>
-      <Section title="Data received today" about={cap ? `Your plan takes up to ${fmtUnit(cap, "bytes")} of logs, traces and metrics a day (UTC). Over that, new data is refused until 00:00 UTC.` : "No daily limit."}>
-        <div className="plan-usage">
-          <div className="plan-num">{fmtUnit(used, "bytes")}{cap ? <span className="faint"> of {fmtUnit(cap, "bytes")}</span> : null}</div>
-          {cap ? <div className="meter"><i style={{ width: `${share * 100}%`, background: meterColor(share) }} /></div> : null}
-          <div className="faint">{fmtNum(acc.today?.records ?? 0)} records{acc.today?.refused_bytes ? ` · ${fmtUnit(acc.today.refused_bytes, "bytes")} refused over the limit` : ""}</div>
-        </div>
-        {cap && share >= 1 && <div className="form-error">Today's limit is reached: new data is refused until 00:00 UTC.</div>}
-      </Section>
-      {allowance ? (
-        <Section title="Searches today" about="Each search uses units; longer time ranges use more. The allowance resets at 00:00 UTC.">
-          <div className="plan-usage">
-            <div className="plan-num">{Math.round(searchShare * 100)}%<span className="faint"> of the daily allowance</span></div>
-            <div className="meter"><i style={{ width: `${searchShare * 100}%`, background: meterColor(searchShare) }} /></div>
-            <div className="faint">{fmtNum(searched)} of {fmtNum(allowance)} search units</div>
-          </div>
-          {searchShare >= 1 && <div className="form-error">Today's search allowance is used up: searches resume at 00:00 UTC.</div>}
-        </Section>
-      ) : null}
     </SettingsPage>
   );
 }

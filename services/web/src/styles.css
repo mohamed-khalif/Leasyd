@@ -845,3 +845,4 @@ td.warn { color: var(--sev-warn); }
   .set-menu { position: static; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .set-section { grid-template-columns: 1fr; gap: 10px; }
 }
+.set-wide { padding-top: 22px; border-top: 1px solid var(--border); display: grid; gap: 10px; }

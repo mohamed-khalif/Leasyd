@@ -77,7 +77,7 @@ export function Billing({ ctx, acc, owner, busy, act, setNote, reload }: Setting
       </Section>
 
       <Section title="This month so far" about={<>An estimate from the data received since the 1st (UTC). Check runs are not included;
-        your invoice is final. <a href="#/usage">Forecast the month in Usage &amp; Cost</a>.</>}>
+        your invoice is final. <a href="#/settings/usage">See the 30-day estimate in Usage &amp; cost</a>.</>}>
         {soFar === "error" ? <p className="form-error">Couldn't read this month's usage. Try Refresh.</p>
           : soFar ? <><div className="plan-num">{fmtUsd(soFar.cost)}</div><div className="faint">over {soFar.days} {soFar.days === 1 ? "day" : "days"}</div></>
           : <div className="skeleton" style={{ height: 40, maxWidth: 200 }} />}

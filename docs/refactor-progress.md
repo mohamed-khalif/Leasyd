@@ -112,4 +112,6 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Security: change password (Cognito ChangePassword, through the library already used; no new package)
 - [x] Billing: plan notice (trial days left / pay as you go / ended / overdue), Stripe buttons, this month so far (estimate from the meter), prices, Enterprise "Book a demo". Stripe now returns to #/settings/billing; the old #/settings?billing=... still opens Billing
 - [x] Behaviour changes, agreed in the plan: #/settings opens Profile (was one long page); the MCP command fills in a new read key on the API keys page (was on the same long page)
+- [x] Usage & Cost merged into Settings › Usage & cost (today's limits, then the 30-day estimate); its sidebar link removed; the old #/usage opens the new page (asked 2026-10-18)
+- [x] Built-in GPU dashboard could not be copied (units " W" / " °C" refused by the server, and not shown): units W and °C allowed and shown (9aad083)
 ## Phase 7: not started

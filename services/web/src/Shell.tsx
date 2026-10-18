@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { fmtDay } from "./lib/format";
-import { IconClock, IconCost, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu } from "./icons";
+import { IconClock, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu } from "./icons";
 import { customRange, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { useAccount } from "./useAccount";
 
@@ -82,9 +82,8 @@ export function Shell(p: Props) {
         {link("/synthetics", "Synthetic checks", <IconPulse />, p.path.startsWith("/synthetics"))}
         {link("/slos", "SLOs", <IconTarget />, p.path.startsWith("/slos"))}
         <div className="nav-section">Account</div>
-        {link("/usage", "Usage & Cost", <IconCost />, p.path.startsWith("/usage"))}
         {link("/drop-rules", "Drop rules", <IconFilter />, p.path.startsWith("/drop-rules"))}
-        {link("/settings", "Settings", <IconGear />, p.path.startsWith("/settings"))}
+        {link("/settings", "Settings", <IconGear />, p.path.startsWith("/settings") || p.path.startsWith("/usage"))}
         <div className="nav-foot">
           <div className="whoami" title={p.user.email}>{p.user.email}<div className="faint mono">{p.user.tenant}</div></div>
           <button className="btn ghost" onClick={p.onSignOut}><IconOut />Sign out</button>

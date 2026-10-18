@@ -31,7 +31,7 @@ const go = async (route: string) => { await act(async () => { location.hash = ro
 test("the menu lists every page and marks the open one", async () => {
   const view = await open("/settings/team");
   const links = [...view.container.querySelectorAll(".set-menu a")].map((a) => a.textContent);
-  assert.deepEqual(links, ["Profile", "Security", "Organization", "Team", "Usage", "Billing", "API keys", "GPU prices", "AI tools"]);
+  assert.deepEqual(links, ["Profile", "Security", "Organization", "Team", "Usage & cost", "Billing", "API keys", "GPU prices", "AI tools"]);
   assert.equal(view.container.querySelector(".set-menu a.active")?.textContent, "Team");
   assert.match(view.container.textContent ?? "", /Invite someone/);
   await view.unmount();
@@ -68,5 +68,15 @@ test("back from Stripe at the old address: Billing with the thank-you note, whic
 test("Billing shows the trial's days left", async () => {
   const view = await open("/settings/billing");
   assert.match(view.container.querySelector(".set-notice")?.textContent ?? "", /Free trial: \d+ days? left/);
+  await view.unmount();
+});
+
+test("the old Usage & Cost address opens Settings › Usage & cost, with today's limits and the 30-day estimate", async () => {
+  const view = await open("/usage");
+  const text = view.container.textContent ?? "";
+  assert.equal(view.container.querySelector(".set-menu a.active")?.textContent, "Usage & cost");
+  assert.match(text, /Data received today/);
+  assert.match(text, /Estimated total, next 30 days/);
+  assert.equal(document.querySelector('.nav a[href="#/usage"]'), null, "no separate sidebar link");
   await view.unmount();
 });

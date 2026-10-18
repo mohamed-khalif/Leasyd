@@ -3,7 +3,7 @@
 export const SETTINGS_MENU = [
   { group: "Account", pages: [{ id: "profile", label: "Profile" }, { id: "security", label: "Security" }] },
   { group: "Organization", pages: [
-    { id: "organization", label: "Organization" }, { id: "team", label: "Team" }, { id: "usage", label: "Usage" },
+    { id: "organization", label: "Organization" }, { id: "team", label: "Team" }, { id: "usage", label: "Usage & cost" },
     { id: "billing", label: "Billing" }, { id: "api-keys", label: "API keys" }, { id: "gpu-prices", label: "GPU prices" },
     { id: "ai-tools", label: "AI tools" },
   ] },

@@ -68,10 +68,11 @@ Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`,
 
 ### Settings redesign (2026-10-18, built and tested locally; pending deploy)
 Settings has its own menu: Account (Profile, Security: change password) and Organization (Organization,
-Team, Usage, Billing, API keys, GPU prices, AI tools), one page each at `#/settings/<page>`, every section
+Team, Usage & cost, Billing, API keys, GPU prices, AI tools), one page each at `#/settings/<page>`, every section
 with its explanation on the left and controls on the right. Billing shows the plan (trial days left, pay
 as you go, ended, overdue), Stripe buttons, an estimate of this month so far, prices and "Book a demo".
-API keys can have a name (`POST /v1/app/account/keys {scope, name?}`, up to 60 characters). Deploy:
+API keys can have a name (`POST /v1/app/account/keys {scope, name?}`, up to 60 characters). The separate
+Usage & Cost page moved into Settings (the old `#/usage` link still works). Deploy:
 tenants stack (key names, Stripe return address) and the web app.
 
 ### Live demo (2026-10-14, live; verified on AWS)
