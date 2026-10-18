@@ -4,7 +4,7 @@
 // heat) and Planning (daily peaks, never-needed GPUs, the demand trend). A GPU opens in a drawer.
 // Queries: infra/queries.ts; conclusions: infra/analysis.ts; contract: docs/gpu-kubernetes.md.
 import { useState } from "react";
-import { fmtAgo, fmtDateTime, fmtDuration, fmtFixed, fmtHours, fmtMiB, fmtNum, fmtPercent, fmtUsd, shortGpu } from "../lib/format";
+import { fmtAgo, fmtDateTime, fmtDuration, fmtFixed, fmtHours, fmtMiB, fmtNum, fmtPercent, fmtUsd, NONE, shortGpu } from "../lib/format";
 import type { Ctx } from "../App";
 import { Capped } from "../components/Capped";
 import { Card, Drawer, StackedBars, Tabs } from "../components/Charts";
@@ -13,7 +13,7 @@ import { TimeSeries } from "../components/TimeSeries";
 import { byModel, byTeam, fleetSpend, forecast, now, recommendations } from "../infra/analysis";
 import { HOT_TEMP, IDLE_UTIL, priceFor, xidInfo, type GpuPrice } from "../infra/model";
 import * as Q from "../infra/queries";
-import { loads, useGpuPrices, useHint, useRows } from "../infra/useInfra";
+import { loads, Rows, useGpuPrices, useHint, useRows } from "../infra/useInfra";
 import { useRangeWindow } from "../useNow";
 
 type Tab = "overview" | "workloads" | "health" | "planning";
@@ -183,6 +183,17 @@ function weightedUtil(gs: Q.GpuRow[]) {
 
 // ------------------------------------------------------------------ workloads & cost
 
+// A card or list whose rows failed says "couldn't load"; it never shows $0, 0 errors or "nothing to reclaim".
+type RowsState = { error: string | null; loading: boolean };
+const shown = (rs: RowsState[], v: string) => (rs.some((r) => r.error) ? NONE : rs.some((r) => r.loading) ? "…" : v);
+const why = (rs: RowsState[], sub: string) => (rs.some((r) => r.error) ? "couldn't load" : sub);
+const toneIf = <T,>(rs: RowsState[], t: T) => (rs.some((r) => r.error || r.loading) ? undefined : t);
+const allOf = <T,>(first: Rows<T>, ...rest: RowsState[]) => {
+  const all: RowsState[] = [first, ...rest];
+  return { ...loads(first), data: all.some((r) => r.loading || r.error) ? null : loads(first).data,
+           error: all.find((r) => r.error)?.error ?? null, loading: all.some((r) => r.loading) };
+};
+
 function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: ReturnType<typeof useRows<Q.GpuRow>>; prices: GpuPrice[] }) {
   const wl = useRows<Q.GpuWorkloadRow>(Q.gpuWorkloads(ctx.range.minutes, f), w, "wl" + k, hint);
   const stalled = useRows<Q.StalledRow>(Q.gpuStalled(f), w, "stalled" + k, hint);
@@ -196,14 +207,15 @@ function Workloads({ ctx, w, k, hint, f, fleet, prices }: Props & { fleet: Retur
   return (
     <>
       <div className="cards" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
-        <Card label="Estimated spend" value={fmtUsd(spend.total)} sub={`${fmtHours(fleet.rows.reduce((s, g) => s + g.hours, 0))} of GPU time in the range`} />
-        <Card label="Held but idle" value={fmtUsd(spend.idle)} sub="workloads holding GPUs they don't use: reclaimable" tone={spend.idle ? "warn" : undefined} />
-        <Card label="Unallocated" value={fmtUsd(spend.free)} sub="GPUs no workload held: spare capacity" />
-        <Card label="Utilization of held GPUs" value={fmtPercent(heldUtil)} sub="how hard workloads use the GPUs they hold" />
+        <Card label="Estimated spend" value={shown([fleet], fmtUsd(spend.total))} sub={why([fleet], `${fmtHours(fleet.rows.reduce((s, g) => s + g.hours, 0))} of GPU time in the range`)} />
+        <Card label="Held but idle" value={shown([fleet, wl], fmtUsd(spend.idle))} sub={why([fleet, wl], "workloads holding GPUs they don't use: reclaimable")}
+              tone={toneIf([fleet, wl], spend.idle ? "warn" : undefined)} />
+        <Card label="Unallocated" value={shown([fleet, wl], fmtUsd(spend.free))} sub={why([fleet, wl], "GPUs no workload held: spare capacity")} />
+        <Card label="Utilization of held GPUs" value={shown([wl], fmtPercent(heldUtil))} sub={why([wl], "how hard workloads use the GPUs they hold")} />
       </div>
 
       <Panel title="Recommendations" flush right={<a href={`#/alerts/rules/new?template=${encodeURIComponent("GPU held but idle")}`}>Alert me when a GPU sits idle ›</a>}>
-        <Loads q={loads(wl)} empty={false} height={80}>
+        <Loads q={allOf(wl, fleet, stalled)} empty={false} height={80}>
           {() => recs.length ? (
             <ul className="recs">{recs.map((r, i) => (
               <li key={i} className={r.level}>
@@ -289,10 +301,10 @@ function Health({ w, k, hint, f, onGpu }: Props & { onGpu: (g: string) => void }
   return (
     <>
       <div className="cards" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
-        <Card label="GPUs with XID errors" value={String(xidGpus)} tone={xidGpus ? "bad" : "ok"} sub="errors the driver reported" />
-        <Card label="Memory errors" value={String(ecc)} tone={ecc ? "bad" : "ok"} sub="double-bit ECC, row remapping" />
-        <Card label="Throttled" value={String(throttled)} tone={throttled ? "warn" : "ok"} sub="slowed for heat or power" />
-        <Card label={`Hotter than ${HOT_TEMP} °C`} value={String(hot)} tone={hot ? "warn" : "ok"} sub="at some point in the range" />
+        <Card label="GPUs with XID errors" value={shown([health], String(xidGpus))} tone={toneIf([health], xidGpus ? "bad" : "ok")} sub={why([health], "errors the driver reported")} />
+        <Card label="Memory errors" value={shown([health], String(ecc))} tone={toneIf([health], ecc ? "bad" : "ok")} sub={why([health], "double-bit ECC, row remapping")} />
+        <Card label="Throttled" value={shown([health], String(throttled))} tone={toneIf([health], throttled ? "warn" : "ok")} sub={why([health], "slowed for heat or power")} />
+        <Card label={`Hotter than ${HOT_TEMP} °C`} value={shown([health], String(hot))} tone={toneIf([health], hot ? "warn" : "ok")} sub={why([health], "at some point in the range")} />
       </div>
       <Panel title="GPUs that need attention" flush right={<span style={{ display: "flex", gap: 12 }}>
         <a href={`#/alerts/rules/new?template=${encodeURIComponent("GPU XID error")}`}>Alert me on XID errors ›</a>

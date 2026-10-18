@@ -125,3 +125,12 @@ test("Kubernetes: unreadable data is 'couldn't load', never 0 problems or all re
   assert.match(text, /Nodes–couldn't load/);
   assert.match(text, /Pods with problems–couldn't load/);
 });
+
+test("GPUs: unreadable data is 'couldn't load', never $0 spend, nothing to reclaim or 0 errors", async () => {
+  const work = await pageText("/gpus?tab=workloads", {});   // no engine in tests: every GPU query fails
+  assert.doesNotMatch(work, /Nothing to reclaim/);
+  assert.match(work, /Estimated spend–couldn't load/);
+  const health = await pageText("/gpus?tab=health", {});
+  assert.match(health, /GPUs with XID errors–couldn't load/);
+  assert.doesNotMatch(health, /GPUs with XID errors0/);
+});
