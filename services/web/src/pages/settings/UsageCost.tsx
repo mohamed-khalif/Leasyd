@@ -42,8 +42,9 @@ function useDropShare(ctx: Ctx): Record<Signal, number> | null {
 const fees = (s: Signal, stored: number, dropped = 0) =>
   ((stored + dropped) / 1e6) * PRICE[s].ingest + (stored / 1e6) * PRICE[s].storage;
 
-/** The cost estimate: the last 24 hours by service, extrapolated to 30 days, at list prices. */
-function UsageCost({ ctx }: { ctx: Ctx }) {
+/** The cost estimate: the last 24 hours by service, extrapolated to 30 days, at list prices. Settings
+ *  shows it under the Usage page without waiting for the account (it doesn't need it). */
+export function UsageCost({ ctx }: { ctx: Ctx }) {
   const q = { traces: useBaseline(ctx, "traces"), logs: useBaseline(ctx, "logs"), metrics: useBaseline(ctx, "metrics") };
   const dropShare = useDropShare(ctx);
   const month = (s: Signal) => (q[s].data ? records(q[s].data!).reduce((a, r) => a + Number(r.count), 0) * 30 : 0);
@@ -120,7 +121,7 @@ function UsageCost({ ctx }: { ctx: Ctx }) {
 
 const meterColor = (f: number) => (f >= 1 ? "var(--sev-error)" : f > 0.8 ? "var(--sev-warn)" : "var(--accent)");
 
-export function Usage({ ctx, acc }: SettingsProps) {
+export function Usage({ acc }: SettingsProps) {
   const cap = acc.daily_cap_bytes ?? null, used = acc.today?.bytes ?? 0;
   const share = cap ? Math.min(1, used / cap) : 0;
   const allowance = acc.searches?.units_per_day ?? null, searched = acc.searches?.units_today ?? 0;
@@ -145,7 +146,6 @@ export function Usage({ ctx, acc }: SettingsProps) {
           {searchShare >= 1 && <div className="form-error">Today's search allowance is used up: searches resume at 00:00 UTC.</div>}
         </Section>
       ) : null}
-      <div className="set-wide"><UsageCost ctx={ctx} /></div>
     </SettingsPage>
   );
 }

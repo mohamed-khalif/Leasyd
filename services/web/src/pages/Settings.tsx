@@ -5,7 +5,7 @@ import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
 import { Profile, Security } from "./settings/Account";
 import { Organization, Team } from "./settings/Organization";
-import { Usage } from "./settings/UsageCost";
+import { Usage, UsageCost } from "./settings/UsageCost";
 import { Billing } from "./settings/Billing";
 import { ApiKeys, AiTools } from "./settings/ApiKeys";
 import { GpuPrices } from "./settings/GpuPrices";
@@ -57,6 +57,7 @@ export function Settings({ ctx, path }: { ctx: Ctx; path: string }) {
         {note && <div className="form-note" role="status">{note}</div>}
         {acc ? PAGES[page.id]({ ctx, acc, owner: acc.you.role === "owner", busy, act, setNote, reload })
           : !(error ?? loadError) && <div className="skeleton" style={{ height: 300 }} />}
+        {page.id === "usage" && <div className="set-wide"><UsageCost ctx={ctx} /></div>}
       </div>
     </div>
   );
