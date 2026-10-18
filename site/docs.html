@@ -164,6 +164,15 @@ LEASYD_API_KEY=YOUR_KEY bash leasyd-k8s.sh --cluster prod [--gpu] [--no-logs]</c
       </ul>
       <p>Functions appear under <strong>AWS Lambda</strong> in the app.</p>
 
+      <h3 id="cloudwatch-logs">AWS logs (CloudWatch Logs)</h3>
+      <p>Logs already in CloudWatch Logs (Lambda, ECS, RDS, API Gateway, your own log groups) can come to Leasyd without changing your apps: a CloudFormation template from <strong>Get started › AWS logs</strong> adds subscription filters to the log groups you list (or, with <code>AllLogGroups=true</code>, every log group in the region) and sends new log events through Amazon Data Firehose to <code>https://ingest.leasyd.com/v1/aws/cloudwatch-logs</code>, about a minute after they're written. Deploy it once per region.</p>
+      <ul>
+        <li><strong>Services</strong> come from the log group: <code>/aws/lambda/&lt;function&gt;</code> is the function, an ECS (<code>awslogs</code>) stream <code>&lt;prefix&gt;/&lt;container&gt;/&lt;task&gt;</code> the container, <code>/aws/rds/instance/&lt;db&gt;/…</code> the database, <code>API-Gateway-Execution-Logs_&lt;id&gt;/&lt;stage&gt;</code> <code>apigateway-&lt;id&gt;</code>; any other group is its own name.</li>
+        <li><strong>Each log</strong>: JSON logs give the message, level and fields; text logs a level when they start with one. A trace id (<code>trace_id</code>, <code>traceId</code> or an X-Ray id) links the log to its trace. Lambda's <code>REPORT</code> lines carry <code>aws.lambda.duration_ms</code>, <code>aws.lambda.max_memory_used_mb</code> and <code>faas.coldstart</code>.</li>
+        <li><strong>Fewer logs</strong>: <code>FilterPattern</code> (CloudWatch's syntax, e.g. <code>?ERROR ?WARN</code>) filters before Firehose; drop rules filter in Leasyd (e.g. Lambda's START and END lines: <code>attributes.aws.lambda.platform in start, end</code>).</li>
+        <li><strong>Limits</strong>: only new events are sent; a log group takes at most 2 subscription filters; a region has one account-wide subscription policy. AWS bills Firehose (about $0.029 per GB); CloudWatch's own ingestion price doesn't change.</li>
+      </ul>
+
       <h3 id="limits">Limits and answers</h3>
       <table>
         <tr><th>Answer</th><th>Meaning</th><th>What your exporter does</th></tr>

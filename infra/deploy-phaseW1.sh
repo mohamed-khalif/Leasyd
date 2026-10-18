@@ -32,7 +32,7 @@ LOGINS=obs-state; aws cloudformation describe-stacks --stack-name obs-state >/de
 # Install files the Get started page links to (<app>/install/...), from examples/.
 mkdir -p services/web/dist/install
 cp examples/ec2/setup.sh services/web/dist/install/collector.sh
-cp examples/ruby/leasyd_runtime_metrics.rb examples/aws/cloudwatch-metrics.yaml examples/aws/lambda-sample.yaml examples/web/leasyd-rum.js \
+cp examples/ruby/leasyd_runtime_metrics.rb examples/aws/cloudwatch-metrics.yaml examples/aws/cloudwatch-logs.yaml examples/aws/lambda-sample.yaml examples/web/leasyd-rum.js \
   services/web/dist/install/
 mkdir -p services/web/dist/install/kubernetes     # leasyd-k8s.sh fetches its values files from here
 cp examples/kubernetes/leasyd-k8s.sh examples/kubernetes/agent.yaml examples/kubernetes/cluster.yaml \

@@ -13,7 +13,7 @@ import { useAccount } from "../useAccount";
 import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
 
-type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "web";
+type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "aws-logs" | "web";
 const SOURCES: [Source, string, string][] = [
   ["server", "Linux server", "Host metrics and system logs, and a local endpoint for your apps"],
   ["kubernetes", "Kubernetes", "Nodes, workloads, pods, events and pod logs, with one Helm install"],
@@ -23,6 +23,7 @@ const SOURCES: [Source, string, string][] = [
   ["python", "Python", "Auto-instrumentation: traces, logs, runtime metrics"],
   ["ruby", "Ruby", "OpenTelemetry SDK plus Leasyd's runtime metrics"],
   ["lambda", "AWS Lambda", "CloudWatch metrics for every function, plus traces"],
+  ["aws-logs", "AWS logs (CloudWatch)", "Lambda, ECS, RDS, API Gateway: logs already in CloudWatch"],
   ["web", "Website (real users)", "Page loads, Core Web Vitals, JavaScript errors, slow API calls"],
   ["other", "Other (.NET, Go, PHP…)", "Any OpenTelemetry SDK, over OTLP/HTTP"],
 ];
@@ -80,7 +81,7 @@ export function GetStarted({ ctx, initial }: { ctx: Ctx; initial?: string | null
     <div className="start">
       <div className="start-head">
         <h2>Send your first data</h2>
-        <p className="muted">Three steps, about five minutes. Leasyd takes OpenTelemetry data (logs, traces and metrics) and AWS CloudWatch metrics.</p>
+        <p className="muted">Three steps, about five minutes. Leasyd takes OpenTelemetry data (logs, traces and metrics) and AWS CloudWatch metrics and logs.</p>
       </div>
       {error && <div className="form-error" role="alert">{error}</div>}
 
@@ -309,6 +310,22 @@ OTEL_EXPORTER_OTLP_HEADERS=x-api-key=${key}`}</Code>
             To see the invocation page first, deploy our sample function (invoked 5 times a minute, fails now and then):{" "}
             <code className="mono">curl -fsSLO {site}/install/lambda-sample.yaml</code>, then the same <code className="mono">aws cloudformation deploy</code>{" "}
             with <code className="mono">--stack-name leasyd-lambda-sample</code>. Delete the stacks to stop.
+          </p>
+        </>
+      );
+    case "aws-logs":
+      return (
+        <>
+          <p>Send the logs already in <b>CloudWatch Logs</b> (Lambda, ECS, RDS, API Gateway, your own groups). List the log groups, then run once per region with AWS credentials:</p>
+          <Code>{`curl -fsSL -o leasyd-cloudwatch-logs.yaml ${site}/install/cloudwatch-logs.yaml
+aws cloudformation deploy --stack-name leasyd-cloudwatch-logs \\
+  --template-file leasyd-cloudwatch-logs.yaml --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \\
+  --parameter-overrides LeasydApiKey=${key} LeasydEndpoint=${endpoint}/v1/aws/cloudwatch-logs \\
+    LogGroups=/aws/lambda/my-function,/ecs/my-service`}</Code>
+          <p className="muted">
+            New log events appear under <b>Logs</b> about a minute after they're written, each under its service: a Lambda function, an ECS container,
+            an RDS database, or the log group's name. <code className="mono">AllLogGroups=true</code> sends every log group in the region instead;
+            {" "}<code className="mono">FilterPattern=&quot;?ERROR ?WARN&quot;</code> sends only those lines. AWS bills Firehose (about $0.029 per GB). Delete the stack to stop.
           </p>
         </>
       );
