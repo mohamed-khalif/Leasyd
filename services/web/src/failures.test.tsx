@@ -117,3 +117,11 @@ test("Usage & cost: drop shares unreadable say so, not 'nothing dropped'", async
   const text = await pageText("/settings/usage", { "GET /v1/app/account/meters": 500 });
   assert.match(text, /couldn't load what drop rules discard/);
 });
+
+test("Kubernetes: unreadable data is 'couldn't load', never 0 problems or all ready", async () => {
+  const text = await pageText("/kubernetes", {});      // no engine in tests: every Kubernetes query fails
+  assert.doesNotMatch(text, /Pods with problems0/);
+  assert.doesNotMatch(text, /All nodes ready/);
+  assert.match(text, /Nodes–couldn't load/);
+  assert.match(text, /Pods with problems–couldn't load/);
+});

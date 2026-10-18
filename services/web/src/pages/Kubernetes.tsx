@@ -4,7 +4,7 @@
 // drawer (?pod=namespace/name): its containers, usage against limits, events, logs and traces.
 // Queries: infra/queries.ts; contract: docs/gpu-kubernetes.md.
 import { useMemo, useState } from "react";
-import { fmtAgo, fmtBytes, fmtCores, fmtNum, fmtPercent } from "../lib/format";
+import { fmtAgo, fmtBytes, fmtCores, fmtNum, fmtPercent, NONE } from "../lib/format";
 import type { Ctx } from "../App";
 import { Capped } from "../components/Capped";
 import { Card, Drawer, Tabs } from "../components/Charts";
@@ -106,26 +106,33 @@ function Overview({ ctx, w, k, hint, f, nodes, pods, onPod, onTab }: Props & { o
   const short = workloads.rows.filter((r) => r.kind !== "Job" && r.desired != null && (r.ready ?? 0) < r.desired);
   const warnings = events.rows.filter((e) => e.warning);
   const top = topKeys(usage.rows, (r) => r.cpu ?? 0, 6);
+  // A card or list whose rows failed says "couldn't load"; it never shows 0 problems or "all ready".
+  const shown = (r: { error: string | null; loading: boolean }, v: string) => (r.error ? NONE : r.loading ? "…" : v);
+  const why = (r: { error: string | null }, sub: string) => (r.error ? "couldn't load" : sub);
+  const okTone = <T,>(r: { error: string | null; loading: boolean }, t: T) => (r.error || r.loading ? undefined : t);
+  const attention = [pods, nodes, workloads];
+  const attentionQ = { ...loads(pods), data: attention.some((r) => r.loading || r.error) ? null : loads(pods).data,
+                       error: attention.find((r) => r.error)?.error ?? null, loading: attention.some((r) => r.loading) };
   const series = (field: "cpu" | "mem") => top.map((key, i) => ({ label: key, color: COLORS[i % COLORS.length],
     points: usage.rows.filter((r) => r.key === key && r[field] != null).map((r) => [Date.parse(r.t), Number(r[field])] as [number, number]) }));
   return (
     <>
       <div className="cards" style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))" }}>
-        <Card label="Nodes" value={`${ready} of ${ns.length}`} sub="ready" tone={ns.length && ready < ns.length ? "bad" : undefined} onClick={() => onTab("nodes")} />
-        <Card label="Pods" value={fmtNum(ps.length)} sub={`${phase(2)} running · ${phase(1)} pending · ${phase(4)} failed`} onClick={() => onTab("pods")}
-              tone={phase(1) || phase(4) ? "warn" : undefined} />
-        <Card label="Pods with problems" value={String(problems.length)} sub="crash loops, image pulls, OOM kills, restarts, pending"
-              tone={problems.length ? "bad" : "ok"} />
-        <Card label="CPU" value={allocCpu ? fmtPercent((cpu / allocCpu) * 100) : "–"} sub={`${fmtCores(cpu)} of ${fmtCores(allocCpu)} allocatable`} />
-        <Card label="Memory" value={allocMem ? fmtPercent((mem / allocMem) * 100) : "–"} sub={`${fmtBytes(mem)} of ${fmtBytes(allocMem)}`} />
-        <Card label="Warning events" value={fmtNum(sum(warnings.map((e) => e.events)))} sub={`${warnings.length} kind${warnings.length === 1 ? "" : "s"} of trouble`} onClick={() => onTab("events")}
-              tone={warnings.length ? "warn" : undefined} />
+        <Card label="Nodes" value={shown(nodes, `${ready} of ${ns.length}`)} sub={why(nodes, "ready")} tone={okTone(nodes, ns.length && ready < ns.length ? "bad" : undefined)} onClick={() => onTab("nodes")} />
+        <Card label="Pods" value={shown(pods, fmtNum(ps.length))} sub={why(pods, `${phase(2)} running · ${phase(1)} pending · ${phase(4)} failed`)} onClick={() => onTab("pods")}
+              tone={okTone(pods, phase(1) || phase(4) ? "warn" : undefined)} />
+        <Card label="Pods with problems" value={shown(pods, String(problems.length))} sub={why(pods, "crash loops, image pulls, OOM kills, restarts, pending")}
+              tone={okTone(pods, problems.length ? "bad" : "ok")} />
+        <Card label="CPU" value={shown(nodes, allocCpu ? fmtPercent((cpu / allocCpu) * 100) : NONE)} sub={why(nodes, `${fmtCores(cpu)} of ${fmtCores(allocCpu)} allocatable`)} />
+        <Card label="Memory" value={shown(nodes, allocMem ? fmtPercent((mem / allocMem) * 100) : NONE)} sub={why(nodes, `${fmtBytes(mem)} of ${fmtBytes(allocMem)}`)} />
+        <Card label="Warning events" value={shown(events, fmtNum(sum(warnings.map((e) => e.events))))} sub={why(events, `${warnings.length} kind${warnings.length === 1 ? "" : "s"} of trouble`)} onClick={() => onTab("events")}
+              tone={okTone(events, warnings.length ? "warn" : undefined)} />
       </div>
 
       <Panel title="Needs attention" flush right={<span style={{ display: "flex", gap: 12 }}>
         <a href={`#/alerts/rules/new?template=${encodeURIComponent("Pod crash-looping")}`}>Alert me on crash loops ›</a>
         <a href={`#/alerts/rules/new?template=${encodeURIComponent("Node not ready")}`}>on nodes ›</a></span>}>
-        <Loads q={loads(pods)} empty={false} height={80}>
+        <Loads q={attentionQ} empty={false} height={80}>
           {() => problems.length || short.length || ns.some((n) => n.ready !== 1) ? (
             <table className="dtable">
               <thead><tr><th style={{ width: "34%" }}>What</th><th style={{ width: "18%" }}>Namespace</th><th>Why</th><th>Node</th></tr></thead>
