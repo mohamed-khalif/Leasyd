@@ -593,14 +593,16 @@ def _eval_ok(rule, had_failures):
 
 def evaluate_query_rule(rule, now):
     """Each series: ok / degraded / critical. A level must hold for_minutes before it is notified
-    (resolving to ok is notified at once). One message per rule and kind of change."""
+    (resolving to ok is notified at once). One message per rule and kind of change. A firing series
+    without a value (gone from the result, or NaN) is never resolved: it stays firing with "no data",
+    and the GRACE-th evaluation in a row without one tells the channels once."""
     tenant, rid = rule["tenant"], _id_of(rule)
     at = (int(now.timestamp()) - LAG_S) // 10 * 10
-    results = run_promql(tenant, rule["promql"], at)[:MAX_SERIES_PER_RULE]
+    results = [(labels, v) for labels, v in run_promql(tenant, rule["promql"], at)[:MAX_SERIES_PER_RULE] if v == v]   # NaN: no value
     states = {s["pk"].split("#", 3)[3]: s for s in _items(tenant, f"astate#{tenant}#{rid}#")}
     _eval_ok(rule, states.pop(EVAL_KEY, None))
     hold = int(rule.get("for_minutes") or 0) * 60
-    changes = {"critical": [], "degraded": [], "ok": []}
+    changes = {"critical": [], "degraded": [], "ok": [], "no_data": []}
     seen = set()
     for labels, value in results:
         sid = _series_id(labels)
@@ -611,7 +613,7 @@ def evaluate_query_rule(rule, now):
         if lvl == notified:
             if lvl == "ok" and st:          # was pending, back to ok before it was notified
                 client("table").delete_item(Key={"pk": st["pk"]})
-            elif st and (pending or st.get("value") != value):
+            elif st and (pending or st.get("value") != value or st.get("no_data")):
                 _set_state(tenant, rid, sid, level=notified, firing=notified != "ok", subject=series_name(labels), value=_dynamo(value))
             continue
         if lvl != pending:
@@ -625,14 +627,21 @@ def evaluate_query_rule(rule, now):
         else:
             _set_state(tenant, rid, sid, level=notified, firing=notified != "ok", subject=series_name(labels), value=_dynamo(value),
                        pending=pending, pending_since=since)
-    for sid, st in states.items():   # series no longer in the result: resolved
-        if sid not in seen:
-            if st.get("level", "ok") != "ok":
-                changes["ok"].append((st.get("subject", "a series"), None, st["level"]))
+    for sid, st in states.items():   # series without a value now
+        if sid in seen:
+            continue
+        if st.get("level", "ok") == "ok":    # never notified (at most pending): forgotten quietly
             client("table").delete_item(Key={"pk": st["pk"]})
+            continue
+        missed, told = int(st.get("no_data", 0)) + 1, bool(st.get("no_data_told"))
+        if missed >= GRACE and not told:
+            changes["no_data"].append((st.get("subject", "a series"), None, st["level"]))
+            told = True
+        _set_state(tenant, rid, sid, **{**{k: v for k, v in st.items() if k not in ("pk", "tenant", "updated_at")},
+                                        "no_data": missed, "no_data_since": st.get("no_data_since") or at, "no_data_told": told})
     link = f"{APP_URL}/#/query?promql={quote(rule['promql'])}"
     cond = f"{rule['op']} {float(rule['critical']):g}"
-    for lvl in ("critical", "degraded", "ok"):
+    for lvl in ("critical", "degraded", "ok", "no_data"):
         items = changes[lvl]
         if not items:
             continue
@@ -642,15 +651,21 @@ def evaluate_query_rule(rule, now):
         subject = shown[0][0] if len(items) == 1 else f"{len(items)} series"
         if lvl == "ok":
             detail = f"Back to normal: {'; '.join(lines)}{more}."
+        elif lvl == "no_data":
+            names = "; ".join(f"{name} (was {was})" for name, _, was in shown)
+            detail = (f"No data for {GRACE} checks in a row: {names}{more}. Leasyd can't tell whether it's fixed, so the alert "
+                      "stays firing until the query returns a value within limits. If no data means zero for this query, "
+                      "add `or vector(0)` to it.")
         else:
             threshold = float(rule["critical"]) if lvl == "critical" else float(rule["degraded"])
             held = f" for {int(rule['for_minutes'])} min" if int(rule.get("for_minutes") or 0) else ""
             detail = f"{lvl.capitalize()}: the value is {rule['op']} {threshold:g}{held}: {'; '.join(lines)}{more}."
         if rule.get("summary"):
             detail = f"{rule['summary']}\n{detail}"
-        fire(tenant, rule, "resolved" if lvl == "ok" else "firing", f"{subject} ({lvl})" if lvl != "ok" else subject,
+        state = {"ok": "resolved", "no_data": "no_data"}.get(lvl, "firing")
+        fire(tenant, rule, state, f"{subject} ({lvl})" if state == "firing" else subject,
              f"{detail}\nQuery: {rule['promql']} (critical {cond})", link)
-    return {k: len(v) for k, v in changes.items()}
+    return {k: len(v) for k, v in changes.items() if k != "no_data"}
 
 
 def _fmt(v):
@@ -758,12 +773,15 @@ def _route(tenant, user, method, parts, body):
         view = lambda it: {**{k: v for k, v in it.items() if k not in ("pk", "tenant")}, "id": _id_of(it)}  # noqa: E731
         if len(parts) == 1 and method == "GET":
             rules = sorted((view(i) for i in _items(tenant, f"alert#{tenant}#")), key=lambda r: r["name"].lower())
-            firing = {}
+            firing, no_data = {}, {}
             for s in _items(tenant, f"astate#{tenant}#"):
+                if s.get("firing") and s.get("no_data"):
+                    no_data.setdefault(s["pk"].split("#")[2], []).append(s.get("subject") or "a series")
                 if s.get("firing"):
                     subject = s.get("subject") or s["pk"].split("#", 3)[3]
                     firing.setdefault(s["pk"].split("#")[2], []).append(f"{subject} ({s['level']})" if s.get("level") else subject)
-            return _http(200, {"items": [{**r, "firing": firing.get(r["id"], [])} for r in rules], "limit": MAX_RULES})
+            return _http(200, {"items": [{**r, "firing": firing.get(r["id"], []), "no_data": no_data.get(r["id"], [])} for r in rules],
+                               "limit": MAX_RULES})
         if len(parts) == 1 and method == "POST":
             rule = validate_rule(body, checks, slos, channels)
             if rule["type"] == "query":      # the query must run (a typo is caught now, not at 3 am)

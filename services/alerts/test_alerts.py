@@ -253,8 +253,8 @@ def test_check_rule_fires_escalates_and_resolves_per_series(aws, monkeypatch):
     assert ev(2) == {"critical": 1, "degraded": 0, "ok": 0}                    # cart escalates
     assert "(was degraded)" in sent[0]["text"]
     sent.clear()
-    prom.series = [({"service_name": "checkout"}, 1.0)]
-    assert ev(3) == {"critical": 0, "degraded": 0, "ok": 2}                    # checkout ok, cart gone: both resolved, one message
+    prom.series = [({"service_name": "checkout"}, 1.0), ({"service_name": "cart"}, 0.5)]
+    assert ev(3) == {"critical": 0, "degraded": 0, "ok": 2}                    # both back to normal: one message
     assert len(sent) == 1 and "RESOLVED" in sent[0]["title"] and "2 series" in sent[0]["title"]
     assert call("acme", "GET", "rules")[1]["items"][0]["firing"] == []
     assert not alerts._items("acme", f"astate#acme#{rule['id']}#")            # no state kept for healthy series
@@ -357,6 +357,45 @@ def test_a_failing_slo_rule_keeps_its_state_and_is_told_once(aws, monkeypatch):
     assert len(sent) == 2 and "CAN'T EVALUATE" in sent[1]["title"]
     assert alerts._state("acme", rule["id"], "sssstttttttt").get("firing")   # still firing
     assert "query failed" not in sent[1]["text"]                               # an internal error isn't passed on
+
+
+def test_missing_data_never_resolves_a_firing_alert(aws, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    prom, sent = FakeProm(), []
+    monkeypatch.setattr(alerts, "_invoke", prom)
+    monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    rule = query_rule("acme", ch, degraded=None)
+    item = alerts._plain(alerts._get(f"alert#acme#{rule['id']}", "acme"))
+    t0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    ev = lambda m: alerts.evaluate_query_rule(item, t0 + timedelta(minutes=m))  # noqa: E731
+    prom.series = [({"service_name": "checkout"}, 9.0), ({"service_name": "cart"}, 4.0)]
+    ev(0)
+    assert len(sent) == 1 and "checkout (critical)" in sent[0]["title"]
+    sent.clear()
+    prom.series = []                                                           # the data stopped: nothing comes back
+    for m in (1, 2):
+        assert ev(m) == {"critical": 0, "degraded": 0, "ok": 0}
+    assert not sent                                                            # 2 checks without data: not yet
+    listing = call("acme", "GET", "rules")[1]["items"][0]
+    assert listing["firing"] == ["service_name=checkout (critical)"] and listing["no_data"] == ["service_name=checkout"]
+    ev(3)
+    assert len(sent) == 1 and "NO DATA" in sent[0]["title"] and "service_name=checkout" in sent[0]["title"]
+    assert sent[0]["payload"]["state"] == "no_data" and "or vector(0)" in sent[0]["text"]
+    for m in (4, 5):
+        ev(m)
+    assert len(sent) == 1                                                      # told once
+    assert not alerts._state("acme", rule["id"], alerts._series_id({"service_name": "cart"}))   # cart never fired: forgotten quietly
+    prom.series = [({"service_name": "checkout"}, float("nan"))]               # NaN is no data too
+    ev(6)
+    assert len(sent) == 1 and call("acme", "GET", "rules")[1]["items"][0]["firing"] == ["service_name=checkout (critical)"]
+    prom.series = [({"service_name": "checkout"}, 9.5)]                        # data is back, still critical: no longer "no data"
+    ev(7)
+    assert len(sent) == 1 and call("acme", "GET", "rules")[1]["items"][0]["no_data"] == []
+    prom.series = [({"service_name": "checkout"}, 1.0)]                        # a value within limits resolves it
+    ev(8)
+    assert len(sent) == 2 and "RESOLVED" in sent[1]["title"]
+    assert call("acme", "GET", "rules")[1]["items"][0]["firing"] == []
 
 
 # ------------------------------------------------------------------ dashboards
