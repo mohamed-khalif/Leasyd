@@ -1,6 +1,6 @@
 # Leasyd as an agent that delivers outcomes: strategy
 
-Status: **Phase 1 done (2026-10-18). Phases 2–6 not started; waiting for review of Phase 1.**
+Status: **Phases 1–2 done (2026-10-18). Phases 3–6 not written, by decision; their short form is `docs/agent-summary.md`.**
 No code was changed for this document.
 
 Method:
@@ -21,7 +21,7 @@ Method:
 | "API keys" | **True, but coarse.** There are three fixed scopes: `ingest`, `read` and `browser` (`services/ingest/authorizer.py:14-20, 47`). There is **no write scope**: no API key can change anything. |
 | "A query endpoint with job/cancel lifecycle" | **True.** A query becomes a job after 20 s. `DELETE /v1/query/{job}` (and `/v1/app/query/{job}`) writes an S3 cancel marker, which workers poll every 5 s (`services/compaction/query.py:448, 1015-1068`). |
 | "Per-tenant limits" | **True.** Per tenant: queries per minute, 25 queries in flight, daily search units (`query.py:1112-1118`); AI turns per day (`services/ai/sre.py:47`); MCP calls per minute and per day (`mcp.py:37-38`); a daily data cap on free accounts; and object counts (rules, checks, keys…). |
-| "Dynamic scope labels" | **Not found.** Nothing in the code is called that. The nearest things: the fixed key scopes above; OTel instrumentation scope, which is just a `scope_name` column (`query.py:83-95`); `checks: ["*"]`, which covers future checks in maintenance windows and alert rules (`services/synthetics/reliability.py:51-54`); dashboard variables such as `$service_name` (`services/alerts/dashboards.py:4-6`); and Kubernetes pod labels as resource attributes. **Question for you:** what did you mean by it? |
+| "Dynamic scope labels" | **Planned, not built** (corrected by the founder, 2026-10-18: the brief listed it as existing by mistake). Nothing in the code is called that today. The nearest things: the fixed key scopes above; OTel instrumentation scope, which is just a `scope_name` column (`query.py:83-95`); `checks: ["*"]` for future checks (`services/synthetics/reliability.py:51-54`); dashboard variables (`services/alerts/dashboards.py:4-6`); and Kubernetes pod labels as resource attributes. **Treated in this document as a dependency for the agent**, not an existing feature. **Assumption** about what it will be: labels (service, environment, team…) that scope what a key, a user or the agent may see and change. |
 | Earlier bugs where "failures showed as all clear" | **Fixed in the web app for the cases found** (`services/web/src/failures.test.tsx`). Phase 1 found **more cases, in both the web app and the alert evaluator** (§1.4). They matter more for an agent, because an agent would rely on exactly these signals. |
 
 Also stale: `docs/ARCHITECTURE.md` §8.2–8.3 still say "Cancel: none", "per-tenant concurrency: none", and that the query runs twice after 20 s. All three were fixed in Phase 4/B14 (`query.py:1015-1068, 1260-1323`).
@@ -195,22 +195,169 @@ These are bugs today, independent of any agent. A separate fix is recommended (b
 | Root-cause accuracy | **No.** There are no evals and no feedback. |
 | AI cost per answer | **Logs only** (`ai_usage` tokens, `sre.py:615-623`). |
 
-## Phase 2: outcomes
+## Phase 2: outcomes, not features
 
-*Not started. Waiting for review of Phase 1.*
+**Baselines.** Leasyd has no paying customers' history yet. So every "baseline" below is **measured per customer during the first two weeks**, read-only. Before that, no claim of improvement can be made.
 
-## Phase 3: agent architecture
+**Prerequisite for all of them: the all-clear fixes** (§1.4, agreed 2026-10-18). An agent that reads "resolved" when data stopped would report wrong outcomes.
 
-*Not started.*
+### 2.1 Candidate outcomes
 
-## Phase 4: trust, autonomy and safety
+#### O1. Incidents are triaged before a human looks
 
-*Not started.*
+- **Customer outcome:** when an alert fires, the person paged already has a short explanation:
+  - what changed;
+  - where (service, endpoint, trace ids);
+  - since when;
+  - how sure the agent is, and what to look at next.
+- **How we measure it:**
+  - % of firings with a summary within 3 minutes;
+  - time from firing to summary;
+  - human rating of each summary: right, partly right, wrong (**needs a feedback button: gap 6**);
+  - accuracy on a replay set of past and planted faults.
+- **Baseline today:** 0% (the AI only answers when asked).
+- **What "good" looks like:**
+  - more than 90% of firings get a summary within 3 minutes;
+  - "right or partly right" at least 70% on the replay set before launch, and in production samples.
+- **What the agent does:**
+  - **Detect:** the alert fires; we already detect this.
+  - **Investigate:** the existing AI SRE tools.
+  - **Decide:** rank hypotheses.
+  - **Act:** none in customer systems; post to the alert's channels and the firing record.
+  - **Verify:** check its cited evidence exists.
+  - **Report:** the summary itself.
+- **Data and permissions:** read-only on telemetry, checks and alerts, plus "post a message to the rule's channels". No write access anywhere.
+- **Worst case:**
+  - a confident wrong summary sends the on-call engineer the wrong way and costs time;
+  - text planted in logs steers the summary (§1.3 gap 11);
+  - the cost of long investigations during an alert storm.
 
-## Phase 5: product and business
+#### O2. Telemetry spend goes down without losing data anyone uses
 
-*Not started.*
+- **Customer outcome:** "We pay for the data we use."
+- **How we measure it:**
+  - stored and ingested records and $ per service per month (exact meters, `account.py:388-400`);
+  - plus a guard: no dashboard, alert or recent query reads data the agent proposed to drop.
+- **Baseline today:** measured per customer. **Gap:** there is no record of what data is queried (`services/compaction/query.py` logs no query shape), so "unused" can't be computed yet.
+- **What "good" looks like:** 20–40% less stored volume (**Assumption**, based on debug logs and health-check spans typically being a large share). There must be zero cases of "the agent dropped what an incident needed".
+- **What the agent does:**
+  - **Detect:** high-volume, never-read streams.
+  - **Investigate:** samples and owners.
+  - **Propose:** a drop or sampling rule with its expected saving.
+  - **Approve:** a person approves it.
+  - **Verify:** with the meters over the next days.
+  - **Report:** "saved $X".
+- **Data and permissions:**
+  - meters;
+  - query history (new);
+  - the drop-rule API, which is owner-only. A scoped agent permission is needed (the planned scope labels).
+- **Worst case:** **dropped data is gone for good** (`droprules.py:2`). The agent should prefer sampling (`keep_percent`) over dropping and never act without approval.
+- **Business tension:** Leasyd bills on ingest and storage, so this outcome lowers revenue per customer (see Phase 5 in the summary).
 
-## Phase 6: roadmap and decisions
+#### O3. Alerts mean something: less noise, no blind spots
 
-*Not started.*
+- **Customer outcome:** fewer pages that needed no action, and no important service without an alert.
+- **How we measure it:**
+  - firings per week;
+  - flapping, meaning fired and resolved within 10 minutes. This can be computed from the alert history logs (`alerts.py:352-368`);
+  - "% of firings marked useful" (**needs acknowledgement and feedback: gap 6**);
+  - coverage, meaning the share of services with traffic that have at least one alert or check.
+- **Baseline today:** flap rate and coverage can be computed now; usefulness can't.
+- **What "good" looks like:** at least 50% fewer flaps; coverage of the top services by traffic at least 90%.
+- **What the agent does:**
+  - **Detect:** noisy or missing rules.
+  - **Investigate:** **backtest** a changed threshold or `for_minutes` over 30 days of data. The engine can evaluate PromQL at past times; the rule preview exists (`alerts.py` preview).
+  - **Propose:** the change, with the backtest result.
+  - **Approve:** a person approves.
+  - **Verify:** the next 2 weeks.
+- **Data and permissions:**
+  - alert rules write access (member);
+  - **versioning and an audit log are needed first** (gaps 3–4).
+- **Worst case:** the agent tunes away a real alert and the next real incident is missed. Every change must show the past firings it would have suppressed.
+
+#### O4. Faster recovery (MTTR) through automatic remediation
+
+- **Customer outcome:** incidents fix themselves: rollback, restart, scale.
+- **How we measure it:** MTTR. **Can't be measured today** (no incidents, no acknowledgement, no resolution records), and recovery would be hard to attribute to the agent.
+- **Baseline today:** none.
+- **What the agent does:** it would need write access to the customer's cloud or deploy system. **Leasyd has no such access or integration** (§1.2).
+- **Worst case:** a production outage caused by the agent.
+- **Verdict:** not now. Highest blast radius, lowest verifiability. A "suggested next step" inside O1 gets most of the value.
+
+#### O5. Every user-facing endpoint is watched (reliability coverage)
+
+- **What the agent does:** proposes synthetic checks and check-based SLOs for the busiest endpoints it sees in traces and RUM.
+- **How we measure it:** coverage %, which is objective.
+- **Data and permissions:** the checks API (member). Checks are reversible, but each run is metered.
+- **Worst case:** extra check costs, or checks against endpoints with side effects. Proposed checks must be GET-only.
+- **Verdict:** **good, low risk, but this is closer to a feature than an outcome.** A "suggested checks" list would serve most of it without an agent.
+
+#### O6. On-call that sleeps
+
+- **How we measure it:** notifications between 22:00 and 07:00 local, per week. This is countable from alert history; it needs the team's time zone.
+- **What delivers it:** really O1 + O3 combined. It is a good **headline** for customers, but not a separate thing to build.
+
+#### O7. GPU and Kubernetes spend
+
+- **What already exists:** idle-GPU and right-sizing recommendations are computed in the browser (`services/web/src/infra/analysis.ts`).
+- **What the agent would add:** it can only report, because it has no access to the cluster.
+- **How we measure it:** idle GPU-hours × price, which is objective.
+- **Verdict:** valuable for GPU-heavy customers, a niche today. A **weekly report is a conventional feature**; it needs no agent.
+
+### 2.2 Ranking
+
+Scores from 1 (poor) to 5 (best). For "risk if wrong", 5 = safest.
+
+| Outcome | Customer value | Feasible with data we hold | Risk if wrong (5 = safest) | Verifiable | Total |
+|---|---|---|---|---|---|
+| **O1 Triage before a human looks** | 5 | 4 (AI SRE + alerts exist; needs a trigger and feedback) | 4 (read-only; a wrong summary costs time) | 3 (replay set + ratings) | **16** |
+| **O3 Alert noise and coverage** | 4 | 3 (backtest possible; usefulness needs feedback) | 3 (could tune away a real alert; reversible with versioning) | 4 (flaps and coverage are objective) | **14** |
+| O2 Telemetry spend | 4 | 2 (needs query history; owner-only API) | 2 (dropped data is gone) | 5 (exact meters) | 13 |
+| O5 Endpoint coverage | 3 | 4 | 4 | 4 | 15, but feature-like |
+| O6 On-call that sleeps | 5 | via O1 + O3 | via O1 + O3 | 4 | headline, not a build |
+| O7 GPU / K8s spend | 3 (niche) | 3 | 5 (report only) | 4 | 15, but a report |
+| O4 Auto-remediation | 5 | 1 (no access) | 1 | 1 | 8 |
+
+### 2.3 Recommendation: O1 first, then O3
+
+**O1 first: incident triage.**
+- **It is useful on day one** and needs no permission to change anything. That matches where Leasyd is: a read-only AI that already exists, with no audit log, versioning or write scope.
+- **It earns the trust that every later step needs.** Customers see the agent being right, with evidence, many times before it is allowed to change anything.
+- **What it needs** (small to medium, no new access):
+  - an alert-fired trigger for the AI;
+  - a "right / partly / wrong" button;
+  - citation checks;
+  - a replay evaluation set;
+  - a per-tenant budget in tokens and $.
+- **Its result can be checked:**
+  - every summary is rated or sampled;
+  - the replay set gives a number before launch.
+
+**O3 second: alert quality.**
+- Changes are **reversible**, once rules have versions and an audit log, which O3 forces us to build.
+- They can be **backtested** on the customer's own 30 days of data before anyone approves.
+- They are **measurable**: flaps and coverage, and usefulness once O1's feedback exists.
+- It is the natural next step: the triage agent sees every firing, so it learns which alerts are noise.
+
+**Not first:**
+- **O2 (spend):** its result is the easiest to measure, but its mistakes can't be undone, it needs query history and owner-level writes, and it reduces our own revenue. Offer it later as suggestions only.
+- **O4:** high blast radius. "Suggested next step" inside O1 is the safe version.
+
+**Where an agent is hype and a feature would do better:**
+- O5, O7 and the weekly summary are better as ordinary features: lists and reports with a button.
+- An agent loop adds cost and uncertainty without adding much.
+
+**Dependencies for O1 and O3:**
+- **The all-clear fixes:** agreed, and first.
+- **Feedback and acknowledgement on firings.**
+- **Rule versioning and an audit log** (O3).
+- **The planned dynamic scope labels**, so the agent's later write access can be limited to, say, "alerts of service X in staging" (O3 and beyond).
+
+## Phases 3–6
+
+Not written in detail, by decision (2026-10-18). The short form, in plain words, is in `docs/agent-summary.md`:
+- how it would work;
+- how trust is earned;
+- the downsides, including prompt injection through logs;
+- pricing;
+- the questions for the founder.

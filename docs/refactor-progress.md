@@ -125,9 +125,12 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 
 ## Agent strategy (research only, no code): docs/agent-strategy.md
 - [x] Phase 1 ground truth: three parallel read-only audits (backend, web app, AI/MCP), key claims re-checked in code; corrections to the brief; capabilities, actions, gaps, trust problems, what can be measured (2026-10-18)
-- [ ] Review of Phase 1 (waiting)
-- [ ] Phase 2 outcomes
-- [ ] Phase 3 agent architecture
-- [ ] Phase 4 trust, autonomy and safety
-- [ ] Phase 5 product and business
-- [ ] Phase 6 roadmap and decisions; docs/agent-summary.md
+- [x] Review of Phase 1: accepted 2026-10-18; "dynamic scope labels" are planned, not built (corrected, treated as a dependency)
+- [x] Phase 2 outcomes: 7 candidates ranked; recommended O1 incident triage (explain only) then O3 alert quality
+- [x] Phases 3-6 skipped by decision; docs/agent-summary.md (plain language, under 800 words, three questions)
+
+## Trust fixes: no false "all clear" (agreed 2026-10-18, before any agent work)
+- [x] Alert design proposed: docs/alert-trust-design.md (no-data state, per-rule setting, failed evaluations notified after 3, account data-stopped safety net, SLO and check cases)
+- [ ] Design approved (waiting: default for existing rules, grace period, outage guard)
+- [ ] A1-A6 alerts, one commit each, failing test first
+- [ ] P1-P6 pages show "couldn't load", one commit each, failing test first
