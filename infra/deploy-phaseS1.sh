@@ -57,7 +57,7 @@ pip install -q --target services/synthetics/build --only-binary=:all: --implemen
   --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 \
   -r services/ingest/requirements.txt -r services/synthetics/requirements.txt
 cp services/synthetics/synthetics.py services/synthetics/safety.py services/synthetics/reliability.py \
-  services/ingest/ingest.py services/ingest/cloudwatch.py services/ingest/droprules.py services/synthetics/build/
+  services/ingest/ingest.py services/ingest/cloudwatch.py services/ingest/droprules.py services/ingest/rum.py services/synthetics/build/
 python3 infra/check-bundle.py services/synthetics/build
 aws cloudformation package \
   --template-file infra/phaseS1-synthetics.yaml \
