@@ -87,3 +87,14 @@ test("dashboards: check names are asked on each visit; when they can't be read, 
   text = await pageText(route, {});
   assert.equal(requests.filter((r) => r === "GET /v1/app/checks").length, 1, "asked again on the next visit");
 });
+
+test("Home: check uptime unreadable is 'couldn't load', not every check healthy", async () => {
+  const text = await pageText("/", { "POST /v1/app/query ~synthetics.check.success": 500 });
+  assert.match(text, /Degraded–couldn't load/);
+  assert.match(text, /Healthy–couldn't load/);
+});
+
+test("Home: a card whose query failed says so instead of waiting for ever", async () => {
+  const text = await pageText("/", { "POST /v1/app/query ~\"group_by\":[\"service\"]": 500 });
+  assert.match(text, /Services–couldn't load/);
+});

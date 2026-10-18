@@ -2,7 +2,7 @@
 // checks), volumes, then folding sections for tracing, logging, metrics and alerting, each with
 // a way into its explorer.
 import { useMemo } from "react";
-import { fmtMs, fmtNum, fmtPercent } from "../lib/format";
+import { fmtMs, fmtNum, fmtPercent, NONE } from "../lib/format";
 import { Check, Query, records, Signal } from "../api";
 import type { Ctx } from "../App";
 import { CheckListError, useCheckList } from "../checkList";
@@ -64,7 +64,12 @@ export function Insights({ ctx }: { ctx: Ctx }) {
   const active = (checkList ?? []).filter((c) => c.enabled);
   const critical = active.filter((c) => latest.get(c.id) === false);
   const degraded = active.filter((c) => latest.get(c.id) === true && (uptime.get(c.id) ?? 1) < 0.999);
-  const n = (q: typeof spans) => (q.data ? fmtNum(Number(q.data.rows[0]?.[0] ?? 0)) : "…");
+  const n = (q: typeof spans) => (q.data ? fmtNum(Number(q.data.rows[0]?.[0] ?? 0)) : q.error ? NONE : "…");
+  // A card whose query failed shows "–" and says so; it never waits for ever or reads as healthy.
+  const failed = (...qs: { error: string | null }[]) => qs.some((q) => q.error);
+  const CANT = "couldn't load";
+  const critFailed = !!checks.error || failed(runs), checkFailed = critFailed || failed(byCheck);
+  const checksReady = !!checkList && !!runs.data, uptimeReady = checksReady && !!byCheck.data;
   const perMin = (q: typeof spans) => (q.data ? `${fmtNum(Number(q.data.rows[0]?.[0] ?? 0) / ctx.range.minutes)} per minute` : "");
   const svcCount = services.data?.rows.length ?? 0, opCount = operations.data?.rows.length ?? 0;
   const errPct = spans.data && errorSpans.data && Number(spans.data.rows[0]?.[0]) ? (Number(errorSpans.data.rows[0]?.[0] ?? 0) / Number(spans.data.rows[0][0])) * 100 : null;
@@ -87,9 +92,11 @@ export function Insights({ ctx }: { ctx: Ctx }) {
             <header className="panel-head"><span>Service monitoring</span><span className="spacer" />
               <button className="btn small" onClick={() => ctx.go("/traces")}>View in Traces</button></header>
             <div className="cards" style={{ padding: 12, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-              <Card label="Services" value={services.data ? fmtNum(svcCount) : "…"} sub="sending traces" onClick={() => ctx.go("/traces")} />
-              <Card label="Operations" value={operations.data ? fmtNum(opCount) + (opCount >= 10000 ? "+" : "") : "…"} sub="distinct span names" />
-              <Card label="Errors" value={errPct == null ? "…" : fmtPercent(errPct)} tone={errPct != null && errPct >= 1 ? "bad" : undefined} sub="of spans failed" />
+              <Card label="Services" value={services.data ? fmtNum(svcCount) : services.error ? NONE : "…"} sub={services.error ? CANT : "sending traces"} onClick={() => ctx.go("/traces")} />
+              <Card label="Operations" value={operations.data ? fmtNum(opCount) + (opCount >= 10000 ? "+" : "") : operations.error ? NONE : "…"}
+                    sub={operations.error ? CANT : "distinct span names"} />
+              <Card label="Errors" value={errPct != null ? fmtPercent(errPct) : failed(spans, errorSpans) ? NONE : "…"}
+                    tone={errPct != null && errPct >= 1 ? "bad" : undefined} sub={failed(spans, errorSpans) ? CANT : "of spans failed"} />
             </div>
           </div>
         </div>
@@ -99,13 +106,14 @@ export function Insights({ ctx }: { ctx: Ctx }) {
               <button className="btn small" onClick={() => ctx.go("/synthetics")}>View in Synthetics</button></header>
             <CheckListError error={checks.error} />
             <div className="cards" style={{ padding: 12, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-              <Card label="Critical" value={checkList && runs.data ? fmtNum(critical.length) : "…"} tone={critical.length ? "bad" : "ok"}
-                    sub={critical.length ? critical.map((c) => c.name).slice(0, 2).join(", ") + (critical.length > 2 ? "…" : "") : "latest run failed"}
+              <Card label="Critical" value={checksReady ? fmtNum(critical.length) : critFailed ? NONE : "…"} tone={!checksReady ? undefined : critical.length ? "bad" : "ok"}
+                    sub={!checksReady && critFailed ? CANT : critical.length ? critical.map((c) => c.name).slice(0, 2).join(", ") + (critical.length > 2 ? "…" : "") : "latest run failed"}
                     onClick={critical.length === 1 ? () => ctx.go(`/synthetics/${critical[0].id}`) : () => ctx.go("/synthetics")} />
-              <Card label="Degraded" value={checkList && runs.data ? fmtNum(degraded.length) : "…"} tone={degraded.length ? "warn" : undefined}
-                    sub={degraded.length ? degraded.map((c) => c.name).slice(0, 2).join(", ") + (degraded.length > 2 ? "…" : "") : "failed earlier, passing now"}
+              <Card label="Degraded" value={uptimeReady ? fmtNum(degraded.length) : checkFailed ? NONE : "…"} tone={uptimeReady && degraded.length ? "warn" : undefined}
+                    sub={!uptimeReady && checkFailed ? CANT : degraded.length ? degraded.map((c) => c.name).slice(0, 2).join(", ") + (degraded.length > 2 ? "…" : "") : "failed earlier, passing now"}
                     onClick={degraded.length === 1 ? () => ctx.go(`/synthetics/${degraded[0].id}`) : () => ctx.go("/synthetics")} />
-              <Card label="Healthy" value={checkList && runs.data ? fmtNum(active.length - critical.length - degraded.length) : "…"} tone="ok" sub={`of ${active.length} running checks`} />
+              <Card label="Healthy" value={uptimeReady ? fmtNum(active.length - critical.length - degraded.length) : checkFailed ? NONE : "…"}
+                    tone={uptimeReady ? "ok" : undefined} sub={!uptimeReady && checkFailed ? CANT : `of ${active.length} running checks`} />
             </div>
           </div>
         </div>

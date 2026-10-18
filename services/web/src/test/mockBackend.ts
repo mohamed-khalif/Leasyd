@@ -15,7 +15,8 @@ export let inFlight = 0;
 export const requests: string[] = [];
 /** The JSON body of each POST, in order. */
 export const bodies: { path: string; body: unknown }[] = [];
-/** "METHOD /path" (no query string) -> the status to fail it with, for error-path tests. */
+/** "METHOD /path" (no query string) -> the status to fail it with, for error-path tests. "METHOD /path ~text"
+ *  fails only requests whose body contains text (one query of a page, say). */
 export const failing = new Map<string, number>();
 
 function serve(method: string, url: string, body: string): Promise<Response> {
@@ -54,7 +55,9 @@ export async function installMockBackend() {
     const method = init?.method ?? "GET";
     requests.push(`${method} ${url.pathname}`);
     if (method === "POST" && typeof init?.body === "string") bodies.push({ path: url.pathname, body: JSON.parse(init.body) });
-    const fail = failing.get(`${method} ${url.pathname}`);
+    const body = typeof init?.body === "string" ? init.body : "";
+    const fail = failing.get(`${method} ${url.pathname}`)
+      ?? [...failing].find(([k]) => k.startsWith(`${method} ${url.pathname} ~`) && body.includes(k.slice(`${method} ${url.pathname} ~`.length)))?.[1];
     if (fail) return new Response(JSON.stringify({ error: `forced ${fail}` }), { status: fail });
     inFlight++;
     try {
