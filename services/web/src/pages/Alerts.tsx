@@ -14,6 +14,20 @@ import { useRangeWindow } from "../useNow";
 // Alerts: rules (when) and channels (where). Every firing and resolution is also a log of the tenant
 // (service "alerts"), shown under History.
 
+/** A rule's state now, as the list shows it: never "ok" when Leasyd can't tell. */
+function RuleNow({ rule: r }: { rule: AlertRule }) {
+  const parts = [];
+  if (r.firing?.length) parts.push(<b key="f" style={{ color: "var(--sev-error)" }} title={r.firing.join("\n")}>firing ({r.firing.length})</b>);
+  if (r.no_data?.length) parts.push(<span key="n" className="faint" title={`No data: ${r.no_data.join(", ")}. It stays firing until a value within limits comes back.`}>no data</span>);
+  if (r.eval_failing) parts.push(<b key="e" style={{ color: "var(--sev-warn)" }} title="Leasyd couldn't evaluate this rule 3 times in a row; its alerts stay as they were.">can't evaluate</b>);
+  return parts.length ? <>{parts.map((p, i) => <span key={i}>{i ? " · " : ""}{p}</span>)}</> : <>ok</>;
+}
+
+const HISTORY_STATE: Record<string, { label: string; color: string }> = {
+  firing: { label: "firing", color: "var(--sev-error)" }, resolved: { label: "resolved", color: "var(--ok, #3fb68b)" },
+  no_data: { label: "no data", color: "var(--text-2)" }, eval_failed: { label: "can't evaluate", color: "var(--sev-warn)" },
+};
+
 export function Alerts({ ctx, path, params }: { ctx: Ctx; path: string; params: URLSearchParams }) {
   const [, , tab, id] = path.split("/");           // /alerts[/rules|/channels|/history][/new|/<id>]
   if (tab === "rules" && id) return <RuleForm ctx={ctx} id={id === "new" ? undefined : id} params={params} />;
@@ -78,9 +92,10 @@ function Rules({ ctx }: { ctx: Ctx }) {
       ) : (
         <RankTable head={["", "rule", "when", "send to", "now"]} maxHeight={640} onRow={(i) => ctx.go(`/alerts/rules/${s.rules[i].id}`)}
                    rows={s.rules.map((r) => [
-                     <span className="dot" style={{ background: !r.enabled ? "var(--text-3)" : r.firing?.length ? "var(--sev-error)" : "var(--ok, #3fb68b)" }} />,
+                     <span className="dot" style={{ background: !r.enabled ? "var(--text-3)" : r.firing?.length ? "var(--sev-error)"
+                       : r.eval_failing ? "var(--sev-warn)" : "var(--ok, #3fb68b)" }} />,
                      <span className="link">{r.name} ›</span>, describeRule(r, s), r.channels.map((c) => names.get(c) ?? "(deleted)").join(", "),
-                     !r.enabled ? "off" : r.firing?.length ? <b style={{ color: "var(--sev-error)" }} title={r.firing.join("\n")}>firing ({r.firing.length})</b> : "ok"])} />
+                     !r.enabled ? "off" : <RuleNow rule={r} />])} />
       )}
     </Panel>
   );
@@ -289,8 +304,8 @@ function History({ ctx }: { ctx: Ctx }) {
         {() => <RankTable head={["time", "", "rule", "what", "detail"]} maxHeight={640} numCols={0}
                           onRow={(i) => { const u = String((rows[i].attributes as Record<string, unknown>)["alert.url"] ?? ""); const h = u.split("#")[1]; if (h) ctx.go(h); }}
                           rows={rows.map((r) => {
-                            const a = r.attributes as Record<string, unknown>, firing = a["alert.state"] === "firing";
-                            return [fmtTs(String(r.ts)), <b style={{ color: firing ? "var(--sev-error)" : "var(--ok, #3fb68b)" }}>{firing ? "firing" : "resolved"}</b>,
+                            const a = r.attributes as Record<string, unknown>, st = HISTORY_STATE[String(a["alert.state"])] ?? HISTORY_STATE.resolved;
+                            return [fmtTs(String(r.ts)), <b style={{ color: st.color }}>{st.label}</b>,
                                     String(a["alert.rule"] ?? ""), String(a["alert.subject"] ?? ""),
                                     String(r.body ?? "").replace(/^[A-Z]+: [^.]*\. /, "") + (a["alert.failed_channels"] ? ` (not delivered to ${a["alert.failed_channels"]})` : "")];
                           })} />}

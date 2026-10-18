@@ -317,14 +317,17 @@ def test_failed_evaluations_never_change_alerts_and_the_third_in_a_row_is_told_o
         ev(m)
     assert not sent                                                            # 2 failures: not yet
     assert call("acme", "GET", "rules")[1]["items"][0]["firing"] == ["service_name=checkout (critical)"]   # still firing
+    assert call("acme", "GET", "rules")[1]["items"][0]["eval_failing"] is False
     ev(3)
     assert len(sent) == 1 and "CAN'T EVALUATE" in sent[0]["title"] and sent[0]["payload"]["state"] == "eval_failed"
+    assert call("acme", "GET", "rules")[1]["items"][0]["eval_failing"] is True
     assert "firing ones stay firing" in sent[0]["text"]
     for m in (4, 5, 6):
         ev(m)
     assert len(sent) == 1                                                      # told once, not every minute
     prom.error = None
     ev(7)                                                                      # works again: still firing, nothing new to say
+    assert call("acme", "GET", "rules")[1]["items"][0]["eval_failing"] is False
     assert len(sent) == 1 and call("acme", "GET", "rules")[1]["items"][0]["firing"] == ["service_name=checkout (critical)"]
     prom.error = "boom"
     for m in (8, 9):

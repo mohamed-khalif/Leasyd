@@ -180,6 +180,7 @@ LEASYD_API_KEY=YOUR_KEY bash leasyd-k8s.sh --cluster prod [--gpu] [--no-logs]</c
 
       <h2 id="dashboards">Dashboards and alerts</h2>
       <p>Leasyd comes with dashboards for the JVM, Node.js, Python, Ruby, hosts and AWS Lambda; any chart can be added to your own dashboards. <strong>Alerts</strong> watch a query (an error rate, a latency, a check failing) and email you when it crosses a threshold. <strong>SLOs</strong> track an objective such as 99.9% of requests under 300 ms.</p>
+      <p><strong>Missing data never counts as fixed.</strong> If a firing alert's query stops returning a value (the service or its collector stopped sending, for example), the alert stays firing and shows <em>no data</em>; after 3 checks in a row without data you get one <strong>NO DATA</strong> message. If no data means zero for your query (an error count, say), add <code>or vector(0)</code> to it. If Leasyd can't evaluate an alert 3 times in a row, you get one <strong>CAN'T EVALUATE</strong> message and its alerts stay as they were. Webhooks carry these as <code>"state": "no_data"</code> and <code>"state": "eval_failed"</code>, besides <code>firing</code> and <code>resolved</code>: ignore states you don't handle.</p>
 
       <h2 id="checks">Synthetic checks</h2>
       <p>Checks call your sites and APIs from AWS us-east-1 every 1, 5, 15, 30, 45 or 60 minutes:</p>

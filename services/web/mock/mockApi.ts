@@ -109,9 +109,9 @@ const DASHBOARDS: (Record<string, unknown> & { id: string; version: number })[] 
 ];
 const RULES: Record<string, unknown>[] = [
   { id: "r1a2b3c4d5e6", name: "Checkout is down", type: "check_failing", checks: ["e5f6a1b2c3d4", "b2c3d4e5f6a1"], failures: 2,
-    channels: ["c1a2b3c4d5e6", "c2b3c4d5e6f1"], enabled: true, firing: ["e5f6a1b2c3d4"] },
+    channels: ["c1a2b3c4d5e6", "c2b3c4d5e6f1"], enabled: true, firing: ["e5f6a1b2c3d4"], no_data: ["e5f6a1b2c3d4"], eval_failing: false },
   { id: "r2b3c4d5e6f1", name: "Checkout budget", type: "slo_burn", slo: "s1a2b3c4d5e6", burn_rate: 10, budget_below: 25,
-    channels: ["c2b3c4d5e6f1"], enabled: true, firing: [] },
+    channels: ["c2b3c4d5e6f1"], enabled: true, firing: [], no_data: [], eval_failing: true },
   { id: "r3c4d5e6f1a2", name: "Error rate by service", type: "query", op: ">", critical: 5, degraded: 2, for_minutes: 2, every_minutes: 1,
     promql: '100 * sum by (service_name) (rate(leasyd.spans{status_code="ERROR"}[5m])) / sum by (service_name) (rate(leasyd.spans[5m]))',
     channels: ["c1a2b3c4d5e6"], enabled: true, firing: ["service_name=checkout (critical)", "service_name=payment (degraded)"] },

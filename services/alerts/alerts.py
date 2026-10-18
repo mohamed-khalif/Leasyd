@@ -818,14 +818,17 @@ def _route(tenant, user, method, parts, body):
         view = lambda it: {**{k: v for k, v in it.items() if k not in ("pk", "tenant")}, "id": _id_of(it)}  # noqa: E731
         if len(parts) == 1 and method == "GET":
             rules = sorted((view(i) for i in _items(tenant, f"alert#{tenant}#")), key=lambda r: r["name"].lower())
-            firing, no_data = {}, {}
+            firing, no_data, failing = {}, {}, set()
             for s in _items(tenant, f"astate#{tenant}#"):
+                if s["pk"].endswith(f"#{EVAL_KEY}") and int(s.get("failures", 0)) >= GRACE:
+                    failing.add(s["pk"].split("#")[2])
                 if s.get("firing") and s.get("no_data"):
                     no_data.setdefault(s["pk"].split("#")[2], []).append(s.get("subject") or "a series")
                 if s.get("firing"):
                     subject = s.get("subject") or s["pk"].split("#", 3)[3]
                     firing.setdefault(s["pk"].split("#")[2], []).append(f"{subject} ({s['level']})" if s.get("level") else subject)
-            return _http(200, {"items": [{**r, "firing": firing.get(r["id"], []), "no_data": no_data.get(r["id"], [])} for r in rules],
+            return _http(200, {"items": [{**r, "firing": firing.get(r["id"], []), "no_data": no_data.get(r["id"], []),
+                                         "eval_failing": r["id"] in failing} for r in rules],
                                "limit": MAX_RULES})
         if len(parts) == 1 and method == "POST":
             rule = validate_rule(body, checks, slos, channels)

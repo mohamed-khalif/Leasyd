@@ -250,7 +250,8 @@ export type AlertRule = { id: string; name: string; type: "check_failing" | "slo
                           // check rules (type "query"): a PromQL query and thresholds on each series it returns
                           promql?: string; op?: string; critical?: number; degraded?: number | null; for_minutes?: number;
                           every_minutes?: number; summary?: string | null;
-                          firing?: string[]; created_at?: string };
+                          // now: firing subjects; those of them without data; whether Leasyd can't evaluate the rule
+                          firing?: string[]; no_data?: string[]; eval_failing?: boolean; created_at?: string };
 export type RulePreview = { time: number; total: number; series: { labels: Record<string, string>; name: string; value: number; level: "ok" | "degraded" | "critical" }[] };
 export const alerts = {
   channels: () => call<{ items: AlertChannel[]; limit: number }>("/v1/app/alerts/channels"),
