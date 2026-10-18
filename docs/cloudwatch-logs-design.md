@@ -1,6 +1,6 @@
-# CloudWatch Logs into Leasyd: design proposal
+# CloudWatch Logs into Leasyd: design
 
-Status: **proposal, not built (2026-10-18).** It follows the CloudWatch metrics path (`services/ingest/cloudwatch.py`, `examples/aws/cloudwatch-metrics.yaml`) as closely as it can, so most of the plumbing already exists.
+Status: **approved and built (2026-10-18)** with the recommended answers: a chosen list of log groups by default, Lambda START/END lines kept, ECS services named after the container. Pending: deploy and the AWS check (L5). It follows the CloudWatch metrics path (`services/ingest/cloudwatch.py`, `examples/aws/cloudwatch-metrics.yaml`) as closely as it can, so most of the plumbing already exists.
 
 ## Why
 

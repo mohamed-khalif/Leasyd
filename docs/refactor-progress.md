@@ -143,5 +143,7 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 
 ## CloudWatch Logs ingest (asked 2026-10-18): docs/cloudwatch-logs-design.md
 - [x] Design proposed: Firehose subscription → POST /v1/aws/cloudwatch-logs, service names from log groups, severity and trace links, setup stack, about 2.5 days
-- [ ] Approve: default scope (chosen list), Lambda START/END lines (kept), ECS naming (container name)
-- [ ] L1 converter; L2 route and handler; L3 setup stack; L4 docs and Get started; L5 verify on AWS (qa- tenant)
+- [x] Approved 2026-10-18: default scope a chosen list, Lambda START/END lines kept, ECS services named after the container
+- [x] L1 converter and L2 route, handler, authorizer, API Gateway (a170197); L3 setup stack and guide (0ca7c05; also fixed the metrics template's Firehose log permission, cfn-lint E1010); L4 Get started and docs (83926c6)
+- [ ] Deploy: infra/deploy-phaseT2.sh (ingest + route), infra/deploy-phaseW1.sh (web + install file)
+- [ ] L5 verify on AWS: a Firehose-shaped request through ingest.leasyd.com on a qa- tenant, logs read back (scratchpad cwlogs_e2e.py); then the stack itself in an AWS account
