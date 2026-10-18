@@ -140,3 +140,8 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
   - An "evaluating again" message after CAN'T EVALUATE (today the badge clears; history isn't written)
   - Close (rather than "no data") a check-failing alert when its check is deleted or paused on purpose
   - Remove a deleted check's id from rules that name it
+
+## CloudWatch Logs ingest (asked 2026-10-18): docs/cloudwatch-logs-design.md
+- [x] Design proposed: Firehose subscription → POST /v1/aws/cloudwatch-logs, service names from log groups, severity and trace links, setup stack, about 2.5 days
+- [ ] Approve: default scope (chosen list), Lambda START/END lines (kept), ECS naming (container name)
+- [ ] L1 converter; L2 route and handler; L3 setup stack; L4 docs and Get started; L5 verify on AWS (qa- tenant)
