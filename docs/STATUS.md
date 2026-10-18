@@ -72,6 +72,9 @@ Alerts: missing data or a failed evaluation never resolves a firing alert; it sh
 check alerts whose check stopped running do the same. Web: Home, SLOs, Usage & cost, Kubernetes, GPUs, Drop rules and
 the AI list show "couldn't load" instead of healthy, $0 or empty when a request fails. Checked on AWS after the deploy:
 obs-alerts runs every minute with 0 errors and 0 failed evaluations; no alert was firing, so nothing changed state.
+End to end on a qa- tenant (2026-10-18 20:00 UTC, then deleted): an alert fired; its query then returned nothing and it
+stayed firing, with one NO DATA after 3 checks; a broken query then sent one CAN'T EVALUATE after 3 failures, still
+firing; the rules list and the history showed all three.
 The alerts deploy had been failing since 2026-10-14 (bundle missing rum.py; fixed in deploy-phaseA1.sh and -S1.sh).
 
 ### Web app clean-up verified (2026-10-18, Phase 7)
