@@ -127,7 +127,7 @@ function Overview({ ctx, w, k, hint, f, fleet, prices, onGpu, onTab }: Props & {
               </table>
             )}
           </Loads>
-          <p className="faint" style={{ padding: "6px 12px" }}>* list price estimate: set your own in <a href="#/settings">Settings › GPU prices</a>.</p>
+          <p className="faint" style={{ padding: "6px 12px" }}>* list price estimate: set your own in <a href="#/settings/gpu-prices">Settings › GPU prices</a>.</p>
         </Panel>
       </div>
 

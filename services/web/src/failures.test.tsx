@@ -60,7 +60,7 @@ test("GPU prices unreadable: the GPUs page says costs use list prices", async ()
 });
 
 test("GPU prices unreadable: Settings shows the error and offers no edits that would overwrite them", async () => {
-  const text = await pageText("/settings", { "GET /v1/app/account/gpu-prices": 500 });
+  const text = await pageText("/settings/gpu-prices", { "GET /v1/app/account/gpu-prices": 500 });
   assert.match(text, /Couldn't read your GPU prices/);
   assert.doesNotMatch(text, /Add price/);
 });

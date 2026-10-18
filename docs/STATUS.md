@@ -66,6 +66,14 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
 Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.*`.
 
+### Settings redesign (2026-10-18, built and tested locally; pending deploy)
+Settings has its own menu: Account (Profile, Security: change password) and Organization (Organization,
+Team, Usage, Billing, API keys, GPU prices, AI tools), one page each at `#/settings/<page>`, every section
+with its explanation on the left and controls on the right. Billing shows the plan (trial days left, pay
+as you go, ended, overdue), Stripe buttons, an estimate of this month so far, prices and "Book a demo".
+API keys can have a name (`POST /v1/app/account/keys {scope, name?}`, up to 60 characters). Deploy:
+tenants stack (key names, Stripe return address) and the web app.
+
 ### Live demo (2026-10-14, live; verified on AWS)
 
 `www.leasyd.com` → **Explore the live demo** → `app.leasyd.com/#/demo`: the real app, signed in as the

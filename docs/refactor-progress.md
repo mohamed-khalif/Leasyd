@@ -106,4 +106,10 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Decided 2026-10-17 and done: debounce 400 ms with Enter/Run at once (4f09a7e); 500-row cap with Show more, waterfall search and expand/collapse all over the whole trace, CSV full (3b14c61); client limiter 6 per page (6497668) + in-flight log line (d81b8df), server limit left at 25; one formatter module lib/format.ts (798dd08, 31371ea), spec docs/formatting.md, lint rule (this commit's parent)
 - [x] Deployed and checked 2026-10-17: obs-query-api logs {"inflight": 1, "tenant": "canary", "plan": "standard", "limit": 25} per query started
 - [ ] Still open (no behaviour change, large diffs): P7 combine Home's overlapping queries (~20 -> ~14); F4 split oversized modules; F5 typed rows; treemap cap 200 tiles (not asked)
+## Settings redesign (asked 2026-10-18, after Phase 6)
+- [x] API keys can have a name ("prod ECS"): plain text up to 60 characters, stored on the key, shown in the list (8b466c5) -- deploy T5 (tenants)
+- [x] Settings split into a menu and one page per topic at #/settings/<page>: Account (Profile, Security) and Organization (Organization, Team, Usage, Billing, API keys, GPU prices, AI tools). Each section: title and explanation left, controls right
+- [x] Security: change password (Cognito ChangePassword, through the library already used; no new package)
+- [x] Billing: plan notice (trial days left / pay as you go / ended / overdue), Stripe buttons, this month so far (estimate from the meter), prices, Enterprise "Book a demo". Stripe now returns to #/settings/billing; the old #/settings?billing=... still opens Billing
+- [x] Behaviour changes, agreed in the plan: #/settings opens Profile (was one long page); the MCP command fills in a new read key on the API keys page (was on the same long page)
 ## Phase 7: not started

@@ -61,6 +61,18 @@ export function resetPassword(email: string, code: string, password: string): Pr
     }));
 }
 
+/** Changes the signed-in user's password; the current one is checked by Cognito. */
+export function changePassword(current: string, next: string): Promise<void> {
+  if (getConfig().mock) return Promise.resolve();
+  const user = userPool().getCurrentUser();
+  if (!user) return Promise.reject(new Error("You're signed out. Sign in again to change your password."));
+  return new Promise((resolve, reject) =>
+    user.getSession((err: Error | null) => {
+      if (err) return reject(new Error("You're signed out. Sign in again to change your password."));
+      user.changePassword(current, next, (e) => (e ? reject(friendly(e, CHANGE_ERRORS)) : resolve()));
+    }));
+}
+
 export function signOut(): void {
   if (getConfig().mock) return;
   userPool().getCurrentUser()?.signOut();
@@ -95,6 +107,14 @@ const RESET_ERRORS: Record<string, string> = {
   TooManyRequestsException: "Too many attempts. Please wait a few minutes and try again.",
   InvalidPasswordException: PASSWORD_RULES,
   NotAuthorizedException: "This password can't be reset yet. Sign in with the temporary password from your invitation, or ask your admin to invite you again.",
+};
+
+const CHANGE_ERRORS: Record<string, string> = {
+  NotAuthorizedException: "Your current password is incorrect.",
+  InvalidPasswordException: PASSWORD_RULES,
+  InvalidParameterException: PASSWORD_RULES,
+  LimitExceededException: "Too many attempts. Please wait a few minutes and try again.",
+  TooManyRequestsException: "Too many attempts. Please wait a few minutes and try again.",
 };
 
 function friendly(err: { code?: string; message?: string }, byCode = SIGN_IN_ERRORS): Error {

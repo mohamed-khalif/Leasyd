@@ -6,6 +6,7 @@ import { getConfig } from "./config";
 import { CONTACT_EMAIL, Shell } from "./Shell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SignIn } from "./pages/SignIn";
+import { settingsPage } from "./pages/settings/menu";
 import { RANGES, Range, rangeFromKey } from "./time";
 import { hashParams, replaceHashParams } from "./hashParams";
 
@@ -153,8 +154,8 @@ export function App() {
     page = <DropRules ctx={ctx} />;
     crumb = ["Account", "Drop rules"];
   } else if (path.startsWith("/settings")) {
-    page = <Settings ctx={ctx} />;
-    crumb = ["Settings", "Account"];
+    page = <Settings ctx={ctx} path={path} />;
+    crumb = ["Settings", settingsPage(path).label];
   } else if (path.startsWith("/usage")) {
     page = <Usage ctx={ctx} />;
     crumb = ["Account", "Usage & Cost"];

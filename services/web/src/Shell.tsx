@@ -12,13 +12,13 @@ function TrialBanner() {
   const { account: acc } = useAccount();   // once per page load; a failure shows no banner
   if (!acc) return null;
   const pay = acc.billing?.enabled;
-  const fix = pay ? <><a href="#/settings">add payment details in Settings</a></> : <>email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></>;
+  const fix = pay ? <><a href="#/settings/billing">add payment details in Settings</a></> : <>email <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></>;
   const status = acc.billing?.status;
   if (status === "canceled" || status === "unpaid") {
     return (
       <div className="trial-banner ended" role="alert">
         Your subscription has {status === "canceled" ? "ended" : "an unpaid invoice"}: new data is no longer accepted and checks have stopped.
-        To continue, {pay ? <a href="#/settings">go to Billing in Settings</a> : fix}.
+        To continue, {pay ? <a href="#/settings/billing">go to Billing in Settings</a> : fix}.
       </div>
     );
   }

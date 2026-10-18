@@ -1,270 +1,62 @@
-// Settings: the account's plan and today's data against its daily limit, how to connect an app
-// (endpoint + API keys, a new key shown once), and the team (invite, remove). Owners change keys
-// and people; members see them.
-import { FormEvent, useEffect, useState } from "react";
-import { fmtNum, fmtUnit, fmtUnitPrice } from "../lib/format";
-import { account, Account, KeyScope, rumSnippet } from "../api";
+// Settings: a menu on the left (your account; the organization) and one page per topic on the right,
+// at #/settings/<page>. Owners change people, keys, billing and prices; members see them.
+import { ReactNode, useCallback, useState } from "react";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
-import { Panel } from "../components/Panel";
-import { getConfig } from "../config";
-import { DEFAULT_GPU_PRICES, GpuPrice } from "../infra/model";
+import { Profile, Security } from "./settings/Account";
+import { Organization, Team, Usage } from "./settings/Organization";
+import { Billing } from "./settings/Billing";
+import { ApiKeys, AiTools } from "./settings/ApiKeys";
+import { GpuPrices } from "./settings/GpuPrices";
+import type { SettingsProps } from "./settings/parts";
+import { SETTINGS_MENU, SettingsId, settingsPage } from "./settings/menu";
 
-const SCOPES = { ingest: "Send data", read: "Read data (API)", browser: "Web monitoring (browser)" } as const;
-
-export function Settings({ ctx }: { ctx: Ctx }) {
-  const { account: acc, error: loadError, reload: load } = useAccount(ctx.tick);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [newKey, setNewKey] = useState<{ key_id: string; scope: string; api_key: string; origins?: string[] } | null>(null);
-  const [scope, setScope] = useState<KeyScope>("ingest");
-  const [origins, setOrigins] = useState("");
-  const [invite, setInvite] = useState({ email: "", role: "member" as "member" | "owner" });
-  const [note, setNote] = useState<string | null>(null);
-
-  // Back from Stripe Checkout: the subscription starts when Stripe tells us (seconds); look again shortly.
-  const back = /[?&]billing=(done|cancelled)/.exec(window.location.hash)?.[1];
-  useEffect(() => {
-    if (back === "done") {
-      setNote("Thanks: your payment details are saved. Your subscription starts in a few seconds.");
-      const t = [3000, 8000].map((ms) => window.setTimeout(load, ms));
-      return () => t.forEach(window.clearTimeout);
-    }
-    return undefined;
-  }, [back, load]);   // load (reload) is stable
-  const toStripe = (f: () => Promise<{ url: string }>) => act(async () => { window.location.assign((await f()).url); });
-  const act = async (f: () => Promise<unknown>, done?: string) => {
-    setBusy(true); setError(null); setNote(null);
-    try { await f(); if (done) setNote(done); await load(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
-  };
-
-  if (!acc) return error ?? loadError ? <div className="state error">{error ?? loadError}</div> : <div className="skeleton" style={{ height: 300 }} />;
-  const owner = acc.you.role === "owner";
-  const cap = acc.daily_cap_bytes ?? null, used = acc.today?.bytes ?? 0;
-  const share = cap ? Math.min(1, used / cap) : 0;
-  const allowance = acc.searches?.units_per_day ?? null, searched = acc.searches?.units_today ?? 0;
-  const searchShare = allowance ? Math.min(1, searched / allowance) : 0;
-  const meterColor = (f: number) => (f >= 1 ? "var(--sev-error)" : f > 0.8 ? "var(--sev-warn)" : "var(--accent)");
-  const endpoint = getConfig().ingestUrl || "https://ingest.leasyd.com";
-  const keyText = newKey?.api_key ?? "<your API key>";
-
-  return (
-    <div className="settings">
-      {(error ?? loadError) && <div className="form-error" role="alert">{error ?? loadError}</div>}
-      {note && <div className="form-note" role="status">{note}</div>}
-
-      <Panel title="Plan" right={<span className="faint">{acc.company} · <span className="mono">{acc.tenant}</span></span>}>
-        <div className="plan">
-          <div>
-            <div className="plan-name">{acc.trial_ends_at ? "Free trial" : acc.plan === "free" ? "Free" : acc.plan === "standard" ? "Pay as you go" : acc.plan}</div>
-            <div className="muted">{cap ? `Up to ${fmtUnit(cap, "bytes")} of logs, traces and metrics a day, kept 30 days.` : "No daily limit. Data kept 30 days."}</div>
-            {acc.trial_ends_at && <div className="muted">{Date.parse(acc.trial_ends_at) > Date.now() ? "Ends" : "Ended"} {acc.trial_ends_at.slice(0, 10)}.</div>}
-          </div>
-          <div className="plan-usage">
-            <div className="faint">Today (UTC)</div>
-            <div className="plan-num">{fmtUnit(used, "bytes")}{cap ? <span className="faint"> of {fmtUnit(cap, "bytes")}</span> : null}</div>
-            {cap ? <div className="meter"><i style={{ width: `${share * 100}%`, background: meterColor(share) }} /></div> : null}
-            <div className="faint">{fmtNum(acc.today?.records ?? 0)} records{acc.today?.refused_bytes ? ` · ${fmtUnit(acc.today.refused_bytes, "bytes")} refused over the limit` : ""}</div>
-          </div>
-          {allowance ? (
-            <div className="plan-usage">
-              <div className="faint">Searches today (UTC)</div>
-              <div className="plan-num">{Math.round(searchShare * 100)}%<span className="faint"> of the daily allowance</span></div>
-              <div className="meter"><i style={{ width: `${searchShare * 100}%`, background: meterColor(searchShare) }} /></div>
-              <div className="faint">{fmtNum(searched)} of {fmtNum(allowance)} search units · longer time ranges use more</div>
-            </div>
-          ) : null}
-        </div>
-        {cap && share >= 1 && <div className="form-error" style={{ marginTop: 12 }}>Today's limit is reached: new data is refused until 00:00 UTC.</div>}
-        {allowance && searchShare >= 1 && <div className="form-error" style={{ marginTop: 12 }}>Today's search allowance is used up: searches resume at 00:00 UTC.</div>}
-      </Panel>
-
-      <Billing acc={acc} owner={owner} busy={busy} onCheckout={() => toStripe(account.checkout)} onPortal={() => toStripe(account.portal)} />
-
-      <Panel title="Connect your app">
-        <div className="connect">
-          <p className="muted">Send OpenTelemetry data over OTLP/HTTP with an API key that sends data. Any OpenTelemetry SDK, or the Collector:</p>
-          <pre className="code">{`OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}
-OTEL_EXPORTER_OTLP_HEADERS=x-api-key=${keyText}
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-OTEL_SERVICE_NAME=my-service`}</pre>
-          <p className="faint">Data shows up under Logs, Traces and Metrics within a minute.</p>
-        </div>
-      </Panel>
-
-      <Panel title="Connect your AI tools (MCP)">
-        <div className="connect">
-          <p className="muted">
-            Let AI agents (Claude Code, Claude Desktop, Cursor, VS Code…) read your logs, traces, metrics, checks and alerts in Leasyd
-            through Leasyd's MCP server. Use an API key that <b>reads data</b>; agents can only read, never change anything. For Claude Code:
-          </p>
-          <pre className="code">{`claude mcp add --transport http leasyd ${endpoint}/v1/mcp \\
-  --header "x-api-key: ${newKey?.scope === "read" ? newKey.api_key : "<your read key>"}"`}</pre>
-          <p className="faint">Other tools: <a href="https://www.leasyd.com/docs#mcp" target="_blank" rel="noreferrer">setup for Cursor, VS Code and Claude Desktop</a>.</p>
-        </div>
-      </Panel>
-
-      <Panel title="API keys" flush right={<span className="faint">{acc.keys.length} of {acc.limits.keys}</span>}>
-        {newKey && (
-          <div className="newkey">
-            {newKey.scope === "browser" ? <>
-              <b>New browser key: add this to every page of your site, before &lt;/head&gt;.</b>
-              <span className="faint">It's public by design: it can only send web-monitoring events, and only from {newKey.origins?.join(", ")}. It works at once.</span>
-              <pre className="code">{rumSnippet(newKey.api_key)}</pre>
-            </> : <>
-              <b>New key: copy it now, it won't be shown again.</b>
-              <span className="faint">It starts working within about 2 minutes (until then, data sent with it is refused with 403).</span>
-            </>}
-            <div className="newkey-row">
-              <code className="mono">{newKey.api_key}</code>
-              <button className="btn" onClick={() => navigator.clipboard?.writeText(newKey.api_key).then(() => setNote("Copied."))}>Copy</button>
-              <button className="btn ghost" onClick={() => setNewKey(null)}>Done</button>
-            </div>
-          </div>
-        )}
-        <table className="dtable">
-          <thead><tr><th>Key</th><th>Can</th><th>Created</th><th>Status</th>{owner && <th />}</tr></thead>
-          <tbody>
-            {acc.keys.length === 0 && <tr><td colSpan={5} className="faint">No keys yet{owner ? ": create one to send data." : "."}</td></tr>}
-            {acc.keys.map((k) => (
-              <tr key={k.key_id}>
-                <td className="mono">{k.key_id}</td>
-                <td>{SCOPES[k.scope] ?? k.scope}{k.origins?.length ? <div className="faint">{k.origins.join(", ")}</div> : null}</td>
-                <td className="faint">{k.created_at?.slice(0, 10)}</td>
-                <td>{k.status === "expiring" ? `expires ${k.expires_at?.slice(0, 16).replace("T", " ")}` : "active"}</td>
-                {owner && <td className="num"><button className="linkbtn danger" disabled={busy}
-                  onClick={() => confirm(`Revoke key ${k.key_id}? Apps using it stop sending within a minute.`) && act(() => account.revokeKey(k.key_id), "Key revoked.")}>Revoke</button></td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {owner && (
-          <div className="panel-foot">
-            <select className="select" value={scope} onChange={(e) => setScope(e.target.value as KeyScope)} aria-label="Key can">
-              <option value="ingest">Send data (for your apps)</option>
-              <option value="read">Read data (for scripts using the query API)</option>
-              <option value="browser">Web monitoring (a public key for your website's pages)</option>
-            </select>
-            {scope === "browser" && <input className="input" style={{ minWidth: 320 }} value={origins} onChange={(e) => setOrigins(e.target.value)}
-              placeholder="Your site, e.g. https://shop.example.com" aria-label="Allowed origins (comma-separated)" />}
-            <button className="btn primary" disabled={busy || (scope === "browser" && !origins.trim())}
-              onClick={() => act(async () => setNewKey(await account.createKey(scope, scope === "browser" ? origins.split(/[\s,]+/).filter(Boolean) : undefined)))}>Create key</button>
-          </div>
-        )}
-      </Panel>
-
-      <Panel title="Team" flush right={<span className="faint">{acc.users.length} of {acc.limits.users}</span>}>
-        <table className="dtable">
-          <thead><tr><th>Email</th><th>Role</th><th>Added</th>{owner && <th />}</tr></thead>
-          <tbody>
-            {acc.users.map((u) => (
-              <tr key={u.email}>
-                <td>{u.email}{u.email === acc.you.email && <span className="faint"> (you)</span>}</td>
-                <td>{u.role === "owner" ? "Owner" : "Member"}</td>
-                <td className="faint">{u.created_at?.slice(0, 10)}{u.invited_by ? ` by ${u.invited_by}` : ""}</td>
-                {owner && <td className="num">{u.email !== acc.you.email && <button className="linkbtn danger" disabled={busy}
-                  onClick={() => confirm(`Remove ${u.email}? They are signed out everywhere.`) && act(() => account.remove(u.email), `${u.email} removed.`)}>Remove</button>}</td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {owner ? (
-          <form className="panel-foot" onSubmit={(e: FormEvent) => { e.preventDefault(); act(async () => { await account.invite(invite.email.trim(), invite.role); setInvite({ ...invite, email: "" }); }, `Invitation sent to ${invite.email.trim()}.`); }}>
-            <input className="input grow" type="email" required placeholder="colleague@company.com" value={invite.email}
-                   onChange={(e) => setInvite({ ...invite, email: e.target.value })} aria-label="Email" />
-            <select className="select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value as "member" | "owner" })} aria-label="Role">
-              <option value="member">Member: uses everything</option>
-              <option value="owner">Owner: also manages people and keys</option>
-            </select>
-            <button className="btn primary" disabled={busy}>Invite</button>
-          </form>
-        ) : <div className="panel-foot faint">Only owners can invite people and manage API keys.</div>}
-      </Panel>
-
-      <GpuPrices owner={owner} />
-    </div>
-  );
-}
-
-/** Prices per GPU hour behind the GPU pages' costs: the defaults (AWS list prices) and the
- *  account's own (first match wins), which owners change. */
-function GpuPrices({ owner }: { owner: boolean }) {
-  const [own, setOwn] = useState<GpuPrice[] | null>(null);
-  const [draft, setDraft] = useState({ pattern: "", label: "", usd: "" });
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  useEffect(() => { account.gpuPrices().then((r) => setOwn(r.prices ?? []), (e: Error) => setLoadError(e.message)); }, []);
-  // Edits save the whole list, so only once the current one is known (else they would overwrite it).
-  const canEdit = owner && own !== null;
-  const save = (next: GpuPrice[]) => account.saveGpuPrices(next).then((r) => { setOwn(r.prices); setMsg({ ok: true, text: "Saved: the GPU pages use these prices now." }); },
-    (e: Error) => setMsg({ ok: false, text: e.message }));
-  return (
-    <Panel title="GPU prices" flush right={<span className="faint">for the cost on the GPUs page, per GPU hour</span>}>
-      <table className="dtable">
-        <thead><tr><th style={{ width: "34%" }}>GPU model matches</th><th>Name</th><th className="num">US$ per GPU hour</th><th>Source</th>{owner && <th />}</tr></thead>
-        <tbody>
-          {(own ?? []).map((p, i) => (
-            <tr key={"own" + i}><td className="mono">{p.pattern}</td><td>{p.label}</td><td className="num">{fmtUnitPrice(p.usd_per_hour)}</td><td>yours</td>
-              {owner && <td className="num"><button className="linkbtn danger" onClick={() => save(own!.filter((_, j) => j !== i))}>Remove</button></td>}</tr>
-          ))}
-          {DEFAULT_GPU_PRICES.map(([pattern, label, usd]) => (
-            <tr key={pattern} className="faint"><td className="mono">{pattern}</td><td>{label}</td><td className="num">{fmtUnitPrice(usd)}</td>
-              <td>default (AWS on-demand)</td>{owner && <td />}</tr>
-          ))}
-        </tbody>
-      </table>
-      {loadError && <div className="panel-foot error">Couldn't read your GPU prices: {loadError}. The GPU pages use the defaults until they can.</div>}
-      {canEdit ? (
-        <form className="panel-foot" onSubmit={(e: FormEvent) => {
-          e.preventDefault();
-          save([...(own ?? []), { pattern: draft.pattern.trim(), label: draft.label.trim() || draft.pattern.trim(), usd_per_hour: Number(draft.usd) }])
-            .then(() => setDraft({ pattern: "", label: "", usd: "" }));
-        }}>
-          <input className="input mono" required placeholder="A100.*80" value={draft.pattern} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} aria-label="GPU model pattern" />
-          <input className="input grow" placeholder="Name, e.g. A100 80GB (reserved)" value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} aria-label="Name" />
-          <input className="input" required type="number" min="0.01" step="0.01" placeholder="1.50" value={draft.usd} onChange={(e) => setDraft({ ...draft, usd: e.target.value })} aria-label="US$ per GPU hour" style={{ width: 110 }} />
-          <button className="btn primary">Add price</button>
-        </form>
-      ) : !owner ? <div className="panel-foot faint">Only owners can change prices.</div> : null}
-      {msg && <div className={`panel-foot ${msg.ok ? "ok" : "error"}`}>{msg.text}</div>}
-      <div className="panel-foot faint">The pattern is matched against the GPU model dcgm-exporter reports (e.g. "NVIDIA A100-SXM4-80GB"); yours come first, then the defaults.</div>
-    </Panel>
-  );
-}
-
-const BILLING_STATUS: Record<string, string> = {
-  past_due: "Payment overdue: please update your card",
-  unpaid: "Unpaid: data is no longer accepted", canceled: "Cancelled: data is no longer accepted",
+const PAGES: Record<SettingsId, (p: SettingsProps) => ReactNode> = {
+  profile: (p) => <Profile {...p} />,
+  security: () => <Security />,
+  organization: (p) => <Organization {...p} />,
+  team: (p) => <Team {...p} />,
+  usage: (p) => <Usage {...p} />,
+  billing: (p) => <Billing {...p} />,
+  "api-keys": (p) => <ApiKeys {...p} />,
+  "gpu-prices": (p) => <GpuPrices {...p} />,
+  "ai-tools": () => <AiTools />,
 };
 
-/** Billing: pay as you go through Stripe. Owners add payment details (Stripe Checkout) or manage
- * their card, invoices and subscription (Stripe's customer portal). */
-function Billing({ acc, owner, busy, onCheckout, onPortal }: {
-  acc: Account; owner: boolean; busy: boolean; onCheckout: () => void; onPortal: () => void;
-}) {
-  const b = acc.billing;
-  if (!b?.enabled) return null;
-  const subscribed = b.status === "active" || b.status === "trialing" || b.status === "past_due";
+export function Settings({ ctx, path }: { ctx: Ctx; path: string }) {
+  const { account: acc, error: loadError, reload } = useAccount(ctx.tick);
+  const page = settingsPage(path);
+  // A done note or an error belongs to the page it happened on; another page doesn't show it.
+  const [said, setSaid] = useState<{ on: string; error?: string; note?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const setNote = useCallback((note: string) => setSaid({ on: page.id, note }), [page.id]);
+  const error = said?.on === page.id ? said.error : undefined, note = said?.on === page.id ? said.note : undefined;
+
+  const act = useCallback(async (f: () => Promise<unknown>, done?: string) => {
+    setBusy(true); setSaid(null);
+    try { await f(); if (done) setSaid({ on: page.id, note: done }); await reload(); }
+    catch (e) { setSaid({ on: page.id, error: (e as Error).message }); } finally { setBusy(false); }
+  }, [reload, page.id]);
+
   return (
-    <Panel title="Billing">
-      <div className="billing">
-        <div>
-          <div className="plan-name">{subscribed ? "Subscribed" : acc.trial_ends_at ? "No payment details yet" : "No subscription"}</div>
-          {b.status && b.status !== "active" && b.status !== "trialing" && <div className="form-error">{BILLING_STATUS[b.status] ?? b.status}</div>}
-          <div className="muted">
-            {subscribed
-              ? "Billed monthly for what you use: data received and kept, and check runs. Invoices and receipts are in Manage billing."
-              : "Add payment details to keep your data flowing after the trial. No upfront charge: you're billed monthly for what you use."}
+    <div className="set-layout">
+      <nav className="set-menu" aria-label="Settings">
+        {SETTINGS_MENU.map((g) => (
+          <div key={g.group}>
+            <div className="set-group">{g.group}</div>
+            {g.pages.map((p) => (
+              <a key={p.id} href={`#/settings/${p.id}`} className={p.id === page.id ? "active" : undefined}
+                 aria-current={p.id === page.id ? "page" : undefined}>{p.label}</a>
+            ))}
           </div>
-          <div className="faint"><a href="#/usage">See this month's usage and estimated bill</a> · <a href="https://www.leasyd.com/pricing.html" target="_blank" rel="noreferrer">Pricing</a></div>
-        </div>
-        {owner ? (
-          <div className="billing-actions">
-            {!subscribed && <button className="btn primary" disabled={busy} onClick={onCheckout}>Add payment details</button>}
-            {b.has_customer && <button className="btn" disabled={busy} onClick={onPortal}>Manage billing</button>}
-          </div>
-        ) : <div className="faint">Only the account's owners can change billing.</div>}
+        ))}
+      </nav>
+      <div className="set-main settings">
+        {(error ?? loadError) && <div className="form-error" role="alert">{error ?? loadError}</div>}
+        {note && <div className="form-note" role="status">{note}</div>}
+        {acc ? PAGES[page.id]({ ctx, acc, owner: acc.you.role === "owner", busy, act, setNote, reload })
+          : !(error ?? loadError) && <div className="skeleton" style={{ height: 300 }} />}
       </div>
-    </Panel>
+    </div>
   );
 }

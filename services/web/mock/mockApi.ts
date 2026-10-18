@@ -315,7 +315,7 @@ const ACCOUNT = {
   you: { email: "ana@acme.io", role: "owner" },
   users: [{ email: "ana@acme.io", role: "owner", created_at: "2026-09-20T10:00:00Z" },
           { email: "bo@acme.io", role: "member", created_at: "2026-09-22T08:12:00Z", invited_by: "ana@acme.io" }],
-  keys: [{ key_id: "k3xq9a7b2c", scope: "ingest", status: "active", created_at: "2026-09-20T10:05:00Z" },
+  keys: [{ key_id: "k3xq9a7b2c", name: "prod ECS", scope: "ingest", status: "active", created_at: "2026-09-20T10:05:00Z" },
          { key_id: "r8mn2p4q1z", scope: "read", status: "active", created_at: "2026-09-24T15:40:00Z" }],
   limits: { keys: 20, users: 50 },
 };
@@ -685,7 +685,7 @@ export function mockApi(): Plugin {
             const body = raw ? JSON.parse(raw) : {};
             let status = 200, out: unknown = ACCOUNT;
             if (what === "keys" && req.method === "POST") {
-              const k = { key_id: hex(Math.random, 10), scope: body.scope, status: "active", created_at: new Date().toISOString() };
+              const k = { key_id: hex(Math.random, 10), ...(body.name ? { name: body.name } : {}), scope: body.scope, status: "active", created_at: new Date().toISOString() };
               ACCOUNT.keys.push(k); status = 201; out = { ...k, api_key: "obs_" + hex(Math.random, 40) };
             } else if (what === "keys" && req.method === "DELETE") { ACCOUNT.keys = ACCOUNT.keys.filter((k) => k.key_id !== id); out = { revoked: [id] }; }
             else if (what === "users" && req.method === "POST") {
@@ -704,7 +704,7 @@ export function mockApi(): Plugin {
             else if (what === "billing") {   // no Stripe here: pretend the checkout was completed
               Object.assign(ACCOUNT, { plan: "standard", trial_ends_at: null, daily_cap_bytes: null });
               ACCOUNT.billing = { enabled: true, status: "active", has_customer: true, started_at: new Date().toISOString() };
-              out = { url: "/#/settings?billing=done" };
+              out = { url: "/#/settings/billing?billing=done" };
             }
             res.statusCode = status;
             setTimeout(() => res.end(JSON.stringify(out)), 200);

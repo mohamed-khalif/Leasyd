@@ -121,7 +121,7 @@ export async function signup(email: string, company: string, website = ""): Prom
 // The tenant's own account (Settings): plan and today's data, users, API keys.
 export type AccountUser = { email: string; role: "owner" | "member"; created_at?: string; invited_by?: string };
 export type KeyScope = "ingest" | "read" | "browser";
-export type AccountKey = { key_id: string; scope: KeyScope; status: string; created_at?: string; expires_at?: string; origins?: string[] };
+export type AccountKey = { key_id: string; name?: string; scope: KeyScope; status: string; created_at?: string; expires_at?: string; origins?: string[] };
 export type Account = {
   tenant: string; company: string; plan: string; daily_cap_bytes?: number | null; created_at?: string;
   today: { bytes: number; records: number; refused_bytes: number };
@@ -146,9 +146,10 @@ export const account = {
     call<AccountUser>("/v1/app/account/users", { method: "POST", body: JSON.stringify({ email, role }) }),
   remove: (email: string) => call<unknown>(`/v1/app/account/users/${encodeURIComponent(email)}`, { method: "DELETE" }),
   // browser: a public key for web monitoring, usable only from `origins` (the sites the script runs on)
-  createKey: (scope: KeyScope, origins?: string[]) =>
-    call<{ key_id: string; scope: string; api_key: string; origins?: string[] }>("/v1/app/account/keys",
-      { method: "POST", body: JSON.stringify(scope === "browser" ? { scope, origins } : { scope }) }),
+  // name: an optional label ("prod ECS"), up to 60 characters
+  createKey: (scope: KeyScope, origins?: string[], name?: string) =>
+    call<{ key_id: string; name?: string; scope: string; api_key: string; origins?: string[] }>("/v1/app/account/keys",
+      { method: "POST", body: JSON.stringify({ scope, ...(name?.trim() ? { name: name.trim() } : {}), ...(scope === "browser" ? { origins } : {}) }) }),
   revokeKey: (id: string) => call<unknown>(`/v1/app/account/keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
   dropRules: () => call<{ rules: DropRule[]; updated_at?: string; updated_by?: string; limits: { rules: number; conditions: number } }>(
     "/v1/app/account/drop-rules"),

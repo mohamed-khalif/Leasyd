@@ -48,6 +48,11 @@ export default tseslint.config(
     rules: { "no-restricted-imports": ["error", { patterns: [{ regex: "^\\./(?!synthetics/|CheckDetail$|Maintenance$)[^/]+$", message: PAGES }] }] },
   },
   {
+    // Settings' own pages share its building blocks (parts) and menu.
+    files: ["src/pages/settings/*.tsx"],
+    rules: { "no-restricted-imports": ["error", { patterns: [{ regex: "^\\./(?!parts$|menu$)[^/]+$", message: PAGES }] }] },
+  },
+  {
     files: ["public/**/*.js"],   // plain browser scripts
     languageOptions: { sourceType: "script", globals: { window: "readonly" } },
   },

@@ -810,3 +810,38 @@ td.warn { color: var(--sev-warn); }
 .util-bar > span.hot { background: var(--sev-error); }
 .infra-drawer { padding: 12px 16px; }
 .alert-templates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+
+/* Settings: a menu on the left, one page per topic; each section has its title and explanation
+   on the left and its controls on the right. */
+.set-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 28px; align-items: start; }
+.set-menu { position: sticky; top: 0; display: grid; gap: 14px; }
+.set-menu a { display: block; padding: 5px 10px; border-radius: 6px; color: var(--text-2); text-decoration: none; }
+.set-menu a:hover { background: var(--surface-3); color: var(--text); }
+.set-menu a.active { background: var(--surface-3); color: var(--text); font-weight: 600; }
+.set-group { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3, var(--text-2)); padding: 0 10px 4px; }
+.set-page { display: grid; gap: 0; }
+.set-page h1 { font-size: 20px; margin: 0 0 4px; }
+.set-lead { margin: 0 0 8px; }
+.set-section { display: grid; grid-template-columns: minmax(200px, 300px) minmax(0, 1fr); gap: 28px; padding: 22px 0; border-top: 1px solid var(--border); }
+.set-page > h1 + .set-section, .set-page > .set-lead + .set-section { border-top: 0; }
+.set-about h2 { font-size: 14px; margin: 0 0 6px; }
+.set-about .muted { font-size: 12.5px; line-height: 1.5; }
+.set-body { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.set-body > .btn { justify-self: start; }
+.set-body > .dtable { border: 1px solid var(--border); border-radius: var(--radius); }
+.set-form { display: grid; gap: 12px; max-width: 460px; }
+.set-field { display: grid; gap: 4px; }
+.set-label { font-size: 12.5px; font-weight: 600; }
+.set-value { font-size: 15px; font-weight: 600; }
+.set-links { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.set-notice { padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border); margin: 6px 0 10px; background: var(--surface); }
+.set-notice.ok { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.set-notice.warn { border-color: var(--sev-warn); background: color-mix(in srgb, var(--sev-warn) 10%, var(--surface)); }
+.set-notice.error { border-color: var(--sev-error); background: color-mix(in srgb, var(--sev-error) 10%, var(--surface)); }
+.set-main .newkey { border: 1px solid var(--border); border-radius: var(--radius); }
+.set-main .panel-body .dtable { border: 0; }
+@media (max-width: 900px) {
+  .set-layout { grid-template-columns: 1fr; gap: 14px; }
+  .set-menu { position: static; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .set-section { grid-template-columns: 1fr; gap: 10px; }
+}

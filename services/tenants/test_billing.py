@@ -110,7 +110,7 @@ def test_an_owner_starts_a_subscription_through_checkout(adm, acc, stripe):  # n
     assert (method, path) == ("POST", "/checkout/sessions") and headers["Authorization"] == "Bearer sk_test_x"
     assert form["mode"] == "subscription" and form["client_reference_id"] == tenant
     assert form["metadata[tenant]"] == tenant and form["subscription_data[metadata][tenant]"] == tenant
-    assert form["customer_email"] == "ana@acme.com" and "/#/settings?billing=done" in form["success_url"]
+    assert form["customer_email"] == "ana@acme.com" and "/#/settings/billing?billing=done" in form["success_url"]
     assert sorted(v for k, v in form.items() if k.startswith("line_items")) == sorted(PRICES.values())
     # No customer yet: nothing to manage. A member may not start billing.
     assert app(acc, "ana@acme.com", tenant, "POST", "billing/portal")[0] == 400
@@ -161,7 +161,7 @@ def test_a_paid_checkout_upgrades_the_trial(adm, acc, stripe):  # noqa: F811
     assert me["billing"]["status"] == "active" and me["billing"]["has_customer"] and me["plan"] == "standard"
     # Now the portal opens for the customer; a second checkout is refused.
     assert app(acc, "ana@acme.com", tenant, "POST", "billing/portal")[1]["url"].startswith("https://billing.stripe.com/")
-    assert stripe.calls[-1][2] == {"customer": "cus_1", "return_url": "https://app.leasyd.com/#/settings"}   # no portal configuration set
+    assert stripe.calls[-1][2] == {"customer": "cus_1", "return_url": "https://app.leasyd.com/#/settings/billing"}   # no portal configuration set
     assert app(acc, "ana@acme.com", tenant, "POST", "billing/checkout")[0] == 409
 
 

@@ -131,8 +131,8 @@ def checkout(tenant, email, record):
            if record.get("stripe_customer_id") else {"customer_email": email}),
         "billing_address_collection": "auto",
         "tax_id_collection": {"enabled": True},
-        "success_url": f"{APP_URL}/#/settings?billing=done",
-        "cancel_url": f"{APP_URL}/#/settings?billing=cancelled",
+        "success_url": f"{APP_URL}/#/settings/billing?billing=done",
+        "cancel_url": f"{APP_URL}/#/settings/billing?billing=cancelled",
     })
     return {"url": session["url"]}
 
@@ -141,7 +141,7 @@ def portal(record):
     if not record.get("stripe_customer_id"):
         raise BillingError(400, "no billing account yet: add payment details first")
     session = stripe("POST", "/billing_portal/sessions",
-                     {"customer": record["stripe_customer_id"], "return_url": f"{APP_URL}/#/settings",
+                     {"customer": record["stripe_customer_id"], "return_url": f"{APP_URL}/#/settings/billing",
                       "configuration": settings().get("portal_configuration")})
     return {"url": session["url"]}
 
