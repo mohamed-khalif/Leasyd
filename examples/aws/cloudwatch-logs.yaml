@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::LanguageExtensions    # Fn::ForEach: one subscription filter per listed log group
+Description: >-
+  Sends this account's CloudWatch Logs to Leasyd: subscription filters on the log groups you list
+  (or, with AllLogGroups=true, one account-wide subscription policy) deliver new log events through
+  Amazon Data Firehose to Leasyd's HTTP endpoint, about a minute after they're written. Data Leasyd
+  refuses (e.g. a wrong key) is kept for 7 days in a bucket here. Deploy it once per region.
+
+  aws cloudformation deploy --stack-name leasyd-cloudwatch-logs \
+    --template-file cloudwatch-logs.yaml --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+    --parameter-overrides LeasydApiKey=obs_... LogGroups=/aws/lambda/checkout,/ecs/shop
+
+  AWS bills Firehose (about $0.029 per GB); CloudWatch Logs ingestion is billed as before, and
+  subscription delivery adds no CloudWatch charge. Delete the stack to stop.
+
+Parameters:
+  LeasydApiKey:
+    Type: String
+    NoEcho: true
+    Description: A Leasyd API key that sends data (Leasyd > Settings > API keys)
+  LeasydEndpoint:
+    Type: String
+    Default: https://ingest.leasyd.com/v1/aws/cloudwatch-logs
+  LogGroups:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      The log groups to send, comma-separated, e.g. /aws/lambda/checkout,/ecs/shop. Each must exist
+      (a Lambda function's appears after its first run) and have fewer than 2 subscription filters.
+  AllLogGroups:
+    Type: String
+    AllowedValues: ["false", "true"]
+    Default: "false"
+    Description: >-
+      true: send every log group in this region, new ones included (one account-wide subscription
+      policy; a region can have only one), instead of LogGroups. Mind the volume.
+  FilterPattern:
+    Type: String
+    Default: ""
+    Description: >-
+      CloudWatch Logs filter pattern for what to send; empty sends everything. E.g. ?ERROR ?WARN
+      sends only those lines (fewer GB for Firehose and Leasyd).
+
+Conditions:
+  All: !Equals [!Ref AllLogGroups, "true"]
+  Listed: !Not [!Condition All]
+
+Rules:
+  SomethingToSend:
+    RuleCondition: !Equals [!Ref AllLogGroups, "false"]
+    Assertions:
+      - Assert: !Not [!Equals [!Join ["", !Ref LogGroups], ""]]
+        AssertDescription: List the log groups to send in LogGroups, or set AllLogGroups=true
+
+Resources:
+  # What Leasyd could not take after 5 minutes of retries, gzipped, kept for 7 days.
+  FailedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }]
+      LifecycleConfiguration:
+        Rules: [{ Id: expire, Status: Enabled, ExpirationInDays: 7 }]
+
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: firehose.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition: { StringEquals: { "sts:ExternalId": !Ref AWS::AccountId } }
+      Policies:
+        - PolicyName: failed-data
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload, s3:GetBucketLocation, s3:ListBucket, s3:ListBucketMultipartUploads]
+                Resource: [!GetAtt FailedBucket.Arn, !Sub "${FailedBucket.Arn}/*"]
+              - Effect: Allow
+                Action: logs:PutLogEvents
+                Resource: !GetAtt FirehoseLogGroup.Arn     # arn:...:log-group:<name>:*, its streams included
+
+  # Firehose's own delivery errors. Never sent to Leasyd (the account-wide policy excludes it),
+  # so a failing delivery can't feed itself.
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 7
+  FirehoseLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      LogStreamName: delivery
+
+  DeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamType: DirectPut
+      HttpEndpointDestinationConfiguration:
+        EndpointConfiguration:
+          Name: Leasyd
+          Url: !Ref LeasydEndpoint
+          AccessKey: !Ref LeasydApiKey
+        RequestConfiguration:
+          ContentEncoding: GZIP
+          CommonAttributes:           # subscription messages don't say which region they're from
+            - { AttributeName: cloud.region, AttributeValue: !Ref AWS::Region }
+        BufferingHints:
+          SizeInMBs: 1
+          IntervalInSeconds: 60
+        RetryOptions:
+          DurationInSeconds: 300
+        RoleARN: !GetAtt FirehoseRole.Arn
+        S3BackupMode: FailedDataOnly
+        S3Configuration:
+          BucketARN: !GetAtt FailedBucket.Arn
+          RoleARN: !GetAtt FirehoseRole.Arn
+          CompressionFormat: GZIP
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogGroup
+          LogStreamName: !Ref FirehoseLogStream
+
+  # Lets CloudWatch Logs (this account's only) put subscription data on the Firehose.
+  SubscriptionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: logs.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition: { StringLike: { "aws:SourceArn": !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*" } }
+      Policies:
+        - PolicyName: to-firehose
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [firehose:PutRecord, firehose:PutRecordBatch]
+                Resource: !GetAtt DeliveryStream.Arn
+
+  # LogGroups: one subscription filter per group (&{} drops the name's punctuation for the
+  # logical id: /aws/lambda/checkout -> Filterawslambdacheckout).
+  Fn::ForEach::Groups:
+    - LogGroup
+    - !Ref LogGroups
+    - "Filter&{LogGroup}":
+        Type: AWS::Logs::SubscriptionFilter
+        Condition: Listed
+        Properties:
+          FilterName: leasyd
+          LogGroupName: !Ref LogGroup
+          FilterPattern: !Ref FilterPattern
+          DestinationArn: !GetAtt DeliveryStream.Arn
+          RoleArn: !GetAtt SubscriptionRole.Arn
+
+  # AllLogGroups: every log group in the region, new ones included, except Firehose's own.
+  AccountSubscription:
+    Type: AWS::Logs::AccountPolicy
+    Condition: All
+    Properties:
+      PolicyName: leasyd
+      PolicyType: SUBSCRIPTION_FILTER_POLICY
+      Scope: ALL
+      SelectionCriteria: !Sub 'LogGroupName NOT IN ["${FirehoseLogGroup}"]'
+      PolicyDocument:
+        Fn::ToJsonString:             # escapes a pattern's quotes, e.g. { $.level = "error" }
+          DestinationArn: !GetAtt DeliveryStream.Arn
+          RoleArn: !GetAtt SubscriptionRole.Arn
+          FilterPattern: !Ref FilterPattern
+          Distribution: Random
+
+Outputs:
+  DeliveryStream:
+    Value: !Ref DeliveryStream
+  FailedDataBucket:
+    Description: Where data Leasyd refused is kept (check Firehose's log group too)
+    Value: !Ref FailedBucket

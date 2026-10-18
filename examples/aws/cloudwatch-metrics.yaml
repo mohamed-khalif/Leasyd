@@ -67,7 +67,7 @@ Resources:
                 Resource: [!GetAtt FailedBucket.Arn, !Sub "${FailedBucket.Arn}/*"]
               - Effect: Allow
                 Action: logs:PutLogEvents
-                Resource: !GetAtt FirehoseLogStream.Arn
+                Resource: !GetAtt FirehoseLogGroup.Arn     # arn:...:log-group:<name>:*, its streams included
 
   FirehoseLogGroup:
     Type: AWS::Logs::LogGroup
