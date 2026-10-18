@@ -1,7 +1,7 @@
 // Settings › Usage & cost: today against the plan's daily limits, then the cost of the next 30 days
 // at today's pace.
 import { useEffect, useMemo, useState } from "react";
-import { fmtInt, fmtNum, fmtUnit, fmtUnitPrice } from "../../lib/format";
+import { fmtInt, fmtNum, fmtUnit, fmtUnitPrice, NONE } from "../../lib/format";
 import { account, Meter, records, Signal } from "../../api";
 import type { Ctx } from "../../App";
 import { Loads, Panel } from "../../components/Panel";
@@ -25,10 +25,10 @@ function useBaseline(ctx: Ctx, signal: Signal): Loaded {
 
 /** The share of each signal's records that drop rules discard, from the account's meter: yesterday's
  * (a whole day) if metered, else today's so far. Applied to what was stored, as dropped / kept. */
-function useDropShare(ctx: Ctx): Record<Signal, number> | null {
-  const [days, setDays] = useState<Meter[] | null>(null);
-  useEffect(() => { account.meters(2).then((r) => setDays(r.days), () => setDays([])); }, [ctx.tick]);
-  if (!days) return null;
+function useDropShare(ctx: Ctx): Record<Signal, number> | null | "error" {
+  const [days, setDays] = useState<Meter[] | null | "error">(null);
+  useEffect(() => { account.meters(2).then((r) => setDays(r.days), () => setDays("error")); }, [ctx.tick]);
+  if (!days || days === "error") return days;
   const [today, yesterday] = days;
   const ratio = (s: Signal) => {
     const m = yesterday && (yesterday[`in_${s}`] ?? 0) > 0 ? yesterday : today;
@@ -46,12 +46,13 @@ const fees = (s: Signal, stored: number, dropped = 0) =>
  *  shows it under the Usage page without waiting for the account (it doesn't need it). */
 export function UsageCost({ ctx }: { ctx: Ctx }) {
   const q = { traces: useBaseline(ctx, "traces"), logs: useBaseline(ctx, "logs"), metrics: useBaseline(ctx, "metrics") };
-  const dropShare = useDropShare(ctx);
+  const drops = useDropShare(ctx), dropShare = drops === "error" ? null : drops;
   const month = (s: Signal) => (q[s].data ? records(q[s].data!).reduce((a, r) => a + Number(r.count), 0) * 30 : 0);
   const droppedMonth = (s: Signal) => (dropShare ? month(s) * dropShare[s] : 0);
   const fee = (s: Signal) => fees(s, month(s), droppedMonth(s));
   const saved = SIGNALS.reduce((a, s) => a + (droppedMonth(s) / 1e6) * PRICE[s].storage, 0);
   const ready = SIGNALS.every((s) => q[s].data || q[s].error);
+  const failed = SIGNALS.filter((s) => q[s].error);    // a signal that can't be read would count as $0: no total then
   const total = SIGNALS.reduce((a, s) => a + fee(s), 0);
   const maxMonth = Math.max(1, ...SIGNALS.map(month));
 
@@ -60,7 +61,10 @@ export function UsageCost({ ctx }: { ctx: Ctx }) {
       <div className="grid">
         <div className="span-8" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Panel title="Estimated total, next 30 days">
-            {ready ? <Stat value={usd(total)} sub={saved >= 0.01 ? `${usd(saved)} saved by drop rules` : undefined} /> : <div className="skeleton" style={{ height: 84 }} />}
+            {!ready ? <div className="skeleton" style={{ height: 84 }} />
+              : failed.length ? <Stat value={NONE} sub={`couldn't load ${failed.map((s) => NAME[s].toLowerCase()).join(", ")}: no total without them`} />
+              : <Stat value={usd(total)} sub={drops === "error" ? "couldn't load what drop rules discard: this leaves out their ingest fee"
+                                                : saved >= 0.01 ? `${usd(saved)} saved by drop rules` : undefined} />}
           </Panel>
           <div className="grid">
             {SIGNALS.map((s) => (

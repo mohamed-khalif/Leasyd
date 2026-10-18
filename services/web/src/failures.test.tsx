@@ -106,3 +106,14 @@ test("SLOs: the last hour unreadable is 'couldn't load', never 'healthy'", async
   assert.doesNotMatch(text, /healthy/);
   assert.match(text, /couldn't load/);
 });
+
+test("Usage & cost: one signal unreadable is 'couldn't load', not a smaller total", async () => {
+  const text = await pageText("/settings/usage", { "POST /v1/app/query ~\"signal\":\"logs\"": 500 });
+  assert.match(text, /Estimated total, next 30 days–/);
+  assert.match(text, /couldn't load logs/);
+});
+
+test("Usage & cost: drop shares unreadable say so, not 'nothing dropped'", async () => {
+  const text = await pageText("/settings/usage", { "GET /v1/app/account/meters": 500 });
+  assert.match(text, /couldn't load what drop rules discard/);
+});
