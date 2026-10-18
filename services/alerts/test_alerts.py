@@ -398,6 +398,56 @@ def test_missing_data_never_resolves_a_firing_alert(aws, monkeypatch):
     assert call("acme", "GET", "rules")[1]["items"][0]["firing"] == []
 
 
+def test_an_slo_with_no_runs_stays_firing_and_is_told_once(aws, monkeypatch):
+    sent = []
+    monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    s, rule = call("acme", "POST", "rules", {"name": "Budget", "type": "slo_burn", "slo": "sssstttttttt", "burn_rate": 10, "channels": [ch]})
+    numbers = {"week": (995, 1000), "hour": (50, 60)}
+    def fake_query(q):
+        recent = alerts.datetime.fromisoformat(q["start"].replace("Z", "+00:00")) > alerts.datetime.now(alerts.timezone.utc) - alerts.timedelta(hours=2)
+        good, total = numbers["hour" if recent else "week"]
+        return {"columns": ["sum(value)", "count"], "rows": [[good, total]]}
+    monkeypatch.setattr(alerts, "_query", fake_query)
+    alerts.evaluate()
+    assert len(sent) == 1 and "FIRING" in sent[0]["title"]
+    numbers.update(week=(0, 0), hour=(0, 0))                                   # no runs at all (the check stopped)
+    for _ in range(2):
+        alerts.evaluate()
+    assert len(sent) == 1                                                      # not resolved, not yet told
+    alerts.evaluate()
+    assert len(sent) == 2 and "NO DATA" in sent[1]["title"] and sent[1]["payload"]["state"] == "no_data"
+    alerts.evaluate()
+    assert len(sent) == 2 and alerts._state("acme", rule["id"], "sssstttttttt").get("firing")
+    assert call("acme", "GET", "rules")[1]["items"][0]["no_data"] == ["Checkout up"]
+    numbers.update(week=(998, 1000), hour=(60, 60))                            # runs again, within limits
+    alerts.evaluate()
+    assert len(sent) == 3 and "RESOLVED" in sent[2]["title"]
+
+
+def test_a_check_failing_alert_whose_check_stopped_running_says_no_data_once(aws, monkeypatch):
+    sent = []
+    monkeypatch.setattr(alerts, "notify", lambda tenant, channel, msg: sent.append(msg) and None)
+    monkeypatch.setattr(alerts, "slo_status", lambda *a: {"attainment": None, "budget_left": None, "burn1h": None})
+    ch = call("acme", "POST", "channels", {"type": "slack", "name": "#ops", "url": "https://hooks.slack.com/services/T0/B0/x"})[1]["id"]
+    s, rule = call("acme", "POST", "rules", {"name": "Checkout down", "type": "check_failing", "checks": ["aaaabbbbcccc"], "failures": 1, "channels": [ch]})
+    alerts.on_result({"tenant": "acme", "check_id": "aaaabbbbcccc", "check_name": "Checkout API", "ok": False, "failure": "503"})
+    assert len(sent) == 1 and "FIRING" in sent[0]["title"]
+    alerts.evaluate()
+    assert len(sent) == 1                                                      # it ran just now: fine
+    t = boto3.resource("dynamodb").Table("obs-tenants")
+    st = t.get_item(Key={"pk": f"astate#acme#{rule['id']}#aaaabbbbcccc"})["Item"]
+    st["updated_at"] = "2026-01-01T00:00:00Z"                                 # no run since (every 5 minutes: 3 missed long ago)
+    t.put_item(Item=st)
+    alerts.evaluate()
+    assert len(sent) == 2 and "NO DATA" in sent[1]["title"] and "Checkout API" in sent[1]["title"]
+    alerts.evaluate()
+    assert len(sent) == 2                                                      # told once
+    assert call("acme", "GET", "rules")[1]["items"][0]["firing"] == ["aaaabbbbcccc"]
+    alerts.on_result({"tenant": "acme", "check_id": "aaaabbbbcccc", "check_name": "Checkout API", "ok": True})
+    assert len(sent) == 3 and "RESOLVED" in sent[2]["title"]                   # a passing run resolves it as before
+
+
 # ------------------------------------------------------------------ dashboards
 
 def dash_call(tenant, method, dash_id=None, body=None):

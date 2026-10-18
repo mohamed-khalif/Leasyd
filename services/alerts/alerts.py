@@ -486,6 +486,7 @@ def evaluate(event=None, context=None):
     if minute % 5:
         print(json.dumps({"check_rules": len(checks)}))
         return {"check_rules": [_id_of(r) for r in checks], "evaluated": []}
+    _stopped_checks([r for r in all_rules if r.get("type") == "check_failing"], now)
     rules = [r for r in all_rules if r.get("type") == "slo_burn"]
     done = []
     for rule in rules:
@@ -509,8 +510,15 @@ def evaluate(event=None, context=None):
             left = "none" if s["budget_left"] <= 0 else f"{s['budget_left'] * 100:.0f}%"
             reasons.append(f"error budget left: {left} (alert below {float(rule['budget_below']):g}%)")
         rid, subject = _id_of(rule), slo["name"]
-        firing = bool(_state(tenant, rid, rule["slo"]).get("firing"))
+        st = _state(tenant, rid, rule["slo"])
+        firing = bool(st.get("firing"))
         link = f"{APP_URL}/#/slos/{rule['slo']}"
+        if s["attainment"] is None:          # no runs in the SLO's window: can't tell, so a firing alert stays firing
+            if firing:
+                _no_data(rule, rule["slo"], st, subject, f"No check runs in the SLO's {slo['window_days']}-day window, so Leasyd "
+                         "can't tell whether it's back within limits. The alert stays firing until runs show it is.", link, show=subject)
+            done.append(rid)
+            continue
         level = "no runs yet" if s["attainment"] is None else f"{s['attainment']:.3f}% good against a {float(slo['target']):g}% target"
         if reasons and not firing:
             fire(tenant, rule, "firing", subject, f"The SLO is {' and '.join(reasons)}. Now: {level}.", link)
@@ -518,6 +526,8 @@ def evaluate(event=None, context=None):
         elif not reasons and firing:
             fire(tenant, rule, "resolved", subject, f"Back within limits. Now: {level}.", link)
             _set_state(tenant, rid, rule["slo"], firing=False)
+        elif firing and st.get("no_data"):   # runs again, still past its limits
+            _set_state(tenant, rid, rule["slo"], firing=True, subject=subject)
         done.append(rid)
     print(json.dumps({"check_rules": len(checks), "evaluated": len(done)}))
     return {"check_rules": [_id_of(r) for r in checks], "evaluated": done}
@@ -584,6 +594,41 @@ def _eval_failed(rule, error, link):
              "is wrong. Its alerts stay as they were (firing ones stay firing) until it can.", link)
         told = True
     _set_state(tenant, rid, EVAL_KEY, failures=failures, told=told)
+
+
+def _no_data(rule, key, st, subject, detail, link, missed=None, show=None):
+    """A firing alert (one check, SLO or series) without data now: it stays firing, and the GRACE-th
+    time in a row tells the rule's channels once. `missed`: how many in a row, if known otherwise."""
+    tenant = rule["tenant"]
+    missed = missed or int(st.get("no_data", 0)) + 1
+    told = bool(st.get("no_data_told"))
+    if missed >= GRACE and not told:
+        fire(tenant, rule, "no_data", subject, detail, link)
+        told = True
+    keep = {k: v for k, v in st.items() if k not in ("pk", "tenant", "updated_at")}
+    _set_state(tenant, _id_of(rule), key, **{**keep, **({"subject": show} if show else {}), "no_data": missed, "no_data_told": told})
+
+
+def _stopped_checks(rules, now):
+    """Every 5 minutes: a firing "check failing" alert whose check stopped running (paused, deleted,
+    or no run for GRACE times its frequency) says so once; it stays firing until a run passes."""
+    checks_of = {}
+    for rule in rules:
+        tenant, rid = rule["tenant"], _id_of(rule)
+        if tenant not in checks_of:
+            checks_of[tenant] = {_id_of(c): c for c in _items(tenant, f"check#{tenant}#")}
+        for st in _items(tenant, f"astate#{tenant}#{rid}#"):
+            cid = st["pk"].split("#", 3)[3]
+            if cid == EVAL_KEY or not st.get("firing") or st.get("no_data_told"):
+                continue
+            check = checks_of[tenant].get(cid)
+            every = int((check or {}).get("frequency") or 5)
+            if check and check.get("enabled", True) and st.get("updated_at", "") >= _iso(now - timedelta(minutes=GRACE * every + 2)):
+                continue
+            name = (check or {}).get("name") or cid
+            why = "was deleted" if not check else "is paused" if not check.get("enabled", True) else f"hasn't run for {GRACE * every}+ minutes"
+            _no_data(rule, cid, st, name, f"The check {why}, so Leasyd can't tell whether it's passing again. The alert stays "
+                     "firing until a run passes.", f"{APP_URL}/#/synthetics/{cid}", missed=GRACE)
 
 
 def _eval_ok(rule, had_failures):
