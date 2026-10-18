@@ -15,7 +15,7 @@ import { useRangeWindow } from "../useNow";
 const PALETTE = ["#b49bf3", "#6ea8fe", "#d7b98a", "#6fd3c1", "#f59ab4", "#9aa6b8", "#7fb77e", "#e07a5f", "#8d99ae", "#f2cc8f"];
 const ROW_PX = 170;
 const UNITS: [string, string][] = [["", "Number"], ["/s", "Per second"], ["%", "Percent (0-100)"], ["percentunit", "Percent (0-1)"],
-  ["ms", "Milliseconds"], ["s", "Seconds"], ["ns", "Nanoseconds"], ["bytes", "Bytes"]];
+  ["ms", "Milliseconds"], ["s", "Seconds"], ["ns", "Nanoseconds"], ["bytes", "Bytes"], ["W", "Watts"], ["°C", "Degrees Celsius"]];
 const TYPES: [PanelType, string][] = [["timeseries", "Line"], ["bars", "Stacked bars"], ["stat", "Number"], ["text", "Text"]];
 
 function favorites(): string[] { try { return JSON.parse(localStorage.getItem("leasyd.dash.fav") ?? "[]"); } catch { return []; } }

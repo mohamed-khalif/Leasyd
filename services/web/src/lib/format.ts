@@ -38,6 +38,7 @@ export function fmtUnit(v: number, unit = "", decimals?: number): string {
   if (unit === "%") return `${n(v)}%`;
   if (unit === "percentunit") return `${n(v * 100)}%`;
   if (unit === "/s") return `${n(v)}/s`;
+  if (unit === "W" || unit === "°C") return `${n(v)} ${unit}`;
   return n(v);
 }
 

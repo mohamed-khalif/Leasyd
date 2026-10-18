@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fmtAgo, fmtBytes, fmtCores, fmtDuration, fmtFixed, fmtHours, fmtInt, fmtMiB, fmtMs, fmtNum, fmtPercent, fmtRatio,
-         fmtUnitPrice, fmtUsd, NONE } from "./format";
+         fmtUnit, fmtUnitPrice, fmtUsd, NONE } from "./format";
 
 test("numbers", () => {
   assert.deepEqual([950, 12.5, 0.372, 12_345, 1_234_567, 3.4e9].map(fmtNum), ["950", "12.5", "0.372", "12.3K", "1.2M", "3.4B"]);
@@ -42,4 +42,9 @@ test("sizes, CPU and money", () => {
   assert.deepEqual([0.25, 1.5, 12].map(fmtCores), ["250m", "1.50 cores", "12.0 cores"]);
   assert.deepEqual([0.42, 12, 1234].map(fmtUsd), ["$0.42", "$12", `$${(1234).toLocaleString()}`]);
   assert.deepEqual([0.18, 0.075, 3.43].map(fmtUnitPrice), ["$0.18", "$0.075", "$3.43"]);
+});
+
+test("fmtUnit: watts and degrees show their unit", () => {
+  assert.equal(fmtUnit(250, "W"), "250 W");
+  assert.equal(fmtUnit(71.5, "°C"), "71.5 °C");
 });

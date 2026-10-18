@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 MAX_DASHBOARDS, MAX_PANELS, MAX_QUERIES, MAX_VARIABLES = 100, 60, 5, 5
 MAX_BYTES = 300_000          # a DynamoDB item holds 400 KB
 PANEL_TYPES = {"timeseries", "bars", "stat", "text"}
-UNITS = {"", "ms", "s", "ns", "bytes", "%", "/s", "percentunit"}
+UNITS = {"", "ms", "s", "ns", "bytes", "%", "/s", "percentunit", "W", "°C"}
 _ID = re.compile(r"^[a-z0-9]{12}$")
 _PANEL_ID = re.compile(r"^[a-z0-9_-]{1,32}$")
 _LABEL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,63}$")

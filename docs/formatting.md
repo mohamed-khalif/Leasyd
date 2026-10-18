@@ -79,4 +79,4 @@ Two conventions, each in its own place:
 
 ## Units on chart panels
 
-`fmtUnit(v, unit, decimals?)` formats a panel's value in its declared unit (`ms`, `s`, `ns`, `bytes`, `%`, `percentunit`, `/s`). It uses the duration and size rules above, and an optional fixed number of decimals.
+`fmtUnit(v, unit, decimals?)` formats a panel's value in its declared unit (`ms`, `s`, `ns`, `bytes`, `%`, `percentunit`, `/s`, `W`, `°C`). It uses the duration and size rules above, and an optional fixed number of decimals.
