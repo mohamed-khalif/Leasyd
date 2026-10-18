@@ -122,3 +122,12 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Docs: ARCHITECTURE.md section 0 (the web app now; sections 1-9 kept as the before picture); READMEs in services/web, src, src/lib, src/pages
 - [x] Final summary: docs/phase7-report.md
 - [ ] Known, left as is: drop rule previews each read their own clock (24-hour previews, harmless)
+
+## Agent strategy (research only, no code): docs/agent-strategy.md
+- [x] Phase 1 ground truth: three parallel read-only audits (backend, web app, AI/MCP), key claims re-checked in code; corrections to the brief; capabilities, actions, gaps, trust problems, what can be measured (2026-10-18)
+- [ ] Review of Phase 1 (waiting)
+- [ ] Phase 2 outcomes
+- [ ] Phase 3 agent architecture
+- [ ] Phase 4 trust, autonomy and safety
+- [ ] Phase 5 product and business
+- [ ] Phase 6 roadmap and decisions; docs/agent-summary.md

@@ -4,8 +4,9 @@ A map of the system, written for the code-health review (`docs/refactor-progress
 
 **Two dates in this file.** Section 0 is the web app as it is now (2026-10-18, after Phases 4–7). Sections 1–9 are the
 audit as found on 2026-10-17, before the clean-up; they are kept as the "before" picture, and their `file:line`
-references point at that code (commit d2a42dc). The backend sections (8, 9) are still accurate except where section 0
-says otherwise. Measured before/after results: `docs/phase7-report.md`.
+references point at that code (commit d2a42dc). In the backend sections, 8.2–8.3 are out of date on three points, all
+fixed since: queries can be cancelled (`DELETE /v1/query/{job}`), each account has a limit of queries in flight
+(`INFLIGHT_LIMITS`, `query.py`), and a query is no longer run twice after 20 s. Measured before/after results: `docs/phase7-report.md`.
 Facts carry `file:line` references; paths are relative to the repository root unless a section says otherwise.
 Findings that need action are collected in `docs/code-audit.md` (Phase 3). This file describes, it doesn't judge,
 except where a "Flag" column or note says so.
