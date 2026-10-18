@@ -114,4 +114,11 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Behaviour changes, agreed in the plan: #/settings opens Profile (was one long page); the MCP command fills in a new read key on the API keys page (was on the same long page)
 - [x] Usage & Cost merged into Settings › Usage & cost (today's limits, then the 30-day estimate); its sidebar link removed; the old #/usage opens the new page (asked 2026-10-18)
 - [x] Built-in GPU dashboard could not be copied (units " W" / " °C" refused by the server, and not shown): units W and °C allowed and shown (9aad083)
-## Phase 7: not started
+## Phase 7: verify and report (2026-10-18), results in docs/phase7-report.md
+- [x] Cross-page test: a range picked on one page carries to the others through the sidebar and to a fresh load; Refresh carries too (59db6b7)
+- [x] Before/after on production builds, same machine and data, 3 runs each (method of code-audit §1; scripts in services/web/scripts/perf): requests unchanged (no cache, by decision); one window end per page; at most 6 queries in flight (Home 22 -> 8 incl. REST); Refresh as fast or faster; first loads about the same
+- [x] Production (CloudWatch): no errors since the final deploy; API p95 2.8 -> 2.3 s, worker p95 1.0 -> 0.7 s; API median 0.40 -> 0.58 s, not explained yet (little traffic; check after a few days)
+- [x] Found and fixed: first visit of each page waited >= 300 ms (React.lazy fallback throttle; f4276bc); Dashboards and SLOs had several "now"s (7c34869); Usage & cost waited for the account (c543159)
+- [x] Docs: ARCHITECTURE.md section 0 (the web app now; sections 1-9 kept as the before picture); READMEs in services/web, src, src/lib, src/pages
+- [x] Final summary: docs/phase7-report.md
+- [ ] Known, left as is: drop rule previews each read their own clock (24-hour previews, harmless)

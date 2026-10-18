@@ -66,6 +66,10 @@ A serverless, multi-tenant observability back end on AWS (us-east-1, account 199
 Code: `services/` (compaction incl. query engine, ingest, tenants, loadgen), each with `pytest` tests.
 Infra: `infra/*.yaml` (one CloudFormation stack per phase), `infra/deploy-*.sh`, `infra/*-test.*`.
 
+### Web app clean-up verified (2026-10-18, Phase 7)
+Before/after on production builds and in CloudWatch: `docs/phase7-report.md`. Three fixes from it (a 300 ms wait on each
+page's first visit, one "now" on Dashboards and SLOs, Usage & cost not waiting for the account); pending deploy (web).
+
 ### Settings redesign (2026-10-18, built and tested locally; pending deploy)
 Settings has its own menu: Account (Profile, Security: change password) and Organization (Organization,
 Team, Usage & cost, Billing, API keys, GPU prices, AI tools), one page each at `#/settings/<page>`, every section

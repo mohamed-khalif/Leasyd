@@ -60,4 +60,10 @@ export default tseslint.config(
     files: ["scripts/**/*.mjs", "mock/**/*.ts", "vite.config.ts"],
     languageOptions: { globals: { process: "readonly", console: "readonly", Buffer: "readonly", URL: "readonly", setTimeout: "readonly" } },
   },
+  {
+    files: ["scripts/**/*.cjs"],   // CommonJS node scripts (scripts/perf: Playwright from the machine, not a dependency)
+    languageOptions: { sourceType: "commonjs",
+      globals: { require: "readonly", process: "readonly", console: "readonly", URL: "readonly", location: "readonly", localStorage: "readonly" } },
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
 );

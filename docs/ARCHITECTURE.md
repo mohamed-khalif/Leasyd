@@ -1,11 +1,17 @@
 # Leasyd architecture
 
-A map of the system as it is (2026-10-17), written for the code-health review (`docs/refactor-progress.md`).
+A map of the system, written for the code-health review (`docs/refactor-progress.md`).
+
+**Two dates in this file.** Section 0 is the web app as it is now (2026-10-18, after Phases 4–7). Sections 1–9 are the
+audit as found on 2026-10-17, before the clean-up; they are kept as the "before" picture, and their `file:line`
+references point at that code (commit d2a42dc). The backend sections (8, 9) are still accurate except where section 0
+says otherwise. Measured before/after results: `docs/phase7-report.md`.
 Facts carry `file:line` references; paths are relative to the repository root unless a section says otherwise.
 Findings that need action are collected in `docs/code-audit.md` (Phase 3). This file describes, it doesn't judge,
 except where a "Flag" column or note says so.
 
 Contents:
+0. The web app now (after the clean-up)
 1. Claims checked
 2. Repository layout
 3. Frontend (services/web)
@@ -15,6 +21,91 @@ Contents:
 7. Frontend module graph
 8. Backend
 9. Infrastructure and hosting
+
+---
+
+## 0. The web app now (after the clean-up)
+
+Paths are relative to `services/web/src`. About 11,200 lines of TS/TSX plus 850 lines of CSS. Per-folder notes:
+`services/web/src/README.md`.
+
+### 0.1 How a page gets its data
+
+```
+App (hash router, range, Refresh tick, the page's one "now")
+ └─ page ── useQuery / useSql / useRows / useHint ──┐
+                                                    ├─ useLoad (useQuery.ts): runs on key change, aborts the old run
+ └─ useAccount / useCheckList (one loader each) ───┘
+        └─ api.ts  query/sql/promql → runQuery → limited (limiter.ts, 6 at once) → fetch POST /v1/app/query
+                                                   202 + job id → poll every 2 s; abort → DELETE /v1/app/query/{job}
+```
+
+- **One core hook.** `useLoad(run, key)` (`useQuery.ts`) runs `run(signal)` whenever `key` changes, keeps the last
+  data while the next loads, and aborts on a new key or unmount, so a late answer is never shown. `useQuery`, `useSql`
+  (`useQuery.ts`), `useRows`, `useHint` (`infra/useInfra.ts`), `useAccount` (`useAccount.ts`) and `useCheckList`
+  (`checkList.tsx`) are thin wrappers. Dashboards' panels keep their own effect and abort the same way; Query Builder's
+  results abort only when the page closes (as decided in step 6.2).
+- **Requests.** Everything goes through `api.ts` (lint: `fetch` only there and in `config.ts`). Typed `ApiError`.
+  While a job runs, a poll that fails in passing (502/503/504 or network) is tried again. Aborting a query that
+  became a job sends `DELETE /v1/app/query/{job}`.
+- **At most 6 queries in flight per page** (`limiter.ts`, `MAX_IN_FLIGHT`). The rest wait in order; an aborted
+  query leaves the queue or frees its place. The server has its own per-account limit (`INFLIGHT_LIMITS`,
+  `services/compaction/query.py`, 25 for every plan for now).
+- **No cache** (decision: `docs/caching-decision.md`). Every page visit and Refresh asks again.
+
+### 0.2 Time range, "now", Refresh and links
+
+- **Range:** in `App` state, saved to localStorage `leasyd.range`, and mirrored in the link as `?range=` (`15m`…`30d`,
+  or `c<from>-<to>` for a custom range). A link with a range opens with it; Back and links switch to theirs.
+- **One "now" per page:** `ctx.now`, set when the range changes, on Refresh, and on opening a page. Every query on
+  the page ends there: `useRangeWindow(ctx)` (`useNow.ts`) for range windows; views with their own window (SLO
+  period, a trace's 30-day lookup, usage's 24 hours) use `useNow(...)` or `ctx.now` explicitly. Exceptions, on
+  purpose: Kubernetes/GPU discovery reads the last 15 minutes of the window; each drop rule preview reads its own clock.
+- **Refresh** bumps `ctx.tick` and takes a new now. There is no auto-refresh anywhere.
+- **Filters in the link:** `useHashParam` / `useHashSearch` (`hashParams.ts`) keep a page's service, filters and
+  search in the link (`replaceState`), so links and Back restore them. Typing waits 400 ms (`useDebounced.ts`,
+  `TYPING_MS`); Enter or Run asks at once.
+
+### 0.3 Pages and code loading
+
+- **One code chunk per page.** `App.tsx` `splitPage(...)`: the page a link opens is downloaded at start-up next to
+  the sign-in check (`preloadPage`) and renders without a fallback; moving to another page is a React transition,
+  so the current page stays until the next one's code is there. (Through plain `React.lazy` each first visit waited
+  at least 300 ms: `docs/phase7-report.md`.) First download: 109 kB gzip (was 224).
+- **Pages don't import pages** (lint). Shared code is in `lib/`, `components/`, `infra/`, or a page folder
+  (`pages/synthetics/shared.tsx`, `pages/settings/`). Synthetics opens CheckDetail and Maintenance.
+- **Settings** (`pages/Settings.tsx`, `pages/settings/`): a menu and one page per topic at `#/settings/<page>`
+  (`settings/menu.ts`); `#/usage` opens Settings › Usage & cost.
+- **Long lists** draw 500 rows at a time with "Show more" (`components/Capped.tsx`); waterfall search,
+  expand/collapse all and CSV export work on everything.
+- **Errors are shown as errors**, never as "all clear", empty or 0 (`failures.test.tsx`). An `ErrorBoundary` around
+  each page catches render errors; a bad link can't blank the app (`links.test.tsx`).
+
+### 0.4 Formatting and rules
+
+- **All number, date and size formatting** is in `lib/format.ts`, spec `docs/formatting.md`. Lint forbids
+  `toFixed`, `toPrecision`, `toLocale*` and `Intl` in `pages/` and `components/`.
+- **SQL text** from values: `lib/sql.ts` `sqlString` (one helper; the engine checks every query too).
+- **Lint** (`eslint.config.js`): the rules above, React hooks rules, `fetch` only in `api.ts`/`config.ts`.
+- **Tests:** `npm test` (node:test bundled by esbuild, happy-dom, the mock backend `mock/mockApi.ts`): one smoke test
+  per page, failure paths, shared now, range in links, cross-page range and Refresh, limiter, abort, debounce, row
+  cap, formatting, Settings. 131 tests on 2026-10-18.
+
+### 0.5 What changed from sections 3–7
+
+| Then (2026-10-17) | Now |
+|---|---|
+| Five copies of fetch-state logic; no abort | One `useLoad`; abort on key change and unmount; jobs cancelled |
+| Up to 7 "nows" on one page | One `ctx.now` per page |
+| Range only in localStorage; filters read once | Range and filters in the link, read on every change |
+| Home sent 22 requests at once | At most 6 queries in flight per page |
+| 8 check-list loaders, `account.get` twice per page | One `useCheckList`, one `useAccount` (no cache) |
+| Formatting in pages and `time.ts` | `lib/format.ts` + lint rule |
+| SQL quoting copied 4 times | `lib/sql.ts` |
+| One 224 kB (gzip) bundle | A chunk per page, the opened one preloaded; 109 kB first download |
+| Pages importing pages; Synthetics ↔ CheckDetail cycle | Shared code moved out; lint rule; no cycle |
+| No ESLint; 1 test file | ESLint; 131 tests |
+| Usage & Cost its own page | Settings › Usage & cost |
 
 ---
 
