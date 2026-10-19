@@ -151,3 +151,8 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] infra/deploy-phaseW1.sh run; app.leasyd.com/install/cloudwatch-logs.yaml is the fixed template (checked in S3)
 - [x] CloudWatch metrics setup stack (never deployed for real before; its Firehose log permission fixed in 0ca7c05) checked in a real account with infra/cloudwatch-metrics-test.sh (2026-10-19): stream delivered within about 5 minutes; aws.lambda.invocations / duration / errors / throttles / concurrent_executions under the function's name; 11 functions in the region streamed; nothing refused; all deleted after. PASS
 - [ ] Not tried for real: AllLogGroups=true (would stream Leasyd's own logs: use a separate AWS account); examples/aws/lambda-sample.yaml
+
+## Skin: navy-slate dark UI (asked 2026-10-19; skin only): docs/skin-proposal.md
+- [x] Phase 1: inventory (46 hardcoded colours: 23 CSS, 23 TS/TSX; `--ok` used but never defined; faint text and the primary button fail AA today), screenshots of Home, Logs, Alerts and a dashboard, token proposal with contrast checks, Logs prototype (0 elements moved)
+- [ ] Approval of the tokens
+- [ ] Phase 2: tokens in one file; shared components then pages, one commit each; charts; light mode; lint rule banning colours outside the token file
