@@ -49,8 +49,9 @@ Rules:
   SomethingToSend:
     RuleCondition: !Equals [!Ref AllLogGroups, "false"]
     Assertions:
-      - Assert: !Not [!Equals [!Join ["", !Ref LogGroups], ""]]
-        AssertDescription: List the log groups to send in LogGroups, or set AllLogGroups=true
+      # Rules allow only a few functions (no Fn::Join): an empty LogGroups is the list [""].
+      - Assert: !Not [!Contains [!Ref LogGroups, ""]]
+        AssertDescription: List the log groups to send in LogGroups (no empty names), or set AllLogGroups=true
 
 Resources:
   # What Leasyd could not take after 5 minutes of retries, gzipped, kept for 7 days.
