@@ -354,6 +354,11 @@ _GEN_AI_COLUMNS = """
             TRY_CAST(attributes['gen_ai.usage.cost'] AS DOUBLE) AS gen_ai_cost"""
 GEN_AI_COLUMNS = ("session_id", "gen_ai_operation", "gen_ai_model", "gen_ai_agent", "gen_ai_tool",
                   "gen_ai_input_tokens", "gen_ai_output_tokens", "gen_ai_cost")
+# Readers union this in (UNION ALL BY NAME) so a query over only older files still binds the
+# columns, as NULL; it has no rows, so it reads nothing.
+_GEN_AI_TYPES = {"gen_ai_input_tokens": "BIGINT", "gen_ai_output_tokens": "BIGINT", "gen_ai_cost": "DOUBLE"}
+COLUMNS_SINCE = {"traces": "SELECT " + ", ".join(f"NULL::{_GEN_AI_TYPES.get(c, 'VARCHAR')} AS {c}" for c in GEN_AI_COLUMNS)
+                           + " WHERE false"}
 
 
 def _traces_sql(fallback_ns, spill_safe=True):

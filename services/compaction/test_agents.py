@@ -111,3 +111,19 @@ def test_agent_alert_templates_fire_on_the_demo_failures(eng):
     assert set(seen["Agent tool errors"]) <= {"initiateReturn", "checkInventory"} and sum(seen["Agent tool errors"].values()) >= 1
     assert sum(seen["LLM call errors"].values()) >= 1 and set(seen["LLM call errors"]) <= {"gpt-4o-mini", "claude-sonnet-4"}
     assert seen["Slow LLM calls"] and all(0.3 < v < 10 for v in seen["Slow LLM calls"].values())   # seconds, per model
+
+
+def test_files_from_before_the_agent_columns_read_as_null(eng, monkeypatch):
+    """A window holding only data filed before the agent columns existed: the Agents page's queries
+    find no sessions rather than failing to bind gen_ai_operation."""
+    import compact
+    old = T0 + timedelta(days=3)
+    with monkeypatch.context() as m:
+        m.setattr(compact, "_GEN_AI_COLUMNS", "NULL::VARCHAR AS session_id")   # (today's bloom step needs it)
+        eng.load("traces", [spans("sess-old", "e" * 32, 3 * 86400)], old)
+    window = {"start": f"{old:%Y-%m-%dT%H}:00:00Z", "end": f"{old:%Y-%m-%dT%H}:59:00Z"}
+    out = eng.query_json({**window, "signal": "traces", "where": [{"field": "gen_ai_operation", "op": "exists"}],
+                          "group_by": ["trace_id", "session_id"], "aggs": [{"fn": "sum", "field": "gen_ai_input_tokens"}]})
+    assert out["rows"] == []
+    assert eng.records("SELECT count(*) AS n, sum(gen_ai_input_tokens) AS s FROM spans",
+                       window["start"], window["end"]) == [{"n": 4, "s": None}]

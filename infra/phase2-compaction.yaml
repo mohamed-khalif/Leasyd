@@ -40,6 +40,16 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Lets the Phase 2 test make the worker crash between steps. Set false once tested.
+  CreateGlueDatabase:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      false where the Glue database "obs" already exists outside this stack (accounts set up before
+      29 Sep 2026, where obs-phase1 made it). infra/deploy-phase2.sh works this out.
+
+Conditions:
+  OwnsGlueDatabase: !Equals [!Ref CreateGlueDatabase, "true"]
 
 Resources:
   # The obs-index and obs-usage tables live in obs-state (infra/state.yaml).
@@ -428,6 +438,9 @@ Resources:
 
   GlueDatabase:
     Type: AWS::Glue::Database
+    Condition: OwnsGlueDatabase
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
@@ -438,7 +451,7 @@ Resources:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref GlueDatabase
+      DatabaseName: !If [OwnsGlueDatabase, !Ref GlueDatabase, obs]
       TableInput:
         Name: logs
         TableType: EXTERNAL_TABLE
@@ -485,7 +498,7 @@ Resources:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref GlueDatabase
+      DatabaseName: !If [OwnsGlueDatabase, !Ref GlueDatabase, obs]
       TableInput:
         Name: traces
         TableType: EXTERNAL_TABLE
@@ -538,7 +551,7 @@ Resources:
     Type: AWS::Glue::Table
     Properties:
       CatalogId: !Ref AWS::AccountId
-      DatabaseName: !Ref GlueDatabase
+      DatabaseName: !If [OwnsGlueDatabase, !Ref GlueDatabase, obs]
       TableInput:
         Name: metrics
         TableType: EXTERNAL_TABLE
@@ -598,6 +611,8 @@ Resources:
             - { Name: resource_attributes, Type: "map<string,string>" }
 
 Outputs:
+  GlueDatabaseOwned:
+    Value: !Ref CreateGlueDatabase
   WorkerFunction:
     Value: !Ref WorkerFunction
   DispatcherFunction:

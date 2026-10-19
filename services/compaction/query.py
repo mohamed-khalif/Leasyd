@@ -630,6 +630,8 @@ def run_sql_worker(event):
                     compact.load_rows(con, [empty], "2000-01-01", "00", signal)
                     con.execute(f"CREATE TEMP TABLE empty_{table} AS SELECT * FROM rows")
                     parts.append(f"SELECT * FROM empty_{table}")
+                if signal in compact.COLUMNS_SINCE:
+                    parts.append(compact.COLUMNS_SINCE[signal])
                 con.execute(f"CREATE TEMP VIEW {table} AS SELECT * FROM ({' UNION ALL BY NAME '.join(parts)}) "
                             f"WHERE ts >= '{_naive(event['start'])}'::TIMESTAMP AND ts < '{_naive(event['end'])}'::TIMESTAMP")
             con.execute("DROP TABLE IF EXISTS rows")
@@ -726,6 +728,8 @@ def run_worker(event):
                 parts.append(f"SELECT * FROM raw{i}")
             if not parts:
                 return {"kind": kind, "rows": [], "columns": [], "stats": {"files": 0}}
+            if signal in compact.COLUMNS_SINCE:
+                parts.append(compact.COLUMNS_SINCE[signal])
             con.execute("CREATE TEMP VIEW t AS " + " UNION ALL BY NAME ".join(parts))
             cur = con.execute(sql, params)
             cols = [d[0] for d in cur.description]
