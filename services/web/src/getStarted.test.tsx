@@ -38,7 +38,7 @@ test("sources are grouped, every source is offered, and the steps tick off as th
   assert.match(c.querySelector(".start-hero")?.textContent ?? "", /any cloud, server or app/);
   assert.deepEqual([...c.querySelectorAll(".start-group h4")].map((h) => h.firstChild?.textContent?.trim()),
     ["Your apps", "Infrastructure", "Websites", "Cloud integrations"]);
-  assert.equal(c.querySelectorAll("[role=tab]").length, 12);
+  assert.equal(c.querySelectorAll("[role=tab]").length, 13);
   // The mock account has data and searchable services: steps 2 and 3 are done; no key yet, so step 1 isn't.
   const done = [...c.querySelectorAll(".start-stepcard")].map((s) => s.classList.contains("done"));
   assert.deepEqual(done, [false, true, true]);

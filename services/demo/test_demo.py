@@ -104,7 +104,10 @@ def test_every_signal_is_accepted_by_ingest_and_compacts(tmp_path):
     assert kinds == [("app.orders.placed", "sum"), ("app.payments.declined", "sum"),
                      ("db.client.connections.usage", "sum"), ("http.server.request.duration", "histogram"),
                      ("kafka.consumer.lag", "gauge"), ("process.cpu.utilization", "gauge"),
-                     ("process.memory.usage", "sum")]
+                     ("process.memory.usage", "sum"),
+                     # the eBPF agent's (ebpf.py)
+                     ("traces_service_graph_request_client", "histogram"), ("traces_service_graph_request_failed_total", "sum"),
+                     ("traces_service_graph_request_server", "histogram"), ("traces_service_graph_request_total", "sum")]
 
 
 def test_the_cluster_rides_along_and_compacts(tmp_path):
@@ -170,3 +173,22 @@ def test_the_support_assistant_sends_agent_sessions_with_their_failures(tmp_path
     got = duckdb.sql(f"SELECT count(DISTINCT session_id), sum(gen_ai_input_tokens) > 0, count(gen_ai_tool) > 0 "
                      f"FROM '{tmp_path}/t/**/*.parquet' WHERE service = 'support-assistant'").fetchone()
     assert got[0] >= 1 and got[1] and got[2]
+
+
+def test_ebpf_counters_only_grow_within_a_series():
+    """ebpf.py: cumulative counters and histogram counts / sums never fall between a series' resets
+    (a fall reads as a restarted process: the whole value would count again)."""
+    import ebpf
+    seen = {}
+    for m in range(29_280_000, 29_280_000 + 400):
+        for r in ebpf.resource_metrics(m):
+            svc = r["resource"]["attributes"][0]["value"]["stringValue"]
+            for mm in r["scopeMetrics"][0]["metrics"]:
+                pts = (mm.get("histogram") or mm.get("sum"))["dataPoints"]
+                for p in pts:
+                    k = (svc, mm["name"], json.dumps(p["attributes"], sort_keys=True))
+                    v = (p["startTimeUnixNano"], float(p.get("count", p.get("asInt", 0))), float(p.get("sum", 0)))
+                    if k in seen and seen[k][0] == v[0]:
+                        assert v[1] >= seen[k][1] and v[2] >= seen[k][2] - 1e-9, (k[:2], seen[k], v)
+                    seen[k] = v
+    assert len(seen) >= 15         # every connection and route series was checked

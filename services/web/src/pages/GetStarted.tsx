@@ -13,7 +13,7 @@ import { useAccount } from "../useAccount";
 import { getConfig } from "../config";
 import { IconAgent, IconCheck, IconGlobe, IconGpu, IconK8s, IconKey, IconLambda, IconLogs, IconServer } from "../icons";
 
-type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "agents" | "lambda" | "aws-logs" | "web";
+type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "agents" | "lambda" | "aws-logs" | "ecs" | "web";
 type Signal = "Traces" | "Logs" | "Metrics" | "Events";
 type Group = "apps" | "infra" | "web" | "cloud";
 interface SourceInfo { id: Source; name: string; desc: string; group: Group; icon: ReactNode; signals: Signal[] }
@@ -27,12 +27,13 @@ const SOURCES: SourceInfo[] = [
   { id: "ruby", name: "Ruby", desc: "SDK plus runtime metrics", group: "apps", icon: mono("Rb"), signals: ["Traces", "Metrics"] },
   { id: "other", name: "Other languages", desc: ".NET, Go, PHP: any OpenTelemetry SDK", group: "apps", icon: mono("</>"), signals: ["Traces", "Logs", "Metrics"] },
   { id: "agents", name: "AI agents (LLM apps)", desc: "Sessions, tokens, cost, silent failures", group: "apps", icon: <IconAgent />, signals: ["Traces"] },
-  { id: "server", name: "Linux server", desc: "Host metrics and system logs", group: "infra", icon: <IconServer />, signals: ["Logs", "Metrics"] },
-  { id: "kubernetes", name: "Kubernetes", desc: "The whole cluster, one Helm install", group: "infra", icon: <IconK8s />, signals: ["Logs", "Metrics", "Events"] },
+  { id: "server", name: "Linux server", desc: "The server and every app on it, no code", group: "infra", icon: <IconServer />, signals: ["Logs", "Metrics", "Traces"] },
+  { id: "kubernetes", name: "Kubernetes", desc: "The cluster and every app in it, one command", group: "infra", icon: <IconK8s />, signals: ["Logs", "Metrics", "Traces", "Events"] },
   { id: "gpu", name: "NVIDIA GPUs", desc: "Usage, health and cost", group: "infra", icon: <IconGpu />, signals: ["Metrics"] },
   { id: "web", name: "Website (real users)", desc: "Real visitors' speed and errors", group: "web", icon: <IconGlobe />, signals: ["Events"] },
   { id: "lambda", name: "AWS Lambda", desc: "Metrics for every function", group: "cloud", icon: <IconLambda />, signals: ["Metrics", "Traces"] },
   { id: "aws-logs", name: "AWS logs (CloudWatch)", desc: "Logs already in CloudWatch", group: "cloud", icon: <IconLogs />, signals: ["Logs"] },
+  { id: "ecs", name: "Amazon ECS on EC2", desc: "Every container, no code changes", group: "cloud", icon: <IconServer />, signals: ["Metrics", "Traces"] },
 ];
 const GROUPS: [Group, string, string][] = [
   ["apps", "Your apps", "Any language, through OpenTelemetry"],
@@ -239,9 +240,11 @@ function guide(source: Source, endpoint: string, key: string, site: string): Rea
 sudo LEASYD_API_KEY=${key} LEASYD_ENDPOINT=${endpoint} bash leasyd-collector.sh`}</Code>
           <p className="muted">
             It sends the server's CPU, memory, disk, network and system logs every 30 seconds (see <b>Dashboards › Leasyd - Hosts</b>),
-            and takes your apps' OpenTelemetry data on <code className="mono">localhost:4318</code> (HTTP) and <code className="mono">:4317</code> (gRPC),
-            so apps on this server need no key: set <code className="mono">OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318</code>.
-            Add <code className="mono">--sample-app</code> to also install a small demo shop that sends traces.
+            and, with eBPF, <b>every app on the server</b> (any language, Docker containers too): requests, errors, latency, what it calls and traces,
+            on the <b>Service Map</b>, with no change to the apps. Traces kept: every error, every request slower than 1 s, and 10% of the rest
+            (<code className="mono">--ebpf-traces 25</code> for a quarter, <code className="mono">off</code> for none; <code className="mono">--no-ebpf</code> to skip it).
+            It also takes your apps' own OpenTelemetry on <code className="mono">localhost:4318</code> (HTTP) and <code className="mono">:4317</code> (gRPC),
+            for code-level detail: set <code className="mono">OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318</code>, no key needed.
           </p>
         </>
       );
@@ -254,7 +257,10 @@ LEASYD_API_KEY=${key} LEASYD_ENDPOINT=${endpoint} bash leasyd-k8s.sh --cluster m
           <p className="muted">
             It installs the official OpenTelemetry Collector Helm chart twice in namespace <code className="mono">leasyd</code>: one collector per node
             (node, pod and container usage, pod logs, GPU metrics, and your apps' OpenTelemetry on each node's ports 4317 / 4318) and one for the
-            cluster (pod phases, restarts, crash loops, workloads, events). The key stays in a Kubernetes Secret. See <b>Kubernetes</b> within a minute or two.
+            cluster (pod phases, restarts, crash loops, workloads, events), and an eBPF agent per node: <b>every app in the cluster</b>, any language,
+            on the <b>Service Map</b> with its requests, errors, latency, what it calls (other services, databases, outside APIs) and traces, with no
+            change to the apps (<code className="mono">--no-ebpf</code> to skip it; <code className="mono">--ebpf-traces 25</code> keeps a quarter of the
+            ordinary traces instead of 10%, besides every error and every slow one). The key stays in a Kubernetes Secret. See <b>Kubernetes</b> within a minute or two.
             Apps in the cluster send to their node: <code className="mono">OTEL_EXPORTER_OTLP_ENDPOINT=http://$(NODE_IP):4318</code> with
             NODE_IP from the downward API (<code className="mono">status.hostIP</code>). Remove it all: <code className="mono">bash leasyd-k8s.sh --uninstall</code>.
           </p>
@@ -374,6 +380,22 @@ aws cloudformation deploy --stack-name leasyd-cloudwatch-logs \\
             New log events appear under <b>Logs</b> about a minute after they're written, each under its service: a Lambda function, an ECS container,
             an RDS database, or the log group's name. <code className="mono">AllLogGroups=true</code> sends every log group in the region instead;
             {" "}<code className="mono">FilterPattern=&quot;?ERROR ?WARN&quot;</code> sends only those lines. AWS bills Firehose (about $0.029 per GB). Delete the stack to stop.
+          </p>
+        </>
+      );
+    case "ecs":
+      return (
+        <>
+          <p>For an <b>ECS cluster on EC2</b> instances: one daemon service watches every container on each instance, with no change to your
+            task definitions or images. Once per cluster, with AWS credentials:</p>
+          <Code>{`curl -fsSL -o leasyd-ecs.yaml ${site}/install/ecs-ebpf.yaml
+aws cloudformation deploy --stack-name leasyd-ecs --template-file leasyd-ecs.yaml --capabilities CAPABILITY_IAM \\
+  --parameter-overrides ClusterName=my-cluster LeasydApiKey=${key} LeasydEndpoint=${endpoint}`}</Code>
+          <p className="muted">
+            Every service shows up on the <b>Service Map</b> within a few minutes, named after its ECS service: requests, errors, latency, the
+            databases and APIs it calls, and traces (every error, every request slower than 1 s, 10% of the rest: <code className="mono">TracesPercent</code>).
+            Apps may also send their own OpenTelemetry to the instance, <code className="mono">http://&lt;instance IP&gt;:4318</code>, for code-level detail.
+            On <b>Fargate</b> there is no instance to watch from: use your language's OpenTelemetry agent (Your apps, above). Delete the stack to stop.
           </p>
         </>
       );

@@ -1,8 +1,9 @@
-"""The web app's local preview of Kubernetes, GPU and AI agent data: Leasyd's real query engine
-(in-process, services/compaction/localengine.py) over the demo cluster (services/demo/cluster.py) and
-the demo support assistant's agent traces (services/demo/agents.py) for the last HOURS hours.
-mock/mockApi.ts sends it the SQL that reads Kubernetes or GPU data (POST /sql) and the JSON queries
-of the Agents page (POST /query).
+"""The web app's local preview of Kubernetes, GPU, AI agent and eBPF data: Leasyd's real query engine
+(in-process, services/compaction/localengine.py) over the demo cluster (services/demo/cluster.py),
+the demo shop's traces with its support assistant's (services/demo/demo.py, agents.py) and what the
+eBPF agent sees (ebpf.py) for the last HOURS hours. mock/mockApi.ts sends it the SQL that reads
+Kubernetes or GPU data (POST /sql) and the JSON queries of the Agents page and the service map's
+eBPF view (POST /query).
 
     python3 mock/engine_server.py [HOURS=6]      # then: npx vite --mode mock
 """
@@ -16,8 +17,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "..", "compaction"), os.path.join(HERE, "..", "..", "demo")]
 
 from localengine import LocalEngine, load_minutes  # noqa: E402
-import agents  # noqa: E402
 import cluster  # noqa: E402
+import demo  # noqa: E402
+import ebpf  # noqa: E402
 
 HOURS = float(sys.argv[1]) if len(sys.argv) > 1 else 6
 eng = LocalEngine()
@@ -27,10 +29,8 @@ t0 = time.time()
 
 def docs(m):
     d = cluster.documents(m)
-    out = {"metrics": {"resourceMetrics": d["metrics"]}, "logs": {"resourceLogs": d["logs"]}}
-    spans = agents.resource_spans(m)
-    if spans:
-        out["traces"] = {"resourceSpans": spans}
+    out = {"metrics": {"resourceMetrics": d["metrics"] + ebpf.resource_metrics(m)}, "logs": {"resourceLogs": d["logs"]}}
+    out["traces"] = demo.documents(m)["traces"]   # the shop's SDK traces and the support assistant's
     return out
 
 

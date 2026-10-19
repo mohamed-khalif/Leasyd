@@ -33,6 +33,7 @@ import boto3
 
 import agents
 import cluster
+import ebpf
 
 ENDPOINT = os.environ.get("INGEST_ENDPOINT", "")
 KEY_PARAM = os.environ.get("KEY_PARAM", "/obs/demo/api-key")
@@ -358,7 +359,8 @@ def web(m):
 def documents(minute):
     """-> {"traces": doc, "logs": doc, "metrics": doc}: one OTLP JSON request per signal. The shop's
     Kubernetes cluster and GPUs (cluster.py) ride along in the logs and metrics, its support
-    assistant's AI agent traces (agents.py) in the traces."""
+    assistant's AI agent traces (agents.py) in the traces, what the eBPF agent sees (ebpf.py) in the
+    metrics."""
     m = Minute(minute)
     mets = metrics(m)
     k8s = cluster.documents(minute)
@@ -368,7 +370,7 @@ def documents(minute):
         "logs": {"resourceLogs": [{"resource": _resource(s, p), "scopeLogs": [{"scope": {"name": s}, "logRecords": v}]}
                                   for (s, p), v in sorted(m.logs.items())] + web(m) + k8s["logs"]},
         "metrics": {"resourceMetrics": [{"resource": _resource(s, p), "scopeMetrics": [{"scope": {"name": s}, "metrics": v}]}
-                                        for (s, p), v in sorted(mets.items())] + k8s["metrics"]},
+                                        for (s, p), v in sorted(mets.items())] + k8s["metrics"] + ebpf.resource_metrics(minute)},
     }
 
 
