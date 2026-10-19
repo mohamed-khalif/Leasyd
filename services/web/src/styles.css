@@ -1,63 +1,6 @@
-/* Leasyd UI. Dark by default: near-black page, dark-grey panels with a
-   lighter header strip, subtle borders, monospace for data. Colour is only
-   used where it carries meaning (severity, one accent per series). */
-
-:root {
-  --bg: #0d0e10;
-  --surface: #17181c;
-  --surface-2: #1d1f24;          /* panel header strip, inputs */
-  --surface-3: #25272d;          /* hover, pressed */
-  --well: #121316;               /* inset area of big-number panels */
-  --border: #2a2c32;
-  --border-strong: #383b42;
-  --text: #e6e7ea;
-  --text-2: #a3a6ae;
-  --text-3: #6f737c;
-  --accent: #6ea8fe;
-  --accent-2: #4c86e0;
-  --focus: #8ab8ff;
-
-  --sev-error: #ef5b5b;
-  --sev-warn: #e8c547;
-  --sev-info: #7aa9d9;
-  --sev-debug: #8b8f98;
-
-  --series-1: #6ea8fe;
-  --series-2: #b49bf3;
-  --series-3: #d7b98a;
-  --series-4: #6fd3c1;
-  --series-5: #f59ab4;
-  --series-6: #9aa6b8;
-
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --radius: 6px;
-  color-scheme: dark;
-}
-
-:root[data-theme="light"] {
-  --bg: #f4f5f7;
-  --surface: #ffffff;
-  --surface-2: #f7f8fa;
-  --surface-3: #eceef2;
-  --well: #f4f5f7;
-  --border: #e1e3e8;
-  --border-strong: #cfd2d9;
-  --text: #16181d;
-  --text-2: #4d525c;
-  --text-3: #858a94;
-  --accent: #2f6fdb;
-  --accent-2: #2458b3;
-  --focus: #2f6fdb;
-  --sev-info: #3c7cc4;
-  --series-1: #2f6fdb;
-  --series-2: #7b5cd6;
-  --series-3: #b08440;
-  --series-4: #1f9e8a;
-  --series-5: #d14f7b;
-  --series-6: #6b7686;
-  color-scheme: light;
-}
+/* Leasyd UI. Navy-slate dark by default (light with data-theme="light"): layered surfaces, quiet
+   borders, monospace for data. Colour is only used where it carries meaning (severity, one accent
+   per series). Every colour, shadow, radius and font stack comes from tokens.css. */
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
@@ -94,7 +37,7 @@ a:hover { text-decoration: underline; }
   color: var(--text-2); text-decoration: none;
 }
 .nav a:hover { background: var(--surface-3); color: var(--text); }
-.nav a.active { background: var(--surface-3); color: var(--text); }
+.nav a.active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
 .nav a svg { opacity: .8; }
 .nav-foot { margin-top: auto; border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .whoami { padding: 2px 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

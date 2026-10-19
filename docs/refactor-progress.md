@@ -154,5 +154,6 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 
 ## Skin: navy-slate dark UI (asked 2026-10-19; skin only): docs/skin-proposal.md
 - [x] Phase 1: inventory (46 hardcoded colours: 23 CSS, 23 TS/TSX; `--ok` used but never defined; faint text and the primary button fail AA today), screenshots of Home, Logs, Alerts and a dashboard, token proposal with contrast checks, Logs prototype (0 elements moved)
-- [ ] Approval of the tokens
+- [x] Tokens approved 2026-10-19
+- [x] S1 tokens.css: the approved dark and light tokens in one file (plus --ok, --on-accent, --scrim, shadows, radii, chart grid, 10 series, logo); selected nav item gets the soft accent. Layout: 0 elements moved on 19 pages (dark) and 5 (light); CSS +0.3 KB gzipped
 - [ ] Phase 2: tokens in one file; shared components then pages, one commit each; charts; light mode; lint rule banning colours outside the token file

@@ -1,0 +1,112 @@
+/* Leasyd design tokens: the only place colours, shadows, radii and font stacks are written as values
+   (the test src/tokens.test.ts fails on a colour literal anywhere else). Navy-slate dark by default,
+   light with :root[data-theme="light"]. Values and their contrast checks: docs/skin-proposal.md.
+   Text tokens meet WCAG AA (4.5:1) on every surface; --on-accent on --accent-2 is 5.5:1. */
+
+:root {
+  /* surfaces, from the page up */
+  --bg: #111726;
+  --surface: #171e2f;            /* panels, sidebar */
+  --surface-2: #1d2538;          /* panel header strip, inputs */
+  --surface-3: #252f46;          /* hover, pressed, selected */
+  --well: #131a29;               /* inset areas */
+  --scrim: rgba(3, 7, 18, .55);  /* behind drawers */
+  --border: #252e43;
+  --border-strong: #354058;
+
+  /* text */
+  --text: #e4e9f2;
+  --text-2: #a3adc2;             /* muted */
+  --text-3: #8e98ae;             /* faint */
+  --on-accent: #ffffff;          /* text on accent, danger and success fills */
+  --on-warn: #1f1400;            /* text on the warning fill */
+
+  /* accent and meaning */
+  --accent: #8b95ff;
+  --accent-2: #5257e5;           /* primary button */
+  --focus: #a5b0ff;
+  --ok: #34d399;
+  --sev-error: #f87171;
+  --sev-warn: #f5b84a;
+  --sev-info: #60a5fa;
+  --sev-debug: #949cad;
+  --readonly: #c9b6ff;           /* the read-only (demo) pill */
+  --readonly-line: #6d4fd1;
+  --highlight-2: #e87a5d;        /* second stop of the AI title gradient */
+
+  /* charts: colour-blind-safe series (Okabe-Ito based), gridlines */
+  --series-1: #7aa8ff;
+  --series-2: #e69f00;
+  --series-3: #2fbf8f;
+  --series-4: #d98cc0;
+  --series-5: #56b4e9;
+  --series-6: #ef8a5b;
+  --series-7: #f0e442;
+  --series-8: #a6aec0;
+  --series-9: #b49bf3;
+  --series-10: #9fd36c;
+  --chart-grid: #222b3f;
+
+  /* brand */
+  --logo-1: #8f90fb;
+  --logo-2: #5354e8;
+
+  /* shape */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+  --shadow-1: 0 1px 2px rgba(3, 7, 18, .35);
+  --shadow-menu: 0 8px 24px rgba(3, 7, 18, .5);
+  --shadow-tip: 0 4px 16px rgba(3, 7, 18, .4);
+  --shadow-drawer: -8px 0 30px rgba(3, 7, 18, .5);
+
+  /* type */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --surface-2: #f7f8fb;
+  --surface-3: #eceff5;
+  --well: #f4f6fa;
+  --scrim: rgba(15, 20, 35, .35);
+  --border: #e2e6ee;
+  --border-strong: #cdd3df;
+  --text: #151a26;
+  --text-2: #4a5468;
+  --text-3: #626b80;
+  --on-warn: #ffffff;
+  --accent: #4f55e0;
+  --accent-2: #4349d1;
+  --focus: #4f55e0;
+  --ok: #0b7a52;
+  --sev-error: #c9302c;
+  --sev-warn: #9a6700;
+  --sev-info: #2563c9;
+  --sev-debug: #6b7385;
+  --readonly: #5b3fc4;
+  --readonly-line: #8d74e0;
+  --highlight-2: #c4521a;
+  --series-1: #2f6fdb;
+  --series-2: #b35900;
+  --series-3: #00806a;
+  --series-4: #a8558a;
+  --series-5: #3d86c6;
+  --series-6: #c4521a;
+  --series-7: #8a7d00;
+  --series-8: #6b7686;
+  --series-9: #7b5cd6;
+  --series-10: #4f8a2a;
+  --chart-grid: #e8ebf1;
+  --shadow-1: 0 1px 2px rgba(15, 20, 35, .08);
+  --shadow-menu: 0 8px 24px rgba(15, 20, 35, .14);
+  --shadow-tip: 0 4px 16px rgba(15, 20, 35, .12);
+  --shadow-drawer: -8px 0 30px rgba(15, 20, 35, .14);
+  color-scheme: light;
+}
