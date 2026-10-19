@@ -17,7 +17,7 @@ import { Loaded, useQuery } from "../useQuery";
 // by hand). Error budget: the share of runs allowed to be bad, (100 - target)%.
 
 const SUCCESS = "synthetics.check.success", DURATION = "synthetics.check.duration";
-const OK = "var(--ok, #3fb68b)", WARN = "var(--sev-warn, #e0a030)", BAD = "var(--sev-error)";
+const OK = "var(--ok)", WARN = "var(--sev-warn)", BAD = "var(--sev-error)";
 const HOUR = 3_600_000, DAY = 86_400_000;
 
 export function Slos({ ctx, path }: { ctx: Ctx; path: string }) {

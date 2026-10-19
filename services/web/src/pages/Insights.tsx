@@ -271,7 +271,7 @@ function Alerting({ ctx, b, ts, checkList }: { ctx: Ctx; b: number; ts: string; 
                                        group_by: [ts, "value"], aggs: [{ fn: "count" }], limit: 10000 });
   const byCheck = usePanel(ctx, "metrics", { services: ["synthetics"], where: [{ field: "metric_name", op: "=", value: SUCCESS }, { field: "value", op: "=", value: 0 },
                                              { field: "attributes.check.excluded", op: "not_exists" }], group_by: ["attributes.check.id"], aggs: [{ fn: "count" }], limit: 100 });
-  const keys: StackKey[] = [{ label: "failed runs", color: "var(--sev-error)" }, { label: "passed runs", color: "var(--ok, #3fb68b)" }];
+  const keys: StackKey[] = [{ label: "failed runs", color: "var(--sev-error)" }, { label: "passed runs", color: "var(--ok)" }];
   const bars = useMemo(() => {
     const at = new Map<number, number[]>();
     for (const r of q.data ? records(q.data) : []) {

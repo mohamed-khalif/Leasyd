@@ -4,7 +4,7 @@ import { useState } from "react";
 import { fmtFixed, fmtNum, fmtRatio } from "../../lib/format";
 import { BrowserStep, CheckResult, Constraint, Step, StepResult } from "../../api";
 
-export const OK = "var(--ok, #3fb68b)";
+export const OK = "var(--ok)";
 export const every = (f: number) => (f === 60 ? "1 hour" : `${f} min`);
 export const isBrowser = (c: { type?: string }) => c.type === "browser";
 

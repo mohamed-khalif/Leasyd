@@ -24,7 +24,7 @@ function RuleNow({ rule: r }: { rule: AlertRule }) {
 }
 
 const HISTORY_STATE: Record<string, { label: string; color: string }> = {
-  firing: { label: "firing", color: "var(--sev-error)" }, resolved: { label: "resolved", color: "var(--ok, #3fb68b)" },
+  firing: { label: "firing", color: "var(--sev-error)" }, resolved: { label: "resolved", color: "var(--ok)" },
   no_data: { label: "no data", color: "var(--text-2)" }, eval_failed: { label: "can't evaluate", color: "var(--sev-warn)" },
 };
 
@@ -93,7 +93,7 @@ function Rules({ ctx }: { ctx: Ctx }) {
         <RankTable head={["", "rule", "when", "send to", "now"]} maxHeight={640} onRow={(i) => ctx.go(`/alerts/rules/${s.rules[i].id}`)}
                    rows={s.rules.map((r) => [
                      <span className="dot" style={{ background: !r.enabled ? "var(--text-3)" : r.firing?.length ? "var(--sev-error)"
-                       : r.eval_failing ? "var(--sev-warn)" : "var(--ok, #3fb68b)" }} />,
+                       : r.eval_failing ? "var(--sev-warn)" : "var(--ok)" }} />,
                      <span className="link">{r.name} ›</span>, describeRule(r, s), r.channels.map((c) => names.get(c) ?? "(deleted)").join(", "),
                      !r.enabled ? "off" : <RuleNow rule={r} />])} />
       )}
