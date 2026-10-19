@@ -548,12 +548,13 @@ tr:hover .link { text-decoration: underline; }
 .svc-dot { fill: var(--series-2); }
 .svc-dot.err { fill: var(--sev-error); }
 .svc-node { cursor: pointer; }
-.svc-node rect { fill: var(--surface-3); stroke: var(--border-strong); stroke-width: 1; }
-.svc-node.warning rect { fill: color-mix(in srgb, var(--sev-error) 45%, var(--surface-3)); stroke: color-mix(in srgb, var(--sev-error) 60%, var(--border)); }
-.svc-node.critical rect { fill: var(--sev-error); stroke: var(--sev-error); }
-.svc-node.sel rect { stroke: var(--accent); stroke-width: 2.5; }
+.svc-node :is(rect, path) { fill: var(--surface-3); stroke: var(--border-strong); stroke-width: 1; }
+.svc-node.outside rect { fill: none; stroke-dasharray: 4 3; }
+.svc-node.warning :is(rect, path) { fill: color-mix(in srgb, var(--sev-error) 45%, var(--surface-3)); stroke: color-mix(in srgb, var(--sev-error) 60%, var(--border)); }
+.svc-node.critical :is(rect, path) { fill: var(--sev-error); stroke: var(--sev-error); }
+.svc-node.sel :is(rect, path) { stroke: var(--accent); stroke-width: 2.5; }
 .svc-node:focus { outline: none; }
-.svc-node:focus-visible rect { stroke: var(--focus); stroke-width: 2.5; }
+.svc-node:focus-visible :is(rect, path) { stroke: var(--focus); stroke-width: 2.5; }
 .svc-rate { font: 600 11.5px var(--font-sans); fill: var(--text); pointer-events: none; }
 .svc-node.critical .svc-rate { fill: var(--on-danger); }
 .svc-name { font: 12px var(--font-sans); fill: var(--text-2); pointer-events: none; }

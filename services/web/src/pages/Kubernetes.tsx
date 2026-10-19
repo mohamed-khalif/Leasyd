@@ -26,7 +26,7 @@ export function Kubernetes({ ctx, params }: { ctx: Ctx; params: URLSearchParams 
   const hint = useHint(w, key);
   const [tab, setTab] = useState<Tab>((params.get("tab") as Tab) || "overview");
   const [cluster, setCluster] = useState("");
-  const [namespace, setNamespace] = useState("");
+  const [namespace, setNamespace] = useState(params.get("namespace") ?? "");
   const [pod, setPod] = useState<string | null>(params.get("pod"));
   const f: Q.Filter = { cluster: cluster || null, namespace: namespace || null };
   const k = key + cluster + "|" + namespace;

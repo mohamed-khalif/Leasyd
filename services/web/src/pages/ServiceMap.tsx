@@ -2,7 +2,8 @@
 // from spans (a child span in another service than its parent is a call), over the page's time
 // range. Node colour by error rate, label by requests a minute; dots travel along each edge.
 // Clicking a service opens its panel: what it runs on, requests / errors / duration over time,
-// and its operations.
+// and its operations. Services the eBPF agent sees (no code: docs/ebpf-design.md) come from its
+// service-graph metrics, one aggregate query (lib/serviceGraph.ts), merged with the trace view.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtMs, fmtNum, fmtPercent } from "../lib/format";
 import { sqlString as q } from "../lib/sql";
@@ -10,11 +11,12 @@ import { records } from "../api";
 import type { Ctx } from "../App";
 import { Tabs } from "../components/Charts";
 import { Loads } from "../components/Panel";
-import { type Loaded, useSql } from "../useQuery";
+import { type Loaded, useQuery, useSql } from "../useQuery";
+import { ebpfGraph, graphQuery, mergeGraphs, operations, operationsQuery, OUTSIDE, serviceSeries, serviceSeriesQuery, WHERE_FIELDS, whereQuery } from "../lib/serviceGraph";
 import { bucketSeconds } from "../time";
 import { useRangeWindow } from "../useNow";
 
-type Node = { service: string; requests: number; errors: number; avg_ms: number; attrs: Record<string, string>; x: number; y: number };
+type Node = { service: string; requests: number; errors: number; avg_ms: number; attrs: Record<string, string>; kind: string; ebpf: boolean; sdk: boolean; x: number; y: number };
 type Edge = { source: string; target: string; calls: number; errors: number };
 
 // A span that starts work in its service: a server or consumer span, or a root.
@@ -74,20 +76,24 @@ const curve = (x1: number, y1: number, x2: number, y2: number) => {
 export function ServiceMap({ ctx }: { ctx: Ctx }) {
   const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
-  const nq = useSql(NODES_SQL, w, "n" + key), eq = useSql(EDGES_SQL, w, "e" + key);
+  const nq = useSql(NODES_SQL, w, "n" + key), eq = useSql(EDGES_SQL, w, "e" + key), gq = useQuery(graphQuery(w), "g" + key);
   const [sel, setSel] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const minutes = ctx.range.minutes;
 
   const { nodes, edges } = useMemo(() => {
     if (!nq.data || !eq.data) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const edges = records(eq.data).map((r) => ({ source: String(r.source), target: String(r.target), calls: Number(r.calls) || 0, errors: Number(r.errors) || 0 }));
-    const raw = records(nq.data).map((r) => ({
+    const sdkEdges = records(eq.data).map((r) => ({ source: String(r.source), target: String(r.target), calls: Number(r.calls) || 0, errors: Number(r.errors) || 0 }));
+    const sdkNodes = records(nq.data).map((r) => ({
       service: String(r.service), requests: Number(r.requests) || 0, errors: Number(r.errors) || 0, avg_ms: Number(r.avg_ms) || 0,
       attrs: Object.fromEntries(ATTRS.map(([k]) => [k, r[k] == null ? "" : String(r[k])])),
     }));
-    return { nodes: layout(raw, edges), edges };
-  }, [nq.data, eq.data]);
+    // the eBPF view adds what the traces don't show; its query failing leaves the trace view as it was
+    const ebpf = ebpfGraph(gq.data ? records(gq.data) : []);
+    const merged = mergeGraphs({ nodes: sdkNodes, edges: sdkEdges }, ebpf,
+      (service) => ({ service, requests: 0, errors: 0, avg_ms: 0, attrs: Object.fromEntries(ATTRS.map(([k]) => [k, ""])) }));
+    return { nodes: layout(merged.nodes, merged.edges), edges: merged.edges };
+  }, [nq.data, eq.data, gq.data]);
   const selected = nodes.find((n) => n.service === sel) ?? null;
 
   return (
@@ -97,7 +103,7 @@ export function ServiceMap({ ctx }: { ctx: Ctx }) {
           <input className="input grow" placeholder="Search services…" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Search services" />
           <span className="faint">{nodes.length ? `${nodes.length} services · ${edges.length} connections · requests a minute` : ""}</span>
         </div>
-        <Loads q={both(nq, eq)} empty={!nodes.length} height={520}>
+        <Loads q={both(both(nq, eq), { ...gq, error: null })} empty={!nodes.length} height={520}>
           {() => <Graph nodes={nodes} edges={edges} minutes={minutes} selected={sel} filter={filter.trim().toLowerCase()} onPick={setSel} />}
         </Loads>
       </div>
@@ -150,11 +156,12 @@ function Graph(p: { nodes: Node[]; edges: Edge[]; minutes: number; selected: str
           );
         })}
         {p.nodes.map((n) => (
-          <g key={n.service} className={`svc-node ${health(errPct(n))}${p.selected === n.service ? " sel" : ""}${dim(n.service) ? " dim" : ""}`}
+          <g key={n.service} className={`svc-node ${health(errPct(n))} ${n.kind}${p.selected === n.service ? " sel" : ""}${dim(n.service) ? " dim" : ""}`}
              transform={`translate(${n.x},${n.y})`} onClick={(e) => { e.stopPropagation(); p.onPick(p.selected === n.service ? null : n.service); }}
              tabIndex={0} role="button" aria-label={`${n.service}: ${perMin(n.requests, p.minutes)}, ${fmtPercent(errPct(n))} errors`}
              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onPick(n.service); } }}>
-            <rect x={-30} y={-30} width={60} height={60} rx={10} />
+            {n.kind === "database" ? <path d="M-30,-22 A30,8 0 0 1 30,-22 V22 A30,8 0 0 1 -30,22 Z M-30,-22 A30,8 0 0 0 30,-22" />
+              : <rect x={-30} y={-30} width={60} height={60} rx={n.kind === "service" ? 10 : 30} />}
             <text className="svc-rate" y={4} textAnchor="middle">{perMin(n.requests, p.minutes)}</text>
             <text className="svc-name" y={50} textAnchor="middle">{n.service.length > 22 ? n.service.slice(0, 21) + "…" : n.service}</text>
           </g>
@@ -192,14 +199,25 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
   const w = useRangeWindow(ctx);
   const b = bucketSeconds(ctx.range);
   const key = node.service + ctx.range.key + ctx.tick;
-  const series = useSql(`SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t, count(*) AS n,
+  // A service the eBPF agent sees: its exact counts from the agent's metrics (its spans are sampled);
+  // else from the SDK's spans.
+  const ebpf = node.ebpf && !node.sdk;   // both: the SDK's spans are complete
+  const series = useSql(ebpf ? null : `SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t, count(*) AS n,
       count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms
     FROM spans WHERE service = ${q(node.service)} AND ${ENTRY} GROUP BY 1 ORDER BY 1`, w, "s" + key);
-  const ops = useSql(tab === "operations" ? `SELECT name, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e,
+  const mseries = useQuery(ebpf ? serviceSeriesQuery(w, node.service, b) : null, "m" + key);
+  const ops = useSql(tab === "operations" && !ebpf ? `SELECT name, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e,
       avg(duration_ns) / 1e6 AS avg_ms, quantile_cont(duration_ns, 0.95) / 1e6 AS p95_ms
     FROM spans WHERE service = ${q(node.service)} AND ${ENTRY} GROUP BY 1 ORDER BY 2 DESC LIMIT 50` : null, w, "o" + key + tab);
-  const rows = series.data ? records(series.data) : [];
-  const pct = errPct(node), h = health(pct), a = node.attrs;
+  const mops = useQuery(tab === "operations" && ebpf ? operationsQuery(w, node.service) : null, "mo" + key + tab);
+  const where = useQuery(ebpf && !node.attrs.k8s_namespace && !node.attrs.host ? whereQuery(w, node.service) : null, "w" + key);
+  const rows = ebpf ? serviceSeries(mseries.data ? records(mseries.data) : [], node.service) : series.data ? records(series.data) : [];
+  const opRows = ebpf ? operations(mops.data ? records(mops.data) : [])
+    : ops.data ? records(ops.data).map((r) => ({ name: String(r.name), n: Number(r.n), e: Number(r.e), avg_ms: Number(r.avg_ms), p95_ms: Number(r.p95_ms) })) : [];
+  const found = where.data ? records(where.data)[0] ?? {} : {};
+  const a: Record<string, string> = { ...node.attrs };
+  for (const [k, f] of WHERE_FIELDS) if (!a[k] && found[f] != null) a[k] = String(found[f]);
+  const pct = errPct(node), h = health(pct);
   const calls = edges.filter((e) => e.source === node.service).map((e) => e.target);
   const callers = edges.filter((e) => e.target === node.service).map((e) => e.source);
   const sections: [string, [string, string][]][] = [
@@ -209,6 +227,8 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
     ["Cloud", [["Provider", a.cloud], ["Account", a.account], ["Region", a.region], ["Zone", a.zone]]],
     ["Host", [["Name", a.host]]],
     ["Calls", [["Called by", callers.join(", ")], ["Calls", calls.join(", ")]]],
+    ["Seen by", [["", node.kind !== "service" ? "its callers (eBPF)" : node.ebpf && node.sdk ? "eBPF and the OpenTelemetry SDK"
+                       : node.ebpf ? "eBPF: no code changes" : "the OpenTelemetry SDK"]]],
   ];
 
   return (
@@ -240,8 +260,11 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
             ))}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="btn" onClick={() => ctx.go(`/traces?service=${encodeURIComponent(node.service)}`)}>View its traces</button>
-            {RUNTIME_DASHBOARDS[a.language] &&
+            {node.kind === "service" && node.service !== OUTSIDE &&
+              <button className="btn" onClick={() => ctx.go(`/traces?service=${encodeURIComponent(node.service)}`)}>View its traces</button>}
+            {a.k8s_namespace &&
+              <button className="btn" onClick={() => ctx.go(`/kubernetes?tab=workloads&namespace=${encodeURIComponent(a.k8s_namespace)}`)}>Kubernetes workload</button>}
+            {node.sdk && RUNTIME_DASHBOARDS[a.language] &&
               <button className="btn" onClick={() => ctx.go(`/dashboards/${RUNTIME_DASHBOARDS[a.language][0]}?service_name=${encodeURIComponent(node.service)}`)}>
                 {RUNTIME_DASHBOARDS[a.language][1]}</button>}
             {a.host && <button className="btn" onClick={() => ctx.go(`/dashboards/builtin-hosts?host_name=${encodeURIComponent(a.host)}`)}>Host dashboard</button>}
@@ -250,17 +273,17 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
         </div>
       ) : (
         <div className="svc-panel-body">
-          <Loads q={ops} empty={!(ops.data && ops.data.rows.length)} height={160}>
+          <Loads q={ebpf ? mops : ops} empty={!opRows.length} height={160}>
             {() => (
               <table className="dtable">
-                <thead><tr><th>Operation</th><th className="num">Requests</th><th className="num">Errors</th><th className="num">Avg</th><th className="num">p95</th></tr></thead>
-                <tbody>{records(ops.data!).map((r) => (
-                  <tr key={String(r.name)}>
-                    <td className="mono" title={String(r.name)}>{String(r.name)}</td>
-                    <td className="num">{fmtNum(Number(r.n))}</td>
-                    <td className={`num${Number(r.e) ? " bad" : ""}`}>{fmtNum(Number(r.e))}</td>
-                    <td className="num">{fmtMs(Number(r.avg_ms) * 1e6)}</td>
-                    <td className="num">{fmtMs(Number(r.p95_ms) * 1e6)}</td>
+                <thead><tr><th>Operation</th><th className="num">Requests</th><th className="num">Errors</th><th className="num">Avg</th>{!ebpf && <th className="num">p95</th>}</tr></thead>
+                <tbody>{opRows.slice(0, 50).map((r) => (
+                  <tr key={r.name}>
+                    <td className="mono" title={r.name}>{r.name}</td>
+                    <td className="num">{fmtNum(r.n)}</td>
+                    <td className={`num${r.e ? " bad" : ""}`}>{fmtNum(r.e)}</td>
+                    <td className="num">{fmtMs(r.avg_ms * 1e6)}</td>
+                    {!ebpf && <td className="num">{fmtMs(("p95_ms" in r ? Number(r.p95_ms) : 0) * 1e6)}</td>}
                   </tr>
                 ))}</tbody>
               </table>
