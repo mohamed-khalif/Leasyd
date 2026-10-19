@@ -1,8 +1,8 @@
-// Get started: from an empty account to data in Leasyd. 1. an API key (create one, shown once,
-// or paste one you have); 2. what to monitor: copy-paste setup for a server (the Collector), Java,
-// Node.js, Python, Ruby, any other OpenTelemetry SDK, or AWS Lambda, with the key and endpoint filled
-// in; 3. a live check: what Leasyd has received today (the account's meter) and which services are
-// searchable yet (a count by service over the last 15 minutes, until some show up).
+// Get started: from an empty account to data in Leasyd, in three numbered steps that tick off as they're done.
+// 1. an API key (create one, shown once, or paste one you have); 2. what to monitor, grouped (your apps, infrastructure,
+// websites, cloud integrations): copy-paste setup with the key and endpoint filled in; 3. a live check: what Leasyd has
+// received today (the account's meter) and which services are searchable yet (a count by service over the last
+// 15 minutes, until some show up).
 // Install files (collector.sh, the Ruby runtime metrics, the AWS templates) are served by the web app
 // itself under /install/ (infra/deploy-phaseW1.sh copies them from examples/).
 import { ReactNode, useEffect, useMemo, useState } from "react";
@@ -10,22 +10,34 @@ import { fmtNum } from "../lib/format";
 import { account, query, records, rumSnippet } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
-import { Panel } from "../components/Panel";
 import { getConfig } from "../config";
+import { IconCheck, IconGlobe, IconGpu, IconK8s, IconKey, IconLambda, IconLogs, IconServer } from "../icons";
 
 type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "aws-logs" | "web";
-const SOURCES: [Source, string, string][] = [
-  ["server", "Linux server", "Host metrics and system logs, and a local endpoint for your apps"],
-  ["kubernetes", "Kubernetes", "Nodes, workloads, pods, events and pod logs, with one Helm install"],
-  ["gpu", "NVIDIA GPUs", "Usage, memory, errors and cost of every GPU, in Kubernetes or on a server"],
-  ["java", "Java", "OpenTelemetry Java agent: traces, logs, JVM metrics"],
-  ["nodejs", "Node.js", "Auto-instrumentation: traces, runtime metrics"],
-  ["python", "Python", "Auto-instrumentation: traces, logs, runtime metrics"],
-  ["ruby", "Ruby", "OpenTelemetry SDK plus Leasyd's runtime metrics"],
-  ["lambda", "AWS Lambda", "CloudWatch metrics for every function, plus traces"],
-  ["aws-logs", "AWS logs (CloudWatch)", "Lambda, ECS, RDS, API Gateway: logs already in CloudWatch"],
-  ["web", "Website (real users)", "Page loads, Core Web Vitals, JavaScript errors, slow API calls"],
-  ["other", "Other (.NET, Go, PHP…)", "Any OpenTelemetry SDK, over OTLP/HTTP"],
+type Signal = "Traces" | "Logs" | "Metrics" | "Events";
+type Group = "apps" | "infra" | "web" | "cloud";
+interface SourceInfo { id: Source; name: string; desc: string; group: Group; icon: ReactNode; signals: Signal[] }
+
+// Languages get a short monogram rather than a logo.
+const mono = (text: string) => <span className="start-mono">{text}</span>;
+const SOURCES: SourceInfo[] = [
+  { id: "java", name: "Java", desc: "Java agent, no code changes", group: "apps", icon: mono("Jv"), signals: ["Traces", "Logs", "Metrics"] },
+  { id: "nodejs", name: "Node.js", desc: "No code changes needed", group: "apps", icon: mono("JS"), signals: ["Traces", "Metrics"] },
+  { id: "python", name: "Python", desc: "No code changes needed", group: "apps", icon: mono("Py"), signals: ["Traces", "Logs", "Metrics"] },
+  { id: "ruby", name: "Ruby", desc: "SDK plus runtime metrics", group: "apps", icon: mono("Rb"), signals: ["Traces", "Metrics"] },
+  { id: "other", name: "Other languages", desc: ".NET, Go, PHP: any OpenTelemetry SDK", group: "apps", icon: mono("</>"), signals: ["Traces", "Logs", "Metrics"] },
+  { id: "server", name: "Linux server", desc: "Host metrics and system logs", group: "infra", icon: <IconServer />, signals: ["Logs", "Metrics"] },
+  { id: "kubernetes", name: "Kubernetes", desc: "The whole cluster, one Helm install", group: "infra", icon: <IconK8s />, signals: ["Logs", "Metrics", "Events"] },
+  { id: "gpu", name: "NVIDIA GPUs", desc: "Usage, health and cost", group: "infra", icon: <IconGpu />, signals: ["Metrics"] },
+  { id: "web", name: "Website (real users)", desc: "Real visitors' speed and errors", group: "web", icon: <IconGlobe />, signals: ["Events"] },
+  { id: "lambda", name: "AWS Lambda", desc: "Metrics for every function", group: "cloud", icon: <IconLambda />, signals: ["Metrics", "Traces"] },
+  { id: "aws-logs", name: "AWS logs (CloudWatch)", desc: "Logs already in CloudWatch", group: "cloud", icon: <IconLogs />, signals: ["Logs"] },
+];
+const GROUPS: [Group, string, string][] = [
+  ["apps", "Your apps", "Any language, through OpenTelemetry"],
+  ["infra", "Infrastructure", "On any cloud or your own hardware"],
+  ["web", "Websites", "What real visitors experience"],
+  ["cloud", "Cloud integrations", "Data your cloud provider already collects"],
 ];
 const SIGNALS = ["traces", "logs", "metrics"] as const;
 const POLL_MS = 10_000;
@@ -37,7 +49,7 @@ export function GetStarted({ ctx, initial }: { ctx: Ctx; initial?: string | null
   const [key, setKey] = useState("");
   const [created, setCreated] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [source, setSource] = useState<Source>(SOURCES.find(([id]) => id === initial)?.[0] ?? "server");
+  const [source, setSource] = useState<Source>(SOURCES.find((x) => x.id === initial)?.id ?? "server");
   const [baseline, setBaseline] = useState<number | null>(null);
   const [services, setServices] = useState<Record<string, string[]>>({});
 
@@ -75,77 +87,112 @@ export function GetStarted({ ctx, initial }: { ctx: Ctx; initial?: string | null
   const owner = acc?.you.role === "owner";
   const today = acc?.today?.records ?? 0;
   const arrived = baseline != null && today > baseline;
+  const received = arrived || today > 0;
   const allServices = useMemo(() => [...new Set(SIGNALS.flatMap((s) => services[s] ?? []))].sort(), [services]);
+  const chosen = SOURCES.find((x) => x.id === source)!;
+  const done = [key.trim() !== "", received, found];
 
   return (
     <div className="start">
-      <div className="start-head">
-        <h2>Send your first data</h2>
-        <p className="muted">Three steps, about five minutes. Leasyd takes OpenTelemetry data (logs, traces and metrics) and AWS CloudWatch metrics and logs.</p>
-      </div>
+      <header className="start-hero">
+        <div>
+          <h2>Connect your first data source</h2>
+          <p>Logs, traces and metrics from any cloud, server or app. Leasyd speaks OpenTelemetry, the open standard,
+            so it works wherever your code runs and nothing locks you in.</p>
+        </div>
+        <ol className="start-progress" aria-label="Progress">
+          {["API key", "Connect a source", "See your data"].map((label, i) => (
+            <li key={label} className={done[i] ? "done" : ""}>
+              <span className="start-progress-dot" aria-hidden>{done[i] ? <IconCheck /> : i + 1}</span>{label}
+            </li>
+          ))}
+        </ol>
+      </header>
       {error && <div className="form-error" role="alert">{error}</div>}
 
-      <Panel title="1. An API key">
-        <div className="start-step">
-          {created ? (
-            <div className="newkey" style={{ borderRadius: 6 }}>
-              <b>Your new key: copy it now, it won't be shown again.</b>
-              <span className="faint">It starts working within about 2 minutes. It is filled in below.</span>
-              <div className="newkey-row"><code className="mono">{key}</code><CopyButton text={key} /></div>
-            </div>
-          ) : (
-            <>
-              <p className="muted">Your apps send data with a key that can only send, never read.</p>
-              <div className="start-row">
-                {owner
-                  ? <button className="btn primary" onClick={createKey} disabled={busy}>{busy ? "Creating…" : "Create a key"}</button>
-                  : acc && <span className="faint">Only an owner of the account can create keys; ask one, or paste a key you have.</span>}
-                <span className="faint">or paste one you have:</span>
-                <input className="input mono grow" placeholder="obs_…" value={key} onChange={(e) => setKey(e.target.value)}
-                       aria-label="Your API key" autoComplete="off" spellCheck={false} />
-              </div>
-            </>
-          )}
-        </div>
-      </Panel>
-
-      <Panel title="2. What do you want to monitor?">
-        <div className="start-step">
-          <div className="start-sources" role="tablist">
-            {SOURCES.map(([id, name, desc]) => (
-              <button key={id} role="tab" aria-selected={source === id} className={`start-source${source === id ? " on" : ""}`} onClick={() => setSource(id)}>
-                <b>{name}</b><span className="faint">{desc}</span>
-              </button>
-            ))}
+      <Step n={1} done={done[0]} title="Get an API key" hint="Your apps send data with a key that can only send, never read.">
+        {created ? (
+          <div className="start-newkey">
+            <b>Your new key: copy it now, it won't be shown again.</b>
+            <span className="faint">It starts working within about 2 minutes, and it's already filled in below.</span>
+            <div className="newkey-row"><code className="mono">{key}</code><CopyButton text={key} /></div>
           </div>
-          <div className="start-guide">{guide(source, endpoint, k, site)}</div>
-        </div>
-      </Panel>
+        ) : (
+          <div className="start-keyrow">
+            {owner
+              ? <button className="btn primary" onClick={createKey} disabled={busy}><IconKey />{busy ? "Creating…" : "Create a key"}</button>
+              : acc && <span className="faint">Only an owner of the account can create keys; ask one, or paste a key you have.</span>}
+            <span className="faint">or paste one you have</span>
+            <input className="input mono grow" placeholder="obs_…" value={key} onChange={(e) => setKey(e.target.value)}
+                   aria-label="Your API key" autoComplete="off" spellCheck={false} />
+          </div>
+        )}
+      </Step>
 
-      <Panel title="3. Check it works">
-        <div className="start-step">
-          <Check ok={arrived || today > 0} pending="Waiting for your first data…"
-                 done={`Leasyd has received ${fmtNum(today)} records today${arrived ? ` (${fmtNum(today - (baseline ?? 0))} since you opened this page)` : ""}.`} />
-          <Check ok={found} pending="Waiting for it to be searchable (usually within a minute of arriving)…"
-                 done={<>Searchable now, from {allServices.length} service{allServices.length === 1 ? "" : "s"}: {allServices.map((s) => <code key={s} className="mono start-svc">{s}</code>)}</>} />
-          {found && (
+      <Step n={2} done={done[1]} title="Choose what to monitor" hint="Pick one to start; you can add the others any time.">
+        <div className="start-groups">
+          {GROUPS.map(([group, label, sub]) => (
+            <section key={group} className={`start-group grp-${group}`}>
+              <h4>{label} <span className="faint">{sub}</span></h4>
+              <div className="start-sources" role="tablist" aria-label={label}>
+                {SOURCES.filter((x) => x.group === group).map((x) => (
+                  <button key={x.id} role="tab" aria-selected={source === x.id} className={`start-source g-${x.group}${source === x.id ? " on" : ""}`}
+                          onClick={() => setSource(x.id)}>
+                    <span className="start-icon" aria-hidden>{x.icon}</span>
+                    <span className="start-source-text"><b>{x.name}</b><span className="faint">{x.desc}</span></span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+        <div className="start-guide">
+          <div className="start-guide-head">
+            <span className={`start-icon g-${chosen.group}`} aria-hidden>{chosen.icon}</span>
+            <div><b>Set up {chosen.name}</b><div className="start-tags">{chosen.signals.map((s) => <span key={s} className={`start-tag t-${s.toLowerCase()}`}>{s}</span>)}</div></div>
+          </div>
+          {guide(source, endpoint, k, site)}
+        </div>
+      </Step>
+
+      <Step n={3} done={done[2]} title="See your data" hint="This updates by itself: no need to reload." last>
+        <Check ok={received} pending="Waiting for your first data…"
+               done={`Leasyd has received ${fmtNum(today)} records today${arrived ? ` (${fmtNum(today - (baseline ?? 0))} since you opened this page)` : ""}.`} />
+        <Check ok={found} pending="Waiting for it to be searchable (usually within a minute of arriving)…"
+               done={<>Searchable now, from {allServices.length} service{allServices.length === 1 ? "" : "s"}: {allServices.map((s) => <code key={s} className="mono start-svc">{s}</code>)}</>} />
+        {found && (
+          <div className="start-success">
+            <b>You're all set.</b>
             <div className="start-row">
               {services.traces?.length ? <button className="btn primary" onClick={() => ctx.go("/services")}>Open the Service Map</button> : null}
               {services.traces?.length ? <button className="btn" onClick={() => ctx.go("/traces")}>Traces</button> : null}
               {services.logs?.length ? <button className="btn" onClick={() => ctx.go("/logs")}>Logs</button> : null}
               {services.metrics?.length ? <button className="btn" onClick={() => ctx.go("/dashboards")}>Dashboards</button> : null}
             </div>
-          )}
-          {!found && (
-            <p className="faint">
-              Nothing yet after a few minutes? Check the key (a new key takes about 2 minutes; until then data is refused with 403),
-              that the endpoint is <code className="mono">{endpoint}</code>, and your app's or collector's own log for export errors.
-              Write to us at <a href="mailto:support@leasyd.com">support@leasyd.com</a> and we'll help.
-            </p>
-          )}
-        </div>
-      </Panel>
+          </div>
+        )}
+        {!found && (
+          <p className="faint">
+            Nothing yet after a few minutes? Check the key (a new key takes about 2 minutes; until then data is refused with 403),
+            that the endpoint is <code className="mono">{endpoint}</code>, and your app's or collector's own log for export errors.
+            Write to us at <a href="mailto:support@leasyd.com">support@leasyd.com</a> and we'll help.
+          </p>
+        )}
+      </Step>
     </div>
+  );
+}
+
+function Step({ n, done, title, hint, last, children }: { n: number; done: boolean; title: string; hint: string; last?: boolean; children: ReactNode }) {
+  return (
+    <section className={`start-stepcard${done ? " done" : ""}${last ? " last" : ""}`} aria-label={`Step ${n}: ${title}`}>
+      <div className="start-rail" aria-hidden><span className="start-num">{done ? <IconCheck /> : n}</span></div>
+      <div className="start-body">
+        <h3>{title}</h3>
+        <p className="faint start-hint">{hint}</p>
+        <div className="start-step">{children}</div>
+      </div>
+    </section>
   );
 }
 
