@@ -162,4 +162,6 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] S5 radii: 70 literal radii in CSS and 3 in TSX now use --radius-xs/-sm/(base)/-md/-lg/-pill (circles stay 50%). 0 moved on all 19 pages
 - [x] S6 Alerts, SLOs, Synthetics, Home: hardcoded success/warning fallbacks gone (now var(--ok) / var(--sev-warn)); the logo gradient and stroke from tokens. 0 moved on 4 pages (dark) and Home (light)
 - [x] S7 charts: one SERIES palette (tokens, colour-blind-safe first six) for Dashboards, Query Builder and tiles (their hardcoded palettes gone); gridlines --chart-grid; the line chart's tooltip gets the shared tooltip shadow; severity fills (--fill-*) lighter in light mode, still 3:1 on white. 0 moved on 8 pages (dark) and 3 (light)
-- [ ] Phase 2: tokens in one file; shared components then pages, one commit each; charts; light mode; lint rule banning colours outside the token file
+- [x] S8 guard: src/tokens.test.ts fails on any colour literal outside tokens.css (checked: a stray #123456 fails it). Hardcoded colours: 46 -> 0
+- Not done (out of scope or would change layout): the mock has no Service Map data, so that page was only checked empty; Start and Web vary between loads in the mock, so they were also checked by eye
+- [x] Phase 2 done (S1-S8 above); every commit: before/after screenshots with every element's box compared, typecheck, lint, all tests, bundle size (CSS +0.45 KB gzipped, JS unchanged)

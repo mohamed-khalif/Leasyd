@@ -1,6 +1,6 @@
 # Skin: navy-slate dark UI (Better Stack style): Phase 1
 
-Status: **proposal, awaiting approval (2026-10-19).** Skin only: no layout, navigation, routing, data, copy or behaviour changes.
+Status: **approved and applied (2026-10-19)**: tokens in `services/web/src/tokens.css`, progress in `docs/refactor-progress.md` (S1–S8). Skin only: no layout, navigation, routing, data, copy or behaviour changes.
 
 ## 1. Inventory (today)
 
