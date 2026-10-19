@@ -62,7 +62,7 @@ export function StackedBars(p: { bars: Bar[]; keys: StackKey[]; range: Range; bu
              onClick={() => hb && p.onBar?.(hb.t)}>
           {[0, ymax / 2, ymax].map((v) => (
             <g key={v}>
-              <line x1={padL} x2={w - padR} y1={Y(v)} y2={Y(v)} stroke="var(--border)" strokeDasharray={v ? "2 3" : undefined} />
+              <line x1={padL} x2={w - padR} y1={Y(v)} y2={Y(v)} stroke="var(--chart-grid)" strokeDasharray={v ? "2 3" : undefined} />
               <text x={padL - 6} y={Y(v) + 3} textAnchor="end" fill="var(--text-3)" style={axis}>{fmt(v)}</text>
             </g>
           ))}
@@ -164,7 +164,9 @@ export function Heatmap(p: { cells: Cell[]; range: Range; bucketMs: number; heig
 // ------------------------------------------------------------------ tree map
 
 export type Tile = { label: string; value: number; sub?: string };
-const TILE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)"];
+/** The chart series colours (tokens.css: colour-blind-safe first six), for anything that colours series in order. */
+export const SERIES = Array.from({ length: 10 }, (_, i) => `var(--series-${i + 1})`);
+const TILE_COLORS = SERIES.slice(0, 6);
 
 /** Rectangles sized by value (squarified), largest first. */
 export function Treemap(p: { tiles: Tile[]; height?: number; onTile?: (t: Tile) => void; fmt?: (v: number) => string }) {

@@ -70,7 +70,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
              onMouseMove={(e) => setHover(e.nativeEvent.offsetX)} onMouseLeave={() => setHover(null)}>
           {ticksY.map((v) => (
             <g key={v}>
-              <line x1={padL} x2={w - padR} y1={Y(v)} y2={Y(v)} stroke="var(--border)" strokeDasharray={v ? "2 3" : undefined} />
+              <line x1={padL} x2={w - padR} y1={Y(v)} y2={Y(v)} stroke="var(--chart-grid)" strokeDasharray={v ? "2 3" : undefined} />
               <text x={padL - 6} y={Y(v) + 3} textAnchor="end" fill="var(--text-3)" style={{ font: "10px var(--font-mono)" }}>
                 {fmt(v)}
               </text>
@@ -93,7 +93,7 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
           <div style={{
             position: "absolute", top: 4, left: Math.min(hover! + 12, w - 190), pointerEvents: "none",
             background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius)",
-            padding: "6px 9px", font: "11px var(--font-mono)", minWidth: 150, zIndex: 2,
+            padding: "6px 9px", font: "11px var(--font-mono)", minWidth: 150, zIndex: 2, boxShadow: "var(--shadow-tip)",
           }}>
             <div className="faint" style={{ marginBottom: 3 }}>{fmtTime(new Date(hoverT).toISOString(), { ...props.range, minutes: 60 })}</div>
             {props.series.slice(0, 8).map((s) => {

@@ -7,7 +7,7 @@ import type { Ctx } from "../App";
 import { replaceHashParams } from "../hashParams";
 import { useDebounced } from "../useDebounced";
 import { Capped } from "../components/Capped";
-import { Drawer, StackedBars } from "../components/Charts";
+import { Drawer, SERIES, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds } from "../time";
 import { useQuery } from "../useQuery";
@@ -19,8 +19,6 @@ type Builder = { measure: string; filters: Filter[]; groupBy: string[]; metric: 
 export type Q = { id: number; name: string; mode: Mode; promql: string; b: Builder; hidden?: boolean };
 type Settings = { chart: "line" | "area" | "bars"; unit: string; decimals: string; legend: boolean; threshold: string; sort: "name" | "value" };
 
-const PALETTE = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-6)",
-  "#7fb77e", "#e07a5f", "#8d99ae", "#f2cc8f"];
 const EMPTY_B: Builder = { measure: "rate", filters: [], groupBy: ["service_name"], metric: "", agg: "sum" };
 const newQuery = (id: number, mode: Mode = "tracing"): Q => ({ id, name: "", mode, promql: "", b: { ...EMPTY_B, filters: [], groupBy: ["service_name"] } });
 const DEFAULT_SETTINGS: Settings = { chart: "line", unit: "", decimals: "", legend: true, threshold: "", sort: "value" };
@@ -159,7 +157,7 @@ export function QueryBuilder({ ctx, params }: { ctx: Ctx; params: URLSearchParam
         const pts = s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1]));
         if (!pts.length) continue;
         const vals = pts.map((p) => p[1]);
-        series.push({ label: legendName(q, qi, s, queries.length), color: PALETTE[series.length % PALETTE.length], points: pts, q: qi,
+        series.push({ label: legendName(q, qi, s, queries.length), color: SERIES[series.length % SERIES.length], points: pts, q: qi,
                       last: vals[vals.length - 1], avg: vals.reduce((a, v) => a + v, 0) / vals.length, max: vals.reduce((a, v) => Math.max(a, v), -Infinity) });   // no spread: big series overflow it
       }
     });

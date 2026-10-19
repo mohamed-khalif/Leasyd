@@ -47,6 +47,10 @@
   --series-9: #b49bf3;
   --series-10: #9fd36c;
   --chart-grid: #222b3f;
+  --fill-error: var(--sev-error);   /* severity fills in charts and pills */
+  --fill-warn: var(--sev-warn);
+  --fill-info: var(--sev-info);
+  --fill-debug: var(--sev-debug);
 
   /* brand */
   --logo-1: #8f90fb;
@@ -106,6 +110,10 @@
   --series-9: #7b5cd6;
   --series-10: #4f8a2a;
   --chart-grid: #e8ebf1;
+  --fill-error: #d9534f;           /* lighter than the text colours, still 3:1 on white */
+  --fill-warn: #b37d00;
+  --fill-info: #4f86dd;
+  --fill-debug: #868e9e;
   --shadow-1: 0 1px 2px rgba(15, 20, 35, .08);
   --shadow-menu: 0 8px 24px rgba(15, 20, 35, .14);
   --shadow-tip: 0 4px 16px rgba(15, 20, 35, .12);

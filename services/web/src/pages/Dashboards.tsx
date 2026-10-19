@@ -6,13 +6,12 @@ import { Dashboard, dashboards, DashboardSummary, Panel, PanelType, promql, prom
 import type { Ctx } from "../App";
 import { checkNameMap, useCheckList } from "../checkList";
 import { BUILTIN } from "../builtinDashboards";
-import { Drawer, StackedBars } from "../components/Charts";
+import { Drawer, SERIES, StackedBars } from "../components/Charts";
 import { Series, TimeSeries } from "../components/TimeSeries";
 import { bucketSeconds, Range, rangeWindow } from "../time";
 import { useQuery } from "../useQuery";
 import { useRangeWindow } from "../useNow";
 
-const PALETTE = ["#b49bf3", "#6ea8fe", "#d7b98a", "#6fd3c1", "#f59ab4", "#9aa6b8", "#7fb77e", "#e07a5f", "#8d99ae", "#f2cc8f"];
 const ROW_PX = 170;
 const UNITS: [string, string][] = [["", "Number"], ["/s", "Per second"], ["%", "Percent (0-100)"], ["percentunit", "Percent (0-1)"],
   ["ms", "Milliseconds"], ["s", "Seconds"], ["ns", "Nanoseconds"], ["bytes", "Bytes"], ["W", "Watts"], ["°C", "Degrees Celsius"]];
@@ -322,7 +321,7 @@ function usePanelData(panel: Panel, vars: Record<string, string[]>, range: Range
       const s = { ...s0, metric: withCheckName(s0.metric, names ?? null) };
       const pts = s.values.map(([t, v]) => [t * 1000, Number(v)] as [number, number]).filter((p) => isFinite(p[1]));
       if (!pts.length) return;
-      series.push({ label: legend(q.legend, s.metric, qi, nq), color: PALETTE[series.length % PALETTE.length], points: pts, last: pts[pts.length - 1][1] });
+      series.push({ label: legend(q.legend, s.metric, qi, nq), color: SERIES[series.length % SERIES.length], points: pts, last: pts[pts.length - 1][1] });
     }));
     return { series };
   }, [state, waiting, names, nq]);
