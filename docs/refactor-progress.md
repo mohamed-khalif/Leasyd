@@ -145,5 +145,6 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Design proposed: Firehose subscription → POST /v1/aws/cloudwatch-logs, service names from log groups, severity and trace links, setup stack, about 2.5 days
 - [x] Approved 2026-10-18: default scope a chosen list, Lambda START/END lines kept, ECS services named after the container
 - [x] L1 converter and L2 route, handler, authorizer, API Gateway (a170197); L3 setup stack and guide (0ca7c05; also fixed the metrics template's Firehose log permission, cfn-lint E1010); L4 Get started and docs (83926c6)
-- [ ] Deploy: infra/deploy-phaseT2.sh (ingest + route), infra/deploy-phaseW1.sh (web + install file)
-- [ ] L5 verify on AWS: a Firehose-shaped request through ingest.leasyd.com on a qa- tenant, logs read back (scratchpad cwlogs_e2e.py); then the stack itself in an AWS account
+- [x] Deployed 2026-10-19 (T2 and W1); route /v1/aws/cloudwatch-logs and cloudwatch_logs.py live
+- [x] L5 on AWS (2026-10-19, tenant qa-cwlogs1019, deleted after): a wrong key refused (401); a Firehose-shaped request (gzip body, gzipped subscription records, control message, region attribute) through the API answered 200; read back within 2 min: services qa-checkout (Lambda), payments (ECS container), qa-plain-group; ERROR / WARN severity; trace id kept; REPORT line's duration 812.35 ms and cold start queryable. PASS
+- [ ] The setup stack itself in a real AWS account (needs permissions obs-deployer lacks: a CloudShell run)
