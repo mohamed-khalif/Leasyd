@@ -1,6 +1,6 @@
 # AI agents: sessions, transcripts and silent failures
 
-Status: **approved 2026-10-19; building.** Steps 1–2 of the agent-observability gap (step 3, AI scoring, and step 4, prompt replay, come later). Built on what Leasyd already has: OpenTelemetry ingest, columnar Parquet on S3, serverless query workers, PromQL alerts.
+Status: **built 2026-10-19 (A1–A4, `docs/refactor-progress.md`); pending deploy.** Steps 1–2 of the agent-observability gap (step 3, AI scoring, and step 4, prompt replay, come later). Built on what Leasyd already has: OpenTelemetry ingest, columnar Parquet on S3, serverless query workers, PromQL alerts.
 
 ## What a customer gets
 

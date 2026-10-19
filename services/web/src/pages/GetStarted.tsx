@@ -11,9 +11,9 @@ import { account, query, records, rumSnippet } from "../api";
 import type { Ctx } from "../App";
 import { useAccount } from "../useAccount";
 import { getConfig } from "../config";
-import { IconCheck, IconGlobe, IconGpu, IconK8s, IconKey, IconLambda, IconLogs, IconServer } from "../icons";
+import { IconAgent, IconCheck, IconGlobe, IconGpu, IconK8s, IconKey, IconLambda, IconLogs, IconServer } from "../icons";
 
-type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "lambda" | "aws-logs" | "web";
+type Source = "server" | "kubernetes" | "gpu" | "java" | "nodejs" | "python" | "ruby" | "other" | "agents" | "lambda" | "aws-logs" | "web";
 type Signal = "Traces" | "Logs" | "Metrics" | "Events";
 type Group = "apps" | "infra" | "web" | "cloud";
 interface SourceInfo { id: Source; name: string; desc: string; group: Group; icon: ReactNode; signals: Signal[] }
@@ -26,6 +26,7 @@ const SOURCES: SourceInfo[] = [
   { id: "python", name: "Python", desc: "No code changes needed", group: "apps", icon: mono("Py"), signals: ["Traces", "Logs", "Metrics"] },
   { id: "ruby", name: "Ruby", desc: "SDK plus runtime metrics", group: "apps", icon: mono("Rb"), signals: ["Traces", "Metrics"] },
   { id: "other", name: "Other languages", desc: ".NET, Go, PHP: any OpenTelemetry SDK", group: "apps", icon: mono("</>"), signals: ["Traces", "Logs", "Metrics"] },
+  { id: "agents", name: "AI agents (LLM apps)", desc: "Sessions, tokens, cost, silent failures", group: "apps", icon: <IconAgent />, signals: ["Traces"] },
   { id: "server", name: "Linux server", desc: "Host metrics and system logs", group: "infra", icon: <IconServer />, signals: ["Logs", "Metrics"] },
   { id: "kubernetes", name: "Kubernetes", desc: "The whole cluster, one Helm install", group: "infra", icon: <IconK8s />, signals: ["Logs", "Metrics", "Events"] },
   { id: "gpu", name: "NVIDIA GPUs", desc: "Usage, health and cost", group: "infra", icon: <IconGpu />, signals: ["Metrics"] },
@@ -373,6 +374,22 @@ aws cloudformation deploy --stack-name leasyd-cloudwatch-logs \\
             New log events appear under <b>Logs</b> about a minute after they're written, each under its service: a Lambda function, an ECS container,
             an RDS database, or the log group's name. <code className="mono">AllLogGroups=true</code> sends every log group in the region instead;
             {" "}<code className="mono">FilterPattern=&quot;?ERROR ?WARN&quot;</code> sends only those lines. AWS bills Firehose (about $0.029 per GB). Delete the stack to stop.
+          </p>
+        </>
+      );
+    case "agents":
+      return (
+        <>
+          <p>Leasyd reads OpenTelemetry's GenAI spans (<code className="mono">gen_ai.*</code>). For a Python agent on OpenAI's SDK:</p>
+          <Code>{`pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-openai-v2
+${otlpEnv(endpoint, key, "my-agent")}
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true   # the conversation, for transcripts
+opentelemetry-instrument python my_agent.py`}</Code>
+          <p className="muted">
+            Other SDKs send the same spans: OpenLIT (<code className="mono">openlit.init()</code>), OpenLLMetry / Traceloop, the Vercel AI SDK
+            (<code className="mono">experimental_telemetry</code>), Pydantic AI, and the OpenTelemetry instrumentations for Anthropic, Bedrock and Vertex.
+            Put the conversation's ID on the agent's span as <code className="mono">gen_ai.conversation.id</code> (or <code className="mono">session.id</code>)
+            to see a conversation's turns together. Then open <b>AI agents</b>: sessions, transcripts, tokens, cost and the issues found in them.
           </p>
         </>
       );

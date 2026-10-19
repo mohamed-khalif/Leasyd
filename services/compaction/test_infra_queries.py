@@ -231,7 +231,8 @@ def test_alert_templates_find_the_demo_trouble(eng):
         level = t.get("degraded", t["critical"])
         return [v for v in vals if (v > level if t["op"] == ">" else v < level)]
     at = lambda h, m: datetime.fromtimestamp((DAY0 + h * 60 + m) * 60, timezone.utc)   # noqa: E731
-    templates = {t["name"]: t for t in queries()["alertTemplates"]}
+    infra = [t for t in queries()["alertTemplates"] if t["group"] in ("Kubernetes", "GPUs")]   # AI agents: test_agents.py
+    templates = {t["name"]: t for t in infra}
     expect = {"Pod crash-looping": at(12, 11),   # 3 restarts seen (the data starts at 12:00): degraded "Pod stuck pending": at(14, 0), "GPU XID error": at(13, 7),
               "GPU double-bit ECC errors": at(13, 8), "GPU thermal throttling": at(13, 30), "GPU held but idle": at(14, 0)}
     for name, when in expect.items():
@@ -240,6 +241,6 @@ def test_alert_templates_find_the_demo_trouble(eng):
              "GPU XID error": at(14, 20), "Pod crash-looping": at(14, 20)}
     for name, when in quiet.items():
         assert not firing(templates[name], when), f"{name} should be quiet at {when}"
-    assert set(templates) == {t["name"] for t in queries()["alertTemplates"]} and len(templates) == 11
+    assert set(templates) == {t["name"] for t in infra} and len(templates) == 11
     for t in templates.values():   # the rest at least evaluate
         firing(t, at(14, 0))

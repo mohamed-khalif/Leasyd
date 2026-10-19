@@ -173,6 +173,15 @@ LEASYD_API_KEY=YOUR_KEY bash leasyd-k8s.sh --cluster prod [--gpu] [--no-logs]</c
         <li><strong>Limits</strong>: only new events are sent; a log group takes at most 2 subscription filters; a region has one account-wide subscription policy. AWS bills Firehose (about $0.029 per GB); CloudWatch's own ingestion price doesn't change.</li>
       </ul>
 
+      <h3 id="agents">AI agents</h3>
+      <p>Leasyd reads OpenTelemetry's GenAI spans (<code>gen_ai.*</code>), which the OpenTelemetry instrumentations for OpenAI, Anthropic, Bedrock and Vertex, OpenLIT, OpenLLMetry, the Vercel AI SDK and Pydantic AI send. Setup: <strong>Get started › AI agents</strong>. Group a conversation's runs with <code>gen_ai.conversation.id</code> (or <code>session.id</code>, <code>langfuse.session.id</code>) on the agent's span, and turn on message capture (e.g. <code>OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true</code>) to see transcripts.</p>
+      <ul>
+        <li><strong>AI agents</strong> lists every session in the time range: turns, LLM and tool calls, tokens, cost and problems. A session opens as its conversation: user, assistant, tool calls with their arguments and results, and errors, with links to each trace.</li>
+        <li><strong>Cost</strong> is the SDK's when it reports one (<code>gen_ai.usage.cost</code>); otherwise it is estimated from the model's list price and marked as estimated.</li>
+        <li><strong>Issues</strong> are found in every agent trace with no setup and no AI: a tool that failed while the agent answered anyway, failed LLM calls, empty replies, and loops (the same tool 5+ times in one run). Alert templates: <em>Agent tool errors</em>, <em>LLM call errors</em>, <em>Slow LLM calls</em>.</li>
+        <li>In SQL and the query API, agent spans have the columns <code>session_id</code>, <code>gen_ai_operation</code>, <code>gen_ai_model</code>, <code>gen_ai_agent</code>, <code>gen_ai_tool</code>, <code>gen_ai_input_tokens</code>, <code>gen_ai_output_tokens</code> and <code>gen_ai_cost</code>.</li>
+      </ul>
+
       <h3 id="limits">Limits and answers</h3>
       <table>
         <tr><th>Answer</th><th>Meaning</th><th>What your exporter does</th></tr>

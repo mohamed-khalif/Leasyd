@@ -1,13 +1,16 @@
 """AI agent spans end to end (docs/agents-design.md): ingested as the fast lane files them, then the
 queries the Agents page makes: aggregates over the agent columns, and one session's spans by
 session_id, which the per-file blooms narrow to the files that can hold it."""
-from datetime import datetime, timezone
+import os
+import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 T0 = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
 NS = int(T0.timestamp()) * 10**9
 WINDOW = {"start": "2026-10-19T09:00:00Z", "end": "2026-10-19T12:00:00Z"}
+DEMO_START = int((T0 + timedelta(days=1)).timestamp()) // 60
 
 
 def kv(k, v):
@@ -47,6 +50,10 @@ def eng():
                                              {"traceId": "d" * 32, "spanId": "1" * 16, "name": "GET /",
                                               "startTimeUnixNano": str(NS), "endTimeUnixNano": str(NS + 1)}]}]}]}],
            T0.replace(minute=30))
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "demo"))
+    import agents   # an hour of the demo support assistant, a day later (DEMO_DAY), for the alert templates
+    from localengine import load_minutes
+    load_minutes(e, lambda m: {"traces": {"resourceSpans": agents.resource_spans(m)}}, range(DEMO_START, DEMO_START + 60))
     yield e
     e.close()
 
@@ -81,3 +88,26 @@ def test_one_session_by_id_reads_only_its_files(eng):
     out = eng.query_json({**WINDOW, "signal": "traces", "match": {"session_id": "sess-b"}, "search": {"limit": 100}})
     assert [r["trace_id"] for r in groups(out)] == ["c" * 32]   # only the root span carries the session ID
     assert groups(out)[0]["gen_ai_agent"] == "support"
+
+
+# ------------------------------------------------------------------ the AI agent alert templates, on the demo traffic
+
+def test_agent_alert_templates_fire_on_the_demo_failures(eng):
+    """The AI agents alert templates (web/src/infra/alertTemplates.ts) run as the alerts service runs
+    them (one PromQL evaluation) and see the demo's failing tools, rate-limited calls and latencies."""
+    import promql
+    import query
+    from test_infra_queries import queries
+
+    def run_query(q):
+        return query.run(q, invoke_worker=query.run_worker)
+    templates = {t["name"]: t for t in queries()["alertTemplates"] if t["group"] == "AI agents"}
+    assert set(templates) == {"Agent tool errors", "LLM call errors", "Slow LLM calls"}
+    at = (DEMO_START + 60) * 60
+    seen = {}
+    for name, t in templates.items():
+        out = promql.query_instant("acme", t["promql"].replace("[10m]", "[60m]"), at, run_query=run_query)
+        seen[name] = {next(iter(r["metric"].values()), ""): float(r["value"][1]) for r in out["data"]["result"]}
+    assert set(seen["Agent tool errors"]) <= {"initiateReturn", "checkInventory"} and sum(seen["Agent tool errors"].values()) >= 1
+    assert sum(seen["LLM call errors"].values()) >= 1 and set(seen["LLM call errors"]) <= {"gpt-4o-mini", "claude-sonnet-4"}
+    assert seen["Slow LLM calls"] and all(0.3 < v < 10 for v in seen["Slow LLM calls"].values())   # seconds, per model

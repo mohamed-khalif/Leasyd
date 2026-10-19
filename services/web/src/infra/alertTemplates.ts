@@ -1,12 +1,14 @@
-// Ready-made alert rules for Kubernetes and GPUs: "A query crosses a threshold" rules, filled in from
-// the alert form's template list. Each fires per series (a pod, a node, a GPU). Checked on the real
-// engine by services/compaction/test_infra_queries.py.
+// Ready-made alert rules for Kubernetes, GPUs and AI agents: "A query crosses a threshold" rules, filled
+// in from the alert form's template list. Each fires per series (a pod, a node, a GPU, a tool, a model).
+// Checked on the real engine by services/compaction/test_infra_queries.py (Kubernetes, GPUs) and
+// test_agents.py (AI agents).
 import { HOT_TEMP } from "./model";
 
-export type AlertTemplate = { group: "Kubernetes" | "GPUs"; name: string; promql: string; op: ">" | "<"; critical: number;
+export type AlertTemplate = { group: "Kubernetes" | "GPUs" | "AI agents"; name: string; promql: string; op: ">" | "<"; critical: number;
   degraded?: number; for_minutes: number; help: string };
 
 const POD = `"k8s.namespace.name", "k8s.pod.name"`;
+const AGENT_SPANS = (op: string, extra = "") => `leasyd.spans{"gen_ai.operation.name"="${op}"${extra}}`;
 
 export const ALERT_TEMPLATES: AlertTemplate[] = [
   { group: "Kubernetes", name: "Pod crash-looping", op: ">", critical: 3, degraded: 1, for_minutes: 0,
@@ -42,4 +44,13 @@ export const ALERT_TEMPLATES: AlertTemplate[] = [
   { group: "GPUs", name: "GPU held but idle", op: "<", critical: 1, degraded: 5, for_minutes: 60,
     promql: `avg by (namespace, pod, UUID) (avg_over_time({"DCGM_FI_DEV_GPU_UTIL", pod!=""}[1h]))`,
     help: "A pod holds a GPU and keeps it under 5% busy for an hour (paid, unused)" },
+  { group: "AI agents", name: "Agent tool errors", op: ">", critical: 0, for_minutes: 0,
+    promql: `sum by ("gen_ai.tool.name") (increase(${AGENT_SPANS("execute_tool", ', status_code="ERROR"')}[10m]))`,
+    help: "Failed tool calls in the last 10 minutes, per tool: often the agent answers as if it worked (see AI agents > Issues)" },
+  { group: "AI agents", name: "LLM call errors", op: ">", critical: 3, degraded: 0, for_minutes: 0,
+    promql: `sum by ("gen_ai.request.model") (increase(${AGENT_SPANS("chat", ', status_code="ERROR"')}[10m]))`,
+    help: "Failed model calls (rate limits, timeouts) in the last 10 minutes, per model" },
+  { group: "AI agents", name: "Slow LLM calls", op: ">", critical: 30, degraded: 15, for_minutes: 5,
+    promql: `histogram_quantile(0.95, sum by ("gen_ai.request.model") (rate(leasyd.span.duration{"gen_ai.operation.name"="chat"}[10m])))`,
+    help: "95th percentile of model call durations, seconds, per model" },
 ];
