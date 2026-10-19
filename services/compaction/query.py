@@ -90,7 +90,8 @@ COLUMNS = {
     "logs": {"ts", "ts_unix_nano", "observed_ts", "service", "severity_number", "severity_text", "body",
              "trace_id", "span_id", "scope_name"},
     "traces": {"ts", "ts_unix_nano", "end_ts", "duration_ns", "service", "name", "kind", "status_code",
-               "status_message", "trace_id", "span_id", "parent_span_id", "trace_state", "scope_name"},
+               "status_message", "trace_id", "span_id", "parent_span_id", "trace_state", "scope_name",
+               *compact.GEN_AI_COLUMNS},
     "metrics": {"ts", "ts_unix_nano", "start_ts", "service", "metric_name", "metric_type", "unit", "description",
                 "temporality", "is_monotonic", "value", "count", "sum", "min", "max", "flags", "scope_name"},
 }
@@ -225,7 +226,8 @@ def compile_query(q, edges=False):
         where.append(f"service IN ({', '.join('?' * len(q['services']))})")
         params += list(q["services"])
     for f, v in sorted((q.get("match") or {}).items()):
-        where.append(f"lower({_field(signal, f if f == 'trace_id' else 'attributes.' + f, params)}) = lower(?)")
+        col = f in compact.ID_COLUMNS.get(signal, ())   # trace_id, session_id: columns; others attributes
+        where.append(f"lower({_field(signal, f if col else 'attributes.' + f, params)}) = lower(?)")
         params.append(str(v))
     for cond in q.get("where") or []:
         op = cond.get("op", "=")

@@ -126,16 +126,19 @@ DEFAULT_MAX_ROWS_PER_FILE = 4_000_000
 # Log attributes whose values go into each file's bloom filter, alongside
 # trace_id. IDs people look up one at a time, not low-cardinality labels.
 DEFAULT_BLOOM_ATTRIBUTES = ("request.id",)
+# ID columns (not attributes) in each signal's blooms: one span's or log record's trace, and an agent
+# conversation's session (the session_id column below).
+ID_COLUMNS = {"logs": ("trace_id",), "traces": ("trace_id", "session_id"), "metrics": ()}
 
 
 SIGNALS = ("logs", "traces", "metrics")
 
 
 def bloom_fields(signal, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES):
-    """Fields in a signal's bloom filters: trace_id plus the ID attributes for
-    log records and spans. Metric points have none, so ID lookups never skip
+    """Fields in a signal's bloom filters: the ID columns (trace_id; for spans also session_id) plus
+    the ID attributes for log records and spans. Metric points have none, so ID lookups never skip
     a metrics file."""
-    return () if signal == "metrics" else ("trace_id", *bloom_attributes)
+    return () if signal == "metrics" else (*ID_COLUMNS.get(signal, ("trace_id",)), *bloom_attributes)
 
 
 def compact(signal, input_paths, out_dir, batch_id, arrival_dt, arrival_hour, memory_limit="2GB",
@@ -333,6 +336,26 @@ def _logs_sql(fallback_ns, spill_safe=True):
     """
 
 
+# AI agent spans (OpenTelemetry GenAI conventions): a few small fields lifted out of the attribute map
+# into columns of their own, so session lists, token and cost sums and agent issues read these
+# narrow columns and never the prompts and replies that agent spans also carry as attributes.
+# NULL on every other span (next to nothing in Parquet); older files lack them and read as NULL.
+_GEN_AI_COLUMNS = """
+            nullif(coalesce(attributes['gen_ai.conversation.id'], attributes['session.id'],
+                            attributes['langfuse.session.id']), '') AS session_id,
+            attributes['gen_ai.operation.name'] AS gen_ai_operation,
+            coalesce(attributes['gen_ai.response.model'], attributes['gen_ai.request.model']) AS gen_ai_model,
+            attributes['gen_ai.agent.name'] AS gen_ai_agent,
+            attributes['gen_ai.tool.name'] AS gen_ai_tool,
+            TRY_CAST(coalesce(attributes['gen_ai.usage.input_tokens'], attributes['gen_ai.usage.prompt_tokens']) AS BIGINT)
+                AS gen_ai_input_tokens,
+            TRY_CAST(coalesce(attributes['gen_ai.usage.output_tokens'], attributes['gen_ai.usage.completion_tokens']) AS BIGINT)
+                AS gen_ai_output_tokens,
+            TRY_CAST(attributes['gen_ai.usage.cost'] AS DOUBLE) AS gen_ai_cost"""
+GEN_AI_COLUMNS = ("session_id", "gen_ai_operation", "gen_ai_model", "gen_ai_agent", "gen_ai_tool",
+                  "gen_ai_input_tokens", "gen_ai_output_tokens", "gen_ai_cost")
+
+
 def _traces_sql(fallback_ns, spill_safe=True):
     return f"""
         WITH rs AS ({_read('resourceSpans', SPANS_JSON_TYPE)}),
@@ -368,7 +391,8 @@ def _traces_sql(fallback_ns, spill_safe=True):
             end_unix_nano - ts_unix_nano AS duration_ns,
             {_SERVICE},
             name, kind, status_code, status_message, trace_id, span_id, parent_span_id, trace_state,
-            scope_name, attributes, resource_attributes, events, links
+            scope_name, attributes, resource_attributes, events, links,
+            {_GEN_AI_COLUMNS}
         FROM flat
     """
 
@@ -476,9 +500,9 @@ def _bloom_for(con, table, fields, fpp, where="true"):
     attribute key) in the rows of `table` matching `where`."""
     parts, params = [], []
     for field in fields:
-        if field == "trace_id":
-            parts.append(f"SELECT 'trace_id=' || lower(trim(trace_id)) AS t FROM {table} "
-                         f"WHERE {where} AND trace_id IS NOT NULL")
+        if field in ("trace_id", "session_id"):   # columns (ID_COLUMNS), not attributes
+            parts.append(f"SELECT '{field}=' || lower(trim({field})) AS t FROM {table} "
+                         f"WHERE {where} AND {field} IS NOT NULL")
         else:
             parts.append(f"SELECT ? || '=' || lower(trim(attributes[?])) FROM {table} "
                          f"WHERE {where} AND attributes[?] IS NOT NULL")
@@ -501,8 +525,8 @@ def _day_digests(con, fields, out):
     """Digests of the distinct IDs in `rows`, by event hour and group."""
     parts, params = [], []
     for field in fields:
-        if field == "trace_id":
-            parts.append("SELECT ts, 'trace_id=' || lower(trim(trace_id)) AS t FROM rows WHERE trace_id IS NOT NULL")
+        if field in ("trace_id", "session_id"):   # columns (ID_COLUMNS), not attributes
+            parts.append(f"SELECT ts, '{field}=' || lower(trim({field})) AS t FROM rows WHERE {field} IS NOT NULL")
         else:
             parts.append("SELECT ts, ? || '=' || lower(trim(attributes[?])) FROM rows WHERE attributes[?] IS NOT NULL")
             params += [field, field, field]

@@ -165,3 +165,10 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] S8 guard: src/tokens.test.ts fails on any colour literal outside tokens.css (checked: a stray #123456 fails it). Hardcoded colours: 46 -> 0
 - Not done (out of scope or would change layout): the mock has no Service Map data, so that page was only checked empty; Start and Web vary between loads in the mock, so they were also checked by eye
 - [x] Phase 2 done (S1-S8 above); every commit: before/after screenshots with every element's box compared, typecheck, lint, all tests, bundle size (CSS +0.45 KB gzipped, JS unchanged)
+
+## AI agents: sessions, transcripts, silent failures (asked 2026-10-19): docs/agents-design.md
+- [x] Design: agent fields lifted to their own Parquet columns at compaction (prompts stay in the attribute map, never read by lists); session_id bloom for transcripts; the page = aggregate queries over those columns; issues and alerts with no AI and no stored state
+- [x] A1 engine: 8 agent columns (session_id, gen_ai_operation/model/agent/tool, input/output tokens, cost) in compaction and the fast lane; session_id in the per-file blooms and day digests and accepted by `match`; API, SQL page and Leasyd AI know the columns. Tests: extraction (3 SDK spellings, non-agent spans NULL, bloom), end to end through the local engine (session aggregates across a trace's spans, a session lookup reads 1 of 3 files). 250 engine tests pass
+- [ ] A2 demo agent traffic and the engine mock's JSON queries
+- [ ] A3 Agents page and session transcript
+- [ ] A4 issues, alert templates, Get started, docs

@@ -176,7 +176,8 @@ def test_metric_nan_and_json_numbers(tmp_path):
 
 def test_metrics_have_no_bloom_fields(tmp_path):
     assert compact.bloom_fields("metrics") == ()
-    assert compact.bloom_fields("traces", ("request.id",)) == ("trace_id", "request.id")
+    assert compact.bloom_fields("traces", ("request.id",)) == ("trace_id", "session_id", "request.id")
+    assert compact.bloom_fields("logs", ("request.id",)) == ("trace_id", "request.id")
     f = write(tmp_path / "a.json.gz", metrics_doc("api", ALL_TYPES))
     [w] = compact.compact("metrics", [f], str(tmp_path / "o"), "b1", "2026-09-26", "20")
     assert w["bloom"].n == 0
@@ -247,3 +248,40 @@ def test_fast_and_spill_safe_parsing_give_identical_output(tmp_path):
             out[safe] = [(w["relpath"], w["rows"], w["bloom"].to_bytes(), rows(w["path"])) for w in written]
         assert out[True] == out[False], signal
         assert out[True] and all(r for *_, r in out[True])
+
+
+# ------------------------------------------------------------------ AI agent spans (docs/agents-design.md)
+
+def ia(k, v):
+    return {"key": k, "value": {"intValue": str(v)}}
+
+
+def test_agent_fields_become_columns(tmp_path):
+    f = write(tmp_path / "a.json.gz", spans_doc("support-bot", [
+        span(H20, spanId="01" * 8, name="chat gpt-4o", attributes=[
+            attr("gen_ai.operation.name", "chat"), attr("gen_ai.conversation.id", "Sess-1"),
+            attr("gen_ai.request.model", "gpt-4o"), attr("gen_ai.response.model", "gpt-4o-2024-08-06"),
+            ia("gen_ai.usage.input_tokens", 812), ia("gen_ai.usage.output_tokens", 95),
+            {"key": "gen_ai.usage.cost", "value": {"doubleValue": 0.0031}},
+            attr("gen_ai.input.messages", "x" * 5000)]),
+        span(H20 + 1, spanId="02" * 8, name="execute_tool lookup", attributes=[
+            attr("gen_ai.operation.name", "execute_tool"), attr("gen_ai.tool.name", "lookup_order"),
+            attr("session.id", "sess-2"), attr("gen_ai.agent.name", "support")]),
+        span(H20 + 2, spanId="03" * 8, attributes=[   # an older SDK: prompt / completion tokens
+            attr("gen_ai.operation.name", "chat"), attr("gen_ai.request.model", "claude-sonnet-4"),
+            ia("gen_ai.usage.prompt_tokens", 10), ia("gen_ai.usage.completion_tokens", 0),
+            attr("langfuse.session.id", "s3")]),
+        span(H20 + 3, spanId="04" * 8, attributes=[attr("http.route", "/x")]),   # not an agent span
+    ]))
+    [w] = compact.compact("traces", [f], str(tmp_path / "o"), "b1", "2026-09-26", "20")
+    got = rows(w["path"], "SELECT span_id, " + ", ".join(compact.GEN_AI_COLUMNS) + " FROM t ORDER BY ts_unix_nano")
+    assert got[0] == {"span_id": "01" * 8, "session_id": "Sess-1", "gen_ai_operation": "chat",
+                      "gen_ai_model": "gpt-4o-2024-08-06", "gen_ai_agent": None, "gen_ai_tool": None,
+                      "gen_ai_input_tokens": 812, "gen_ai_output_tokens": 95, "gen_ai_cost": 0.0031}
+    assert (got[1]["session_id"], got[1]["gen_ai_tool"], got[1]["gen_ai_agent"]) == ("sess-2", "lookup_order", "support")
+    assert (got[2]["session_id"], got[2]["gen_ai_model"], got[2]["gen_ai_input_tokens"], got[2]["gen_ai_output_tokens"]) \
+        == ("s3", "claude-sonnet-4", 10, 0)
+    assert all(v is None for k, v in got[3].items() if k != "span_id")
+    # The session ID is in the file's bloom (case-folded, like trace IDs); other sessions aren't.
+    assert w["bloom"].might_contain(bloom.term("session_id", "SESS-1"))
+    assert not w["bloom"].might_contain(bloom.term("session_id", "sess-9"))

@@ -69,6 +69,10 @@ class LocalEngine:
             raise self.query.BadQuery(out["error"])
         return out
 
+    def query_json(self, q):
+        """A JSON query (the app's /v1/app/query body), run as the API runs it, workers in process."""
+        return self.query.run({**q, "tenant": self.tenant}, invoke_worker=self.query.run_worker)
+
     def records(self, text, start, end, services=None):
         out = self.sql(text, start, end, services)
         return [dict(zip(out["columns"], r)) for r in out["rows"]]
