@@ -283,7 +283,7 @@ tr:hover .link { text-decoration: underline; }
 
 /* ---------- charts ---------- */
 .chart-tip { position: absolute; top: 4px; pointer-events: none; background: var(--surface); border: 1px solid var(--border-strong);
-  border-radius: 6px; padding: 6px 9px; font: 11.5px var(--font-mono); min-width: 170px; z-index: 5; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+  border-radius: 6px; padding: 6px 9px; font: 11.5px var(--font-mono); min-width: 170px; z-index: 5; box-shadow: var(--shadow-tip); }
 .tip-row { display: flex; gap: 6px; align-items: center; }
 .tip-row i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
 .tip-row b { margin-left: auto; font-weight: 500; }
@@ -317,8 +317,8 @@ tr:hover .link { text-decoration: underline; }
 .caret { display: inline-block; font-size: 12px; color: var(--text-3); transition: transform .12s; }
 .caret.open { transform: rotate(90deg); }
 .fold-body { display: flex; flex-direction: column; gap: 10px; }
-.drawer-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 50; display: flex; justify-content: flex-end; }
-.drawer { width: min(760px, 100%); height: 100%; background: var(--surface); border-left: 1px solid var(--border-strong); display: flex; flex-direction: column; box-shadow: -8px 0 30px rgba(0,0,0,.35); }
+.drawer-wrap { position: fixed; inset: 0; background: var(--scrim); z-index: 50; display: flex; justify-content: flex-end; }
+.drawer { width: min(760px, 100%); height: 100%; background: var(--surface); border-left: 1px solid var(--border-strong); display: flex; flex-direction: column; box-shadow: var(--shadow-drawer); }
 .drawer-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .drawer-head .spacer { flex: 1; }
 .drawer-title { font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -492,7 +492,7 @@ tr:hover .link { text-decoration: underline; }
 .ai-history-item:hover, .ai-history-item.on { background: var(--surface-2); color: var(--text); }
 .ai-main { max-width: 980px; display: grid; gap: 14px; }
 .ai-hero { text-align: center; padding: 28px 0 6px; }
-.ai-hero h1 { margin: 0 0 6px; font-size: 34px; background: linear-gradient(90deg, var(--accent), #e87a5d); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.ai-hero h1 { margin: 0 0 6px; font-size: 34px; background: linear-gradient(90deg, var(--accent), var(--highlight-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .ai-hero p { max-width: 620px; margin: 0 auto; }
 .ai-ask { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 10px; display: grid; gap: 8px; }
 .ai-ask textarea { border: 0; background: transparent; resize: vertical; min-height: 48px; font: 14px/1.5 var(--font-sans, inherit); }
@@ -675,7 +675,7 @@ tr:hover .link { text-decoration: underline; }
 .start-progress li.done { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .start-progress-dot { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600;
   background: var(--surface-3); color: var(--text-2); }
-.start-progress li.done .start-progress-dot { background: var(--accent-2); color: #fff; }
+.start-progress li.done .start-progress-dot { background: var(--accent-2); color: var(--on-accent); }
 .start-progress-dot svg { width: 12px; height: 12px; stroke-width: 2.2; }
 
 .start-stepcard { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 16px; }
@@ -685,7 +685,7 @@ tr:hover .link { text-decoration: underline; }
 .start-stepcard.last .start-rail::after { display: none; }
 .start-num { position: relative; z-index: 1; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: 14px;
   background: var(--surface); border: 2px solid var(--border-strong); color: var(--text); }
-.start-stepcard.done .start-num { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+.start-stepcard.done .start-num { background: var(--accent-2); border-color: var(--accent-2); color: var(--on-accent); }
 .start-num svg { width: 16px; height: 16px; stroke-width: 2.2; }
 .start-body { min-width: 0; padding: 16px 18px; margin-bottom: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .start-body h3 { margin: 0; font-size: 16px; }
@@ -736,7 +736,7 @@ tr:hover .link { text-decoration: underline; }
 .start-check > span:last-child { flex: 1; min-width: 0; line-height: 1.9; }
 .start-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border-strong); display: inline-grid; place-items: center;
   font-size: 11px; flex: none; margin-top: 3px; animation: start-pulse 1.4s ease-in-out infinite; }
-.start-check.ok .start-dot { background: var(--accent-2); border-color: var(--accent-2); color: #fff; animation: none; }
+.start-check.ok .start-dot { background: var(--accent-2); border-color: var(--accent-2); color: var(--on-accent); animation: none; }
 @keyframes start-pulse { 50% { border-color: var(--accent); } }
 @media (prefers-reduced-motion: reduce) { .start-dot { animation: none; } }
 .start-svc { display: inline-block; white-space: nowrap; margin: 0 4px 0 0; padding: 1px 6px; line-height: 1.5; border-radius: 4px; background: var(--surface-2); }
