@@ -1,6 +1,6 @@
 # CloudWatch Logs into Leasyd: design
 
-Status: **approved and built (2026-10-18)** with the recommended answers: a chosen list of log groups by default, Lambda START/END lines kept, ECS services named after the container. Live since 2026-10-19 and checked on AWS (L5, `docs/refactor-progress.md`); the setup stack itself is still to be run in a real account. It follows the CloudWatch metrics path (`services/ingest/cloudwatch.py`, `examples/aws/cloudwatch-metrics.yaml`) as closely as it can, so most of the plumbing already exists.
+Status: **approved and built (2026-10-18)** with the recommended answers: a chosen list of log groups by default, Lambda START/END lines kept, ECS services named after the container. Live since 2026-10-19 and checked on AWS (L5, `docs/refactor-progress.md`), including the setup stack in a real account (`infra/cloudwatch-logs-test.sh`). It follows the CloudWatch metrics path (`services/ingest/cloudwatch.py`, `examples/aws/cloudwatch-metrics.yaml`) as closely as it can, so most of the plumbing already exists.
 
 ## Why
 
