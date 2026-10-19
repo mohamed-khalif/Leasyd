@@ -75,6 +75,7 @@ Two conventions, each in its own place:
 | Function | For | Examples |
 |---|---|---|
 | `fmtUsd(v)` | Amounts | `$0.42`, `$12`, `$1,234` |
+| `fmtCost(v)` | AI costs (often under a cent) | `$0.0033`, `$0`, `$0.42`, `–` |
 | `fmtUnitPrice(v)` | Prices per unit: per million records, per GPU hour. 2 decimals, or 3 when the third isn't zero. | `$0.18`, `$0.075`, `$3.43` |
 
 ## Units on chart panels

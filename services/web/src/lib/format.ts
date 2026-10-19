@@ -131,4 +131,7 @@ export const fmtHours = (v: number | null | undefined) =>
   v == null ? "–" : v >= 100 ? `${fmtNum(Math.round(v))} h` : v >= 1 ? `${v.toFixed(1)} h` : `${Math.round(v * 60)} min`;
 export const fmtUsd = (v: number) =>
   v >= 1000 ? `$${fmtNum(Math.round(v))}` : v >= 10 ? `$${v.toFixed(0)}` : `$${v.toFixed(2)}`;
+/** AI costs, which are often fractions of a cent: two significant digits below a cent, else fmtUsd. */
+export const fmtCost = (v: number | null | undefined) =>
+  missing(v) ? NONE : v === 0 ? "$0" : v < 0.01 ? `$${v.toPrecision(2)}` : fmtUsd(v);
 export const shortGpu = (uuid: string) => (uuid.startsWith("GPU-") ? uuid.slice(4, 12) : uuid);

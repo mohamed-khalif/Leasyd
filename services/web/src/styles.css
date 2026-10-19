@@ -851,3 +851,23 @@ td.warn { color: var(--sev-warn); }
   .set-section { grid-template-columns: 1fr; gap: 10px; }
 }
 .set-wide { padding-top: 22px; border-top: 1px solid var(--border); display: grid; gap: 10px; }
+
+/* ---- AI agents (pages/Agents.tsx) */
+.agents { display: flex; flex-direction: column; gap: 12px; min-width: 0; }   /* flex: panels' span-12 would add grid columns */
+.agent-issues { display: grid; gap: 10px; padding: 12px; }
+.agent-issue { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-left: 3px solid var(--sev-error);
+  border-radius: var(--radius); background: var(--surface-2); }
+.agent-issue.warn { border-left-color: var(--sev-warn); }
+.agent-issue-head { display: flex; gap: 10px; justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+.agent-issue-examples { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.agent-transcript { display: grid; gap: 8px; }
+.agent-msg { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); min-width: 0; }
+.agent-msg.user { background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.agent-msg.system { opacity: .8; }
+.agent-msg.tool { background: var(--well); }
+.agent-msg.failed { border-color: color-mix(in srgb, var(--sev-error) 55%, var(--border)); }
+.agent-msg-head { display: flex; gap: 8px; align-items: baseline; font-size: 12px; }
+.agent-trace { margin-left: auto; font-size: 11.5px; }
+.agent-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.agent-code { font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.agent-err { color: var(--sev-error); font-size: 12px; overflow-wrap: anywhere; }

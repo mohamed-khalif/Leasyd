@@ -30,3 +30,4 @@ export const IconLambda = () => <svg {...s}><path d="M3.5 2.5h2.6l6.4 11h-2.6L7.
 export const IconServer = () => <svg {...s}><rect x="2" y="2.5" width="12" height="4.5" rx="1" /><rect x="2" y="9" width="12" height="4.5" rx="1" /><path d="M4.5 4.75h.01M4.5 11.25h.01M7 4.75h4.5M7 11.25h4.5" /></svg>;
 export const IconKey = () => <svg {...s}><circle cx="5.5" cy="10.5" r="3" /><path d="M7.6 8.4 13.5 2.5M11 5l1.8 1.8M9.5 6.5l1.3 1.3" /></svg>;
 export const IconCheck = () => <svg {...s}><path d="M3 8.5l3.2 3L13 4.5" /></svg>;
+export const IconAgent = () => <svg {...s}><rect x="2.5" y="4.5" width="11" height="8.5" rx="2" /><path d="M8 2v2.5M5.8 8.2h.01M10.2 8.2h.01M6 10.8h4" /></svg>;

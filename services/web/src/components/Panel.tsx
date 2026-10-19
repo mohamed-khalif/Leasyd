@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { Loaded } from "../useQuery";
+import { Load } from "../useQuery";
 
 export function Panel(props: { title: string; span?: number; right?: ReactNode; flush?: boolean; children: ReactNode; height?: number }) {
   return (
@@ -16,13 +16,13 @@ export function Panel(props: { title: string; span?: number; right?: ReactNode; 
   );
 }
 
-/** Loading / error / empty states around a loaded result, and a notice when it was cut at the row cap. */
-export function Loads(props: { q: Loaded; empty?: boolean; height?: number; children: () => ReactNode }) {
+/** Loading / error / empty states around anything loaded, and a notice when a result was cut at the row cap. */
+export function Loads(props: { q: Load<{ truncated?: boolean } | object>; empty?: boolean; height?: number; children: () => ReactNode }) {
   const h = props.height ?? 140;
   if (props.q.error) return <div className="state error" style={{ minHeight: h }}>{props.q.error}</div>;
   if (!props.q.data) return <div className="skeleton" style={{ height: h }} />;
   if (props.empty) return <div className="state" style={{ minHeight: h }}>No data in this time range</div>;
-  return <>{props.children()}{props.q.data.truncated && <Truncated />}</>;
+  return <>{props.children()}{"truncated" in props.q.data && props.q.data.truncated && <Truncated />}</>;
 }
 
 export function Truncated() {

@@ -11,7 +11,7 @@ import { render, settle } from "./test/dom";
 
 const ROUTES = ["/", "/logs", "/traces", "/metrics", "/services", "/web", "/lambda", "/kubernetes", "/gpus",
   "/dashboards", "/dashboards/builtin-services", "/query", "/sql", "/alerts", "/alerts/rules/new", "/synthetics",
-  "/slos", "/ai", "/start", "/drop-rules", "/settings", "/usage",
+  "/slos", "/ai", "/start", "/drop-rules", "/settings", "/usage", "/agents", "/agents?tab=issues",
   ...["profile", "security", "organization", "team", "usage", "billing", "api-keys", "gpu-prices", "ai-tools"].map((p) => `/settings/${p}`)];
 
 const errors: string[] = [];

@@ -788,6 +788,12 @@ export function mockApi(): Plugin {
             }, () => { res.statusCode = 503; res.end(JSON.stringify({ error: "start mock/engine_server.py for Kubernetes and GPU data" })); });
             return;
           }
+          if (parsed.match?.trace_id && parsed.search) {   // one trace: the engine mock's (an agent run's) when it has it
+            fetch("http://127.0.0.1:5299/query", { method: "POST", body }).then((r) => r.json()).then((out) => {
+              res.end(JSON.stringify(out.rows?.length ? out : answer(parsed)));
+            }, () => res.end(JSON.stringify(answer(parsed))));
+            return;
+          }
           if (!parsed.promql && !parsed.sql && AGENT_FIELDS.test(body)) {   // the Agents page: the real engine too
             fetch("http://127.0.0.1:5299/query", { method: "POST", body }).then(async (r) => {
               res.statusCode = r.status;

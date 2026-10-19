@@ -31,6 +31,7 @@ const Logs = splitPage(() => import("./pages/Logs").then((m) => m.Logs));
 const Traces = splitPage(() => import("./pages/Traces").then((m) => m.Traces));
 const ServiceMap = splitPage(() => import("./pages/ServiceMap").then((m) => m.ServiceMap));
 const Lambda = splitPage(() => import("./pages/Lambda").then((m) => m.Lambda));
+const Agents = splitPage(() => import("./pages/Agents").then((m) => m.Agents));
 const Web = splitPage(() => import("./pages/Web").then((m) => m.Web));
 const Gpus = splitPage(() => import("./pages/Gpus").then((m) => m.Gpus));
 const Kubernetes = splitPage(() => import("./pages/Kubernetes").then((m) => m.Kubernetes));
@@ -44,7 +45,7 @@ const Dashboards = splitPage(() => import("./pages/Dashboards").then((m) => m.Da
 
 /** The page each path opens, in the same order as App's routes (the last is Home). */
 const ROUTE_PAGES: [string, Page<never>][] = [["/traces", Traces], ["/services", ServiceMap], ["/web", Web], ["/gpus", Gpus],
-  ["/kubernetes", Kubernetes], ["/lambda", Lambda], ["/synthetics", Synthetics], ["/slos", Slos], ["/alerts", Alerts],
+  ["/kubernetes", Kubernetes], ["/lambda", Lambda], ["/agents", Agents], ["/synthetics", Synthetics], ["/slos", Slos], ["/alerts", Alerts],
   ["/dashboards", Dashboards], ["/query", QueryBuilder], ["/sql", Sql], ["/metrics", Metrics], ["/logs", Logs], ["/ai", Ai],
   ["/start", GetStarted], ["/drop-rules", DropRules], ["/settings", Settings], ["/usage", Settings]];
 export const preloadPage = (hash: string) =>
@@ -135,6 +136,9 @@ export function App() {
   } else if (path.startsWith("/kubernetes")) {
     page = <Kubernetes key={query ?? ""} ctx={ctx} params={params} />;
     crumb = ["Infrastructure", "Kubernetes"];
+  } else if (path.startsWith("/agents")) {
+    page = <Agents ctx={ctx} />;
+    crumb = ["Applications", "AI agents"];
   } else if (path.startsWith("/lambda")) {
     const fn = path.split("/")[2];
     const name = fn ? decoded(fn) : undefined;

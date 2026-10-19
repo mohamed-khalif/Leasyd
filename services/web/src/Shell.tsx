@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { fmtDay } from "./lib/format";
-import { IconClock, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu } from "./icons";
+import { IconClock, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu, IconAgent } from "./icons";
 import { customRange, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { useAccount } from "./useAccount";
 
@@ -69,6 +69,7 @@ export function Shell(p: Props) {
         <div className="nav-section">Applications</div>
         {link("/services", "Service Map", <IconMap />, p.path.startsWith("/services"))}
         {link("/web", "Web (real users)", <IconGlobe />, p.path.startsWith("/web"))}
+        {link("/agents", "AI agents", <IconAgent />, p.path.startsWith("/agents"))}
         {link("/lambda", "AWS Lambda", <IconLambda />, p.path.startsWith("/lambda"))}
         <div className="nav-section">Infrastructure</div>
         {link("/kubernetes", "Kubernetes", <IconK8s />, p.path.startsWith("/kubernetes"))}
