@@ -69,9 +69,10 @@ def _session(window, k):
     """A conversation's fixed traits: its ID, model, what the customer wants, how many turns."""
     r = random.Random(f"agents/session/{window}/{k}")
     kind, ask = r.choice(ASKS)
+    product = r.choice(PRODUCTS)
     return {"id": f"{_id('sess', window, k, n=8)}-{_id('s2', window, k, n=4)}-{_id('s3', window, k, n=12)}",
             "model": MODELS[0] if r.random() < 0.7 else MODELS[1], "kind": kind,
-            "first": ask.format(o=r.randint(4000, 4999), p=r.choice(PRODUCTS)), "turns": r.randint(1, 4),
+            "first": ask.format(o=r.randint(4000, 4999), p=product), "product": product, "turns": r.randint(1, 4),
             "start": window * WINDOW_MIN + r.randint(0, WINDOW_MIN - 1), "user": f"user-{r.randint(100, 999)}"}
 
 
@@ -130,11 +131,11 @@ def _turn(s, turn, minute):
         reply = "Your return has been filed. You'll get a prepaid label by email within the hour."
     elif s["kind"] == "stock":
         if fate < 0.2:
-            tool("checkInventory", {"product": "trail backpack"}, {"error": "product_not_found"},
+            tool("checkInventory", {"product": s["product"]}, {"error": "product_not_found"},
                  error="product_not_found: sku lookup failed")
             reply = "Yes, it's in stock! You can order two today."
         else:
-            tool("checkInventory", {"product": "trail backpack"}, {"in_stock": 14})
+            tool("checkInventory", {"product": s["product"]}, {"in_stock": 14})
             reply = "Yes, we have 14 in stock. Want me to add two to your cart?"
     elif s["kind"] == "recommend":
         loops = 7 if fate < 0.12 else 1
