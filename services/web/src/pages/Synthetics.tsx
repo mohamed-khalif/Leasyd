@@ -84,7 +84,7 @@ function CheckList({ ctx }: { ctx: Ctx }) {
 
 function Dot({ ok, title }: { ok: boolean | null; title: string }) {
   const color = ok == null ? "var(--text-3)" : ok ? OK : "var(--sev-error)";
-  return <span title={title} aria-label={title} style={{ display: "inline-block", width: 9, height: 9, borderRadius: 9, background: color }} />;
+  return <span title={title} aria-label={title} style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: color }} />;
 }
 
 // ------------------------------------------------------------------ create / edit

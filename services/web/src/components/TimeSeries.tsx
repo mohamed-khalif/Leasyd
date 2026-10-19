@@ -92,13 +92,13 @@ export function TimeSeries(props: { series: Series[]; range: Range; height?: num
         {hoverT != null && hover! > padL && hover! < w - padR && (
           <div style={{
             position: "absolute", top: 4, left: Math.min(hover! + 12, w - 190), pointerEvents: "none",
-            background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: 6,
+            background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius)",
             padding: "6px 9px", font: "11px var(--font-mono)", minWidth: 150, zIndex: 2,
           }}>
             <div className="faint" style={{ marginBottom: 3 }}>{fmtTime(new Date(hoverT).toISOString(), { ...props.range, minutes: 60 })}</div>
             {props.series.slice(0, 8).map((s) => {
               const p = nearest(s);
-              return p && <div key={s.label}><i style={{ display: "inline-block", width: 8, height: 8, background: s.color, marginRight: 6, borderRadius: 2 }} />
+              return p && <div key={s.label}><i style={{ display: "inline-block", width: 8, height: 8, background: s.color, marginRight: 6, borderRadius: "var(--radius-xs)" }} />
                 {s.label} <b style={{ float: "right", marginLeft: 12 }}>{fmt(p[1])}</b></div>;
             })}
           </div>
