@@ -157,4 +157,5 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 - [x] Tokens approved 2026-10-19
 - [x] S1 tokens.css: the approved dark and light tokens in one file (plus --ok, --on-accent, --scrim, shadows, radii, chart grid, 10 series, logo); selected nav item gets the soft accent. Layout: 0 elements moved on 19 pages (dark) and 5 (light); CSS +0.3 KB gzipped
 - [x] S2 buttons and controls: primary text, menu shadow and switch knob from tokens; primary hover kept at AA (was 2.7:1 white on light indigo, now 4.7:1); the AI question box shows focus (its textarea had none). 0 moved on 6 pages
+- [x] S3 badges, pills and status: `var(--ok, #3fb68b)` fallbacks gone; read-only pill, AI badges and Service map critical badges from tokens; new --on-danger keeps text on the red fill at AA (white on the new red would be 2.8:1). 0 moved on 10 pages (Kubernetes and GPUs with the engine mock)
 - [ ] Phase 2: tokens in one file; shared components then pages, one commit each; charts; light mode; lint rule banning colours outside the token file

@@ -20,6 +20,7 @@
   --text-3: #8e98ae;             /* faint */
   --on-accent: #ffffff;          /* text on accent, danger and success fills */
   --on-warn: #1f1400;            /* text on the warning fill */
+  --on-danger: #1a0d0d;          /* text on the error fill */
 
   /* accent and meaning */
   --accent: #8b95ff;
@@ -82,6 +83,7 @@
   --text-2: #4a5468;
   --text-3: #626b80;
   --on-warn: #ffffff;
+  --on-danger: #ffffff;
   --accent: #4f55e0;
   --accent-2: #4349d1;
   --focus: #4f55e0;
