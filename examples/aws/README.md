@@ -52,3 +52,16 @@ OpenTelemetry's Lambda layer: Leasyd reads its spans (`cloud.platform = aws_lamb
       --parameter-overrides LeasydApiKey=obs_...
 
 Delete the stacks to stop.
+
+## Amazon ECS on EC2: every container, no code (`ecs-ebpf.yaml`)
+
+A daemon service (one task per container instance, host network and PIDs) running OpenTelemetry eBPF
+Instrumentation and the OpenTelemetry Collector: every container's requests, errors, latency,
+connections and traces on Leasyd's service map, named after its ECS service, with no change to task
+definitions or images. The key goes into Secrets Manager; the task role may only list and describe
+the cluster's tasks. Apps may also send their own OTLP to the instance on 4318. Not for Fargate.
+
+```
+aws cloudformation deploy --stack-name leasyd-ecs --template-file ecs-ebpf.yaml --capabilities CAPABILITY_IAM \
+  --parameter-overrides ClusterName=my-cluster LeasydApiKey=obs_... [TracesPercent=10]
+```

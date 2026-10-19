@@ -11,6 +11,7 @@ LEASYD_API_KEY=obs_... bash <(curl -fsSL https://app.leasyd.com/install/kubernet
 | `cluster.yaml` | Values for the same chart as one Deployment: `k8s_cluster` (pod phases, restarts, workloads, node allocatable and conditions) and `k8s_events` |
 | `dcgm-exporter.yaml` | Values for NVIDIA's dcgm-exporter chart (`--gpu`, when the GPU Operator doesn't already run it) |
 | `dcgm-counters.csv` | The DCGM fields: NVIDIA's defaults plus ECC errors, throttling time and SM activity |
+| `ebpf.yaml` | OpenTelemetry eBPF Instrumentation as a DaemonSet (privileged, host PIDs; read-only RBAC on pods, replicasets, services, nodes): every app's requests, errors, latency, connections and traces, no code; sends to its node's agent on 14318, whose `traces/ebpf` pipeline tail-samples (`--ebpf-traces`, `--no-ebpf`). Design: `docs/ebpf-design.md` |
 
 Permissions (read only): the chart's presets (pods, namespaces, nodes, workloads, events, node
 stats) plus `nodes/pods` and `nodes/proxy` (get) for the kubelet's pod list; Kubernetes 1.33+ needs
@@ -18,4 +19,5 @@ only `nodes/pods`, so `nodes/proxy` can be removed from `agent.yaml` there.
 
 What Leasyd reads from this data, and why: `docs/gpu-kubernetes.md`. Checked with
 `helm template` (chart 0.176.0) and `otelcol-contrib validate` (0.162.0); end to end on a real
-cluster with `infra/gpu-lab.sh`.
+cluster with `infra/gpu-lab.sh`; the eBPF agent with `infra/ebpf-lab.sh` (k3s on Ubuntu 24.04, kernel 7.0,
+a shop with no OpenTelemetry in it; its capture is `services/compaction/testdata/ebpf-capture.json.gz`).

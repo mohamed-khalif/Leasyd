@@ -33,10 +33,11 @@ LOGINS=obs-state; aws cloudformation describe-stacks --stack-name obs-state >/de
 mkdir -p services/web/dist/install
 cp examples/ec2/setup.sh services/web/dist/install/collector.sh
 cp examples/ruby/leasyd_runtime_metrics.rb examples/aws/cloudwatch-metrics.yaml examples/aws/cloudwatch-logs.yaml examples/aws/lambda-sample.yaml examples/web/leasyd-rum.js \
+  examples/aws/ecs-ebpf.yaml \
   services/web/dist/install/
 mkdir -p services/web/dist/install/kubernetes     # leasyd-k8s.sh fetches its values files from here
 cp examples/kubernetes/leasyd-k8s.sh examples/kubernetes/agent.yaml examples/kubernetes/cluster.yaml \
-  examples/kubernetes/dcgm-exporter.yaml examples/kubernetes/dcgm-counters.csv services/web/dist/install/kubernetes/
+  examples/kubernetes/dcgm-exporter.yaml examples/kubernetes/dcgm-counters.csv examples/kubernetes/ebpf.yaml services/web/dist/install/kubernetes/
 cat > services/web/dist/config.json <<JSON
 { "region": "${AWS_DEFAULT_REGION}", "userPoolId": "$(out "$LOGINS" UserPoolId)",
   "clientId": "$(out "$LOGINS" AppClientId)", "apiBase": "", "ingestUrl": "$(out obs-phaseT2 IngestEndpoint)" }

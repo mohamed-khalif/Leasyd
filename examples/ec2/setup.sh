@@ -5,13 +5,19 @@
 #     and its system logs (journald),
 #   - receives your applications' traces, metrics and logs on localhost:4317 (gRPC) and :4318 (HTTP),
 #   - adds the EC2 details (instance id, type, region, ...) and forwards everything to Leasyd.
+# Unless --no-ebpf, also OpenTelemetry eBPF Instrumentation (OBI, a systemd service): every app on
+# the server (any language, also in Docker or ECS containers) shows up with its requests, errors,
+# latency, connections and traces, with no code change. Traces kept: all with an error, all slower
+# than 1 s, and PERCENT % of the rest (--ebpf-traces, default 10; off: metrics only). Needs Linux 5.8+
+# with BTF (Amazon Linux 2023, Ubuntu 22.04+). On ECS container instances, give the instance role
+# ecs:ListTasks and ecs:DescribeTasks so containers are named after their ECS service.
 # Optional --sample-app also installs a small two-service shop (Python, auto-instrumented) with
 # steady traffic, so you see traces even before your own app is instrumented.
 # Optional --gpu (servers with NVIDIA GPUs, the driver and Docker with NVIDIA's container toolkit):
 # runs NVIDIA's dcgm-exporter in Docker and sends each GPU's usage, memory, temperature, power and
 # errors (Leasyd > GPUs). Slurm: set DCGM_HPC_JOB_DIR to your job-mapping directory to see jobs.
 #
-#   sudo LEASYD_API_KEY=obs_... bash setup.sh [--sample-app] [--gpu]
+#   sudo LEASYD_API_KEY=obs_... bash setup.sh [--sample-app] [--gpu] [--ebpf-traces PERCENT|off] [--no-ebpf]
 #
 # Amazon Linux 2023 or Ubuntu 22.04+/24.04, x86_64 or arm64. Safe to re-run (to change the key too).
 set -euo pipefail
@@ -20,15 +26,22 @@ LEASYD_ENDPOINT="${LEASYD_ENDPOINT:-https://ingest.leasyd.com}"
 HOST_SERVICE="${HOST_SERVICE:-ec2-host}"      # service name for the server's own metrics and logs
 OTELCOL_VERSION="${OTELCOL_VERSION:-0.161.0}"
 DCGM_IMAGE="${DCGM_IMAGE:-nvcr.io/nvidia/k8s/dcgm-exporter:4.6.1-4.8.4-distroless}"
+OBI_VERSION="${OBI_VERSION:-v0.14.0}"
 INSTALL_BASE="${LEASYD_INSTALL_BASE:-https://app.leasyd.com/install}"
-SAMPLE_APP=false GPU=false
-for arg in "$@"; do
-  case "$arg" in
+SAMPLE_APP=false GPU=false EBPF=true EBPF_TRACES=10
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --sample-app) SAMPLE_APP=true ;;
     --gpu) GPU=true ;;
-    *) echo "unknown option $arg (options: --sample-app, --gpu)" >&2; exit 2 ;;
+    --no-ebpf) EBPF=false ;;
+    --ebpf-traces) EBPF_TRACES="${2:?--ebpf-traces needs a percentage or off}"; shift ;;
+    *) echo "unknown option $1 (options: --sample-app, --gpu, --ebpf-traces PERCENT|off, --no-ebpf)" >&2; exit 2 ;;
   esac
+  shift
 done
+if [[ "$EBPF_TRACES" == off ]]; then SAMPLER=always_off EBPF_TRACES=0
+elif [[ "$EBPF_TRACES" =~ ^([0-9]|[1-9][0-9]|100)$ ]]; then SAMPLER=always_on
+else echo "--ebpf-traces: a percentage 0-100, or off" >&2; exit 2; fi
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
 
 case "$(uname -m)" in x86_64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "unsupported CPU $(uname -m)" >&2; exit 1 ;; esac
@@ -69,6 +82,9 @@ receivers:
   journald:                           # system logs
     priority: info
 #GPU_RECEIVER#
+  otlp/ebpf:                          # the eBPF agent (leasyd-ebpf.service) sends here
+    protocols:
+      http: { endpoint: localhost:14318 }
 
 processors:
   memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 25 }
@@ -79,6 +95,16 @@ processors:
   resource/host:                      # the server's own data appears under this service
     attributes:
       - { key: service.name, value: "${env:HOST_SERVICE}", action: insert }
+  tail_sampling/ebpf:                 # eBPF traces: all with an error, all slower than 1 s, a share of the rest
+    decision_wait: 10s
+    num_traces: 50000
+    policies:
+      - { name: errors, type: status_code, status_code: { status_codes: [ERROR] } }
+      - { name: slow, type: latency, latency: { threshold_ms: 1000 } }
+      - name: sample
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${env:LEASYD_EBPF_TRACES_PERCENT}
   batch: { timeout: 5s }
 
 exporters:
@@ -94,6 +120,8 @@ service:
     logs:         { receivers: [otlp],        processors: [memory_limiter, resource_detection, batch],                exporters: [otlphttp/leasyd] }
     metrics/host: { receivers: [hostmetrics], processors: [memory_limiter, resource_detection, resource/host, batch], exporters: [otlphttp/leasyd] }
     logs/host:    { receivers: [journald],    processors: [memory_limiter, resource_detection, resource/host, batch], exporters: [otlphttp/leasyd] }
+    traces/ebpf:  { receivers: [otlp/ebpf],   processors: [memory_limiter, tail_sampling/ebpf, resource_detection, batch], exporters: [otlphttp/leasyd] }
+    metrics/ebpf: { receivers: [otlp/ebpf],   processors: [memory_limiter, resource_detection, batch],                exporters: [otlphttp/leasyd] }
 #GPU_PIPELINE#
 YAML
 if $GPU; then
@@ -121,10 +149,67 @@ OTELCOL_OPTIONS="--config=/etc/otelcol-contrib/config.yaml"
 LEASYD_API_KEY=${LEASYD_API_KEY}
 LEASYD_ENDPOINT=${LEASYD_ENDPOINT}
 HOST_SERVICE=${HOST_SERVICE}
+LEASYD_EBPF_TRACES_PERCENT=${EBPF_TRACES}
 CONF
 chmod 600 /etc/otelcol-contrib/otelcol-contrib.conf
 systemctl enable --now otelcol-contrib >/dev/null
 systemctl restart otelcol-contrib
+
+if $EBPF; then
+  echo "== OpenTelemetry eBPF Instrumentation ${OBI_VERSION} (every app on this server, no code change)"
+  [[ -f /sys/kernel/btf/vmlinux ]] || { echo "!! this kernel has no BTF (/sys/kernel/btf/vmlinux): eBPF skipped; use a current Amazon Linux 2023 / Ubuntu 22.04+ kernel" >&2; EBPF=false; }
+fi
+if $EBPF; then
+  mkdir -p /etc/leasyd
+  if [[ ! -x /usr/local/bin/obi || "$(cat /etc/leasyd/obi.version 2>/dev/null)" != "$OBI_VERSION" ]]; then   # (obi has no --version)
+    d="$(mktemp -d)"
+    rel="https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/releases/download/${OBI_VERSION}"
+    curl -fsSL -o "$d/obi.tgz" "${rel}/obi-${OBI_VERSION}-linux-${ARCH}.tar.gz"
+    curl -fsSL -o "$d/SHA256SUMS" "${rel}/SHA256SUMS"
+    (cd "$d" && grep " obi-${OBI_VERSION}-linux-${ARCH}.tar.gz\$" SHA256SUMS | sed "s| obi-.*| obi.tgz|" | sha256sum -c --quiet) ||
+      { echo "!! the eBPF agent download didn't match its checksum" >&2; exit 1; }
+    tar -xzf "$d/obi.tgz" -C "$d" && install -m 755 "$d/obi" /usr/local/bin/obi && rm -rf "$d"
+    echo "$OBI_VERSION" > /etc/leasyd/obi.version
+  fi
+  cat > /etc/leasyd/obi.yaml <<'YAML'
+# Leasyd's eBPF agent (setup.sh): every app with an open port, named from OTEL_SERVICE_NAME, its ECS
+# service or container, or its program; sent to the local collector (otlp/ebpf), which samples traces.
+discovery:
+  instrument:
+    - open_ports: 1-65535
+metrics:
+  features: [application_red, application_service_graph]
+routes:
+  unmatched: heuristic
+name_resolver:
+  sources: [ecs, dns]
+otel_metrics_export:
+  endpoint: http://localhost:14318
+  protocol: http/protobuf
+  interval: 60s
+otel_traces_export:
+  endpoint: http://localhost:14318
+  protocol: http/protobuf
+YAML
+  cat > /etc/systemd/system/leasyd-ebpf.service <<UNIT
+[Unit]
+Description=Leasyd eBPF agent (OpenTelemetry eBPF Instrumentation)
+After=network-online.target otelcol-contrib.service
+[Service]
+ExecStart=/usr/local/bin/obi --config=/etc/leasyd/obi.yaml
+Environment=OTEL_TRACES_SAMPLER=${SAMPLER}
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+UNIT
+  mountpoint -q /sys/kernel/tracing || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl enable --now leasyd-ebpf >/dev/null
+  systemctl restart leasyd-ebpf
+elif [[ -f /etc/systemd/system/leasyd-ebpf.service ]]; then
+  systemctl disable --now leasyd-ebpf >/dev/null 2>&1 || true
+fi
 
 if $SAMPLE_APP; then
   echo "== installing the sample shop (services shop-api and inventory) and its traffic"
@@ -239,6 +324,7 @@ if systemctl is-active --quiet otelcol-contrib; then
   echo "Done. The collector is running and sending to ${LEASYD_ENDPOINT}."
   echo "Data shows up in Leasyd within a minute or two: Dashboards > Leasyd - Hosts, Metrics (service ${HOST_SERVICE}), Logs$($SAMPLE_APP && echo ", Traces (shop-api, inventory)")$($GPU && echo ", GPUs")."
   echo "Its own log: sudo journalctl -u otelcol-contrib -f"
+  $EBPF && echo "eBPF: every app on this server appears on Leasyd > Service map within a few minutes (log: sudo journalctl -u leasyd-ebpf -f)"
 else
   echo "The collector did not start; see: sudo journalctl -u otelcol-contrib -n 50" >&2
   exit 1

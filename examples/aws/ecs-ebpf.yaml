@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Leasyd for Amazon ECS on EC2: every app in the cluster with its requests, errors, latency,
+  connections and traces, with no code, image or task-definition change. A daemon service runs, on
+  each container instance, OpenTelemetry eBPF Instrumentation (watches every container from the
+  kernel) and the OpenTelemetry Collector (samples traces, forwards to Leasyd). Containers are named
+  after their ECS service. Apps can also send their own OpenTelemetry to the instance on port 4318.
+  Not for Fargate (no host access): use the OpenTelemetry agents there. docs: leasyd.com/docs#ebpf
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: The ECS cluster (EC2 or external instances) to watch.
+  LeasydApiKey:
+    Type: String
+    NoEcho: true
+    AllowedPattern: "obs_[A-Za-z0-9_-]{20,}"
+    Description: A Leasyd API key that sends data (Leasyd > Settings > API keys). Kept in Secrets Manager.
+  TracesPercent:
+    Type: Number
+    Default: 10
+    MinValue: 0
+    MaxValue: 100
+    Description: Traces kept besides every one with an error or slower than 1 s, in percent.
+  LeasydEndpoint:
+    Type: String
+    Default: https://ingest.leasyd.com
+  ObiImage:
+    Type: String
+    Default: otel/ebpf-instrument:v0.14.0
+  CollectorImage:
+    Type: String
+    Default: otel/opentelemetry-collector-contrib:0.162.0
+
+Resources:
+  ApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "leasyd/${AWS::StackName}/api-key"
+      SecretString: !Ref LeasydApiKey
+
+  LogGroup:                          # the agents' own logs (not your apps')
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/leasyd/${AWS::StackName}"
+      RetentionInDays: 7
+
+  ExecutionRole:                     # pulls the images, reads the key, writes the agents' logs
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns: [!Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"]
+      Policies:
+        - PolicyName: read-api-key
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement: [{ Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref ApiKeySecret }]
+
+  TaskRole:                          # the eBPF agent names containers after their ECS service
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }]
+      Policies:
+        - PolicyName: read-ecs-tasks
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ecs:ListTasks, ecs:DescribeTasks]
+                Resource: "*"
+                Condition: { ArnEquals: { "ecs:cluster": !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}" } }
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${AWS::StackName}-leasyd"
+      RequiresCompatibilities: [EC2]
+      NetworkMode: host
+      PidMode: host                  # the eBPF agent sees every process on the instance
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: collector
+          Image: !Ref CollectorImage
+          Essential: true
+          Memory: 512
+          MemoryReservation: 128
+          Command: ["--config=env:LEASYD_COLLECTOR_CONFIG"]
+          Secrets: [{ Name: LEASYD_API_KEY, ValueFrom: !Ref ApiKeySecret }]
+          Environment:
+            - { Name: LEASYD_ENDPOINT, Value: !Ref LeasydEndpoint }
+            - { Name: LEASYD_CLUSTER, Value: !Ref ClusterName }
+            - Name: LEASYD_COLLECTOR_CONFIG
+              Value: !Sub |
+                receivers:
+                  otlp:                      # your apps' own OpenTelemetry (http://<instance>:4318)
+                    protocols:
+                      grpc: { endpoint: "0.0.0.0:4317" }
+                      http: { endpoint: "0.0.0.0:4318" }
+                  otlp/ebpf:                 # the eBPF agent
+                    protocols:
+                      http: { endpoint: "localhost:14318" }
+                processors:
+                  memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 25 }
+                  resource_detection: { detectors: [env, ec2], timeout: 5s, override: false }
+                  resource/cluster:
+                    attributes: [{ key: aws.ecs.cluster.name, value: "${ClusterName}", action: upsert }]
+                  tail_sampling/ebpf:
+                    decision_wait: 10s
+                    num_traces: 50000
+                    policies:
+                      - { name: errors, type: status_code, status_code: { status_codes: [ERROR] } }
+                      - { name: slow, type: latency, latency: { threshold_ms: 1000 } }
+                      - { name: sample, type: probabilistic, probabilistic: { sampling_percentage: ${TracesPercent} } }
+                  batch: { timeout: 5s }
+                exporters:
+                  otlphttp/leasyd:
+                    endpoint: "${!env:LEASYD_ENDPOINT}"
+                    headers: { x-api-key: "${!env:LEASYD_API_KEY}" }
+                    compression: gzip
+                service:
+                  pipelines:
+                    traces:       { receivers: [otlp], processors: [memory_limiter, resource_detection, resource/cluster, batch], exporters: [otlphttp/leasyd] }
+                    metrics:      { receivers: [otlp], processors: [memory_limiter, resource_detection, resource/cluster, batch], exporters: [otlphttp/leasyd] }
+                    logs:         { receivers: [otlp], processors: [memory_limiter, resource_detection, resource/cluster, batch], exporters: [otlphttp/leasyd] }
+                    traces/ebpf:  { receivers: [otlp/ebpf], processors: [memory_limiter, tail_sampling/ebpf, resource_detection, resource/cluster, batch], exporters: [otlphttp/leasyd] }
+                    metrics/ebpf: { receivers: [otlp/ebpf], processors: [memory_limiter, resource_detection, resource/cluster, batch], exporters: [otlphttp/leasyd] }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options: { awslogs-group: !Ref LogGroup, awslogs-region: !Ref "AWS::Region", awslogs-stream-prefix: collector }
+        - Name: ebpf
+          Image: !Ref ObiImage
+          Essential: true
+          Privileged: true
+          User: "0"
+          Memory: 600
+          MemoryReservation: 150
+          DependsOn: [{ ContainerName: collector, Condition: START }]
+          Environment:
+            - { Name: OTEL_EBPF_OPEN_PORT, Value: "1-65535" }             # every process that listens
+            - { Name: OTEL_EBPF_METRICS_FEATURES, Value: "application_red,application_service_graph" }
+            - { Name: OTEL_EBPF_NAME_RESOLVER_SOURCES, Value: "ecs,dns" }
+            - { Name: OTEL_EXPORTER_OTLP_ENDPOINT, Value: "http://localhost:14318" }
+            - { Name: OTEL_EXPORTER_OTLP_PROTOCOL, Value: http/protobuf }
+            - { Name: OTEL_TRACES_SAMPLER, Value: always_on }              # the collector samples
+          LogConfiguration:
+            LogDriver: awslogs
+            Options: { awslogs-group: !Ref LogGroup, awslogs-region: !Ref "AWS::Region", awslogs-stream-prefix: ebpf }
+
+  DaemonService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: leasyd
+      Cluster: !Ref ClusterName
+      TaskDefinition: !Ref TaskDefinition
+      SchedulingStrategy: DAEMON
+      LaunchType: EC2
+
+Outputs:
+  Service:
+    Value: !Sub "${ClusterName}/leasyd: one task per container instance"
+  AgentLogs:
+    Value: !Ref LogGroup

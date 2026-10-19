@@ -1,0 +1,96 @@
+# Leasyd for Kubernetes: the eBPF agent, OpenTelemetry eBPF Instrumentation (OBI), one per node.
+# It watches every app on its node from the kernel, in any language and with no change to the apps,
+# and sends their requests, errors, latency and connections (metrics) and traces to the node's
+# Leasyd agent (agent.yaml, port 14318), which samples the traces and forwards both to Leasyd.
+# Applied by leasyd-k8s.sh (unless --no-ebpf), which fills in __OBI_VERSION__, __CLUSTER__ and
+# __TRACES_SAMPLER__. Design and what it costs: docs/ebpf-design.md.
+#
+# Needs: Linux 5.8+ with BTF (every current EKS, GKE, AKS and Ubuntu / Amazon Linux node), and pods
+# that may run privileged with the host's process IDs (not GKE Autopilot or EKS Fargate).
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: leasyd-ebpf, namespace: leasyd }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: leasyd-ebpf }
+rules:                         # read-only: to name each process after its pod's workload
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: leasyd-ebpf }
+subjects: [{ kind: ServiceAccount, name: leasyd-ebpf, namespace: leasyd }]
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: leasyd-ebpf }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: leasyd-ebpf, namespace: leasyd }
+data:
+  obi.yaml: |
+    attributes:
+      kubernetes:
+        enable: true
+        cluster_name: __CLUSTER__
+    discovery:
+      instrument:
+        - k8s_namespace: "*"           # every app in the cluster ...
+      exclude_instrument:              # ... but Kubernetes' own and Leasyd's
+        - k8s_namespace: "{kube-system,kube-public,kube-node-lease,leasyd}"
+    metrics:
+      # per service and route: requests, errors, latency (HTTP, gRPC, SQL, Redis, Kafka, ...), and
+      # one series per connection for the service map. Network flows and TCP stats stay off.
+      features: [application_red, application_service_graph]
+    routes:
+      unmatched: heuristic             # /orders/123 -> /orders/*: one route, not one per id
+    name_resolver:
+      sources: [k8s, dns]              # peers named after their workload or DNS name, not an IP
+    otel_metrics_export:
+      protocol: http/protobuf
+      interval: 60s
+    otel_traces_export:
+      protocol: http/protobuf
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: { name: leasyd-ebpf, namespace: leasyd, labels: { app.kubernetes.io/name: leasyd-ebpf } }
+spec:
+  selector: { matchLabels: { app.kubernetes.io/name: leasyd-ebpf } }
+  updateStrategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 25% } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: leasyd-ebpf }
+      annotations: { leasyd.com/config: "__CONFIG_HASH__" }   # a config change restarts the pods
+    spec:
+      serviceAccountName: leasyd-ebpf
+      hostPID: true                    # sees every process on the node
+      tolerations: [{ operator: Exists }]
+      priorityClassName: system-node-critical
+      containers:
+        - name: obi
+          image: otel/ebpf-instrument:__OBI_VERSION__
+          args: ["--config=/config/obi.yaml"]
+          securityContext: { privileged: true, runAsUser: 0 }
+          env:
+            - name: NODE_IP
+              valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT     # the node's Leasyd agent (agent.yaml, otlp/ebpf)
+              value: http://$(NODE_IP):14318
+            - name: OTEL_TRACES_SAMPLER            # always_on (the agent samples), or always_off
+              value: __TRACES_SAMPLER__
+          resources:
+            requests: { cpu: 50m, memory: 150Mi }
+            limits: { memory: 600Mi }
+          volumeMounts:
+            - { name: config, mountPath: /config }
+            - { name: kernel-security, mountPath: /sys/kernel/security, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: leasyd-ebpf }
+        - name: kernel-security
+          hostPath: { path: /sys/kernel/security }

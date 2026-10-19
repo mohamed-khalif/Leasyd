@@ -1,0 +1,175 @@
+# eBPF lab workloads: a small shop with NO OpenTelemetry anywhere (no SDK, no agent, no env vars),
+# so everything Leasyd shows about it comes from the eBPF agent. Python, Node.js, PostgreSQL, Redis:
+#   loadgen -> frontend (Python) -> cart (Node.js) -> redis
+#                                -> catalog (Python) -> postgres
+# About 1 in 8 checkouts fail (an unknown product: catalog 404, cart 404, frontend 502), 2% are slow (1.2 s).
+apiVersion: v1
+kind: Namespace
+metadata: { name: shop }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: shop-code, namespace: shop }
+data:
+  frontend.py: |
+    import http.server, json, random, time, urllib.request, urllib.error
+    def get(url):
+        with urllib.request.urlopen(url, timeout=3) as r:
+            return json.loads(r.read())
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            user, product = random.randint(1, 50), random.choice([1, 2, 3, 4, 5, 6, 7, 99])
+            try:
+                if random.random() < 0.02:
+                    time.sleep(1.2)
+                cart = get(f"http://cart:8080/cart/{user}?product={product}")
+                item = get(f"http://catalog:8080/products/{product}")
+                body, code = json.dumps({"cart": cart, "item": item}).encode(), 200
+            except urllib.error.HTTPError as e:
+                body, code = json.dumps({"error": e.code}).encode(), 502
+            self.send_response(code); self.send_header("content-type", "application/json"); self.end_headers(); self.wfile.write(body)
+        def log_message(self, *a): pass
+    http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
+  catalog.py: |
+    import http.server, json, time, psycopg2
+    for _ in range(60):
+        try:
+            db = psycopg2.connect(host="postgres", user="postgres", password="lab", dbname="postgres"); break
+        except Exception:
+            time.sleep(2)
+    db.autocommit = True
+    with db.cursor() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS products (id int primary key, name text, price numeric)")
+        c.execute("INSERT INTO products VALUES (1,'tent',199),(2,'stove',59),(3,'lamp',25),(4,'poles',45),(5,'boots',130),(6,'map',9),(7,'mug',12) ON CONFLICT DO NOTHING")
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            pid = int(self.path.rstrip("/").split("/")[-1])
+            with db.cursor() as c:
+                c.execute("SELECT id, name, price FROM products WHERE id = %s", (pid,))
+                row = c.fetchone()
+            code, body = (200, {"id": row[0], "name": row[1], "price": float(row[2])}) if row else (404, {"error": "no such product"})
+            self.send_response(code); self.send_header("content-type", "application/json"); self.end_headers(); self.wfile.write(json.dumps(body).encode())
+        def log_message(self, *a): pass
+    http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
+  cart.js: |
+    // Redis over its own protocol (no npm packages): one connection, commands queued
+    const http = require("http"), net = require("net");
+    let redis, queue = [], buf = "";
+    function connect() {
+      redis = net.connect(6379, "redis");
+      redis.on("data", (d) => { buf += d; let i; while ((i = buf.indexOf("\r\n")) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 2); if (line[0] !== "$" || line === "$-1") (queue.shift() || (() => {}))(line); } });
+      redis.on("error", () => setTimeout(connect, 1000));
+    }
+    connect();
+    const cmd = (...a) => new Promise((ok) => { queue.push(ok); redis.write(`*${a.length}\r\n` + a.map((x) => `$${Buffer.byteLength(String(x))}\r\n${x}\r\n`).join("")); });
+    http.createServer(async (req, res) => {
+      const u = new URL(req.url, "http://x"), user = u.pathname.split("/").pop(), product = u.searchParams.get("product");
+      await cmd("HINCRBY", `cart:${user}`, product, 1);
+      const n = await cmd("HLEN", `cart:${user}`);
+      const ok = await new Promise((done) => http.get(`http://catalog:8080/products/${product}`, (r) => { r.resume(); done(r.statusCode === 200); }).on("error", () => done(false)));
+      res.writeHead(ok ? 200 : 404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ user, items: n }));
+    }).listen(8080);
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: postgres, namespace: shop }
+spec:
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers: [{ name: postgres, image: "postgres:16-alpine", env: [{ name: POSTGRES_PASSWORD, value: lab }], ports: [{ containerPort: 5432 }] }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres, namespace: shop }
+spec: { selector: { app: postgres }, ports: [{ port: 5432 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: redis, namespace: shop }
+spec:
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers: [{ name: redis, image: "redis:7-alpine", ports: [{ containerPort: 6379 }] }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis, namespace: shop }
+spec: { selector: { app: redis }, ports: [{ port: 6379 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: catalog, namespace: shop }
+spec:
+  selector: { matchLabels: { app: catalog } }
+  template:
+    metadata: { labels: { app: catalog } }
+    spec:
+      containers:
+        - name: catalog
+          image: "python:3.12-slim"
+          command: ["sh", "-c", "pip install -q psycopg2-binary && exec python /code/catalog.py"]
+          volumeMounts: [{ name: code, mountPath: /code }]
+      volumes: [{ name: code, configMap: { name: shop-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: catalog, namespace: shop }
+spec: { selector: { app: catalog }, ports: [{ port: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cart, namespace: shop }
+spec:
+  selector: { matchLabels: { app: cart } }
+  template:
+    metadata: { labels: { app: cart } }
+    spec:
+      containers:
+        - name: cart
+          image: "node:22-alpine"
+          command: ["node", "/code/cart.js"]
+          volumeMounts: [{ name: code, mountPath: /code }]
+      volumes: [{ name: code, configMap: { name: shop-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: cart, namespace: shop }
+spec: { selector: { app: cart }, ports: [{ port: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: frontend, namespace: shop }
+spec:
+  selector: { matchLabels: { app: frontend } }
+  template:
+    metadata: { labels: { app: frontend } }
+    spec:
+      containers:
+        - name: frontend
+          image: "python:3.12-slim"
+          command: ["python", "/code/frontend.py"]
+          volumeMounts: [{ name: code, mountPath: /code }]
+      volumes: [{ name: code, configMap: { name: shop-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: frontend, namespace: shop }
+spec: { selector: { app: frontend }, ports: [{ port: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: loadgen, namespace: shop }
+spec:
+  selector: { matchLabels: { app: loadgen } }
+  template:
+    metadata: { labels: { app: loadgen } }
+    spec:
+      containers:
+        - name: loadgen
+          image: "curlimages/curl:8.11.1"
+          command: ["sh", "-c", "while true; do curl -s -o /dev/null http://frontend:8080/checkout; sleep 0.2; done"]

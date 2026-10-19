@@ -9,6 +9,9 @@
 #   - NVIDIA GPU metrics from dcgm-exporter pods on the same node (prometheus/dcgm), with the node
 #     name as label "node"
 #   - your apps' traces, metrics and logs, sent to the node's agent on port 4317 (gRPC) / 4318 (HTTP)
+#   - what the eBPF agent on the node sees (ebpf.yaml, port 14318): every service's requests, errors,
+#     latency and connections as metrics, and its traces tail-sampled here: all with an error, all
+#     slower than 1 s and LEASYD_EBPF_TRACES_PERCENT % of the rest (docs/ebpf-design.md)
 # and adds to all of it: the pod, namespace, node and workload (k8sattributes), the pod labels team
 # and app.kubernetes.io/name, the cloud details (resource_detection) and k8s.cluster.name.
 # Contract with the Leasyd app: docs/gpu-kubernetes.md.
@@ -27,6 +30,12 @@ ports:
   jaeger-thrift: { enabled: false }
   jaeger-grpc: { enabled: false }
   zipkin: { enabled: false }
+  otlp-ebpf:                 # the node's eBPF agent (ebpf.yaml) sends here, apart from the apps' OTLP
+    enabled: true
+    containerPort: 14318
+    servicePort: 14318
+    hostPort: 14318
+    protocol: TCP
 clusterRole:                 # kubeletstats reads the kubelet's pod list (/pods): Kubernetes 1.33+ checks
   rules:                     # nodes/pods, older versions nodes/proxy; the chart's preset grants neither
     - apiGroups: [""]
@@ -39,6 +48,8 @@ extraEnvs:
     value: https://ingest.leasyd.com
   - name: LEASYD_CLUSTER
     value: my-cluster      # leasyd-k8s.sh --cluster sets it
+  - name: LEASYD_EBPF_TRACES_PERCENT
+    value: "10"            # leasyd-k8s.sh --ebpf-traces sets it
 resources:
   requests: { cpu: 100m, memory: 256Mi }
   limits: { memory: 1Gi }
@@ -61,6 +72,9 @@ config:
         k8s.pod.memory_limit_utilization: { enabled: true }
         k8s.pod.cpu_request_utilization: { enabled: true }
         k8s.pod.memory_request_utilization: { enabled: true }
+    otlp/ebpf:
+      protocols:
+        http: { endpoint: "${env:MY_POD_IP}:14318" }
     prometheus/dcgm:
       config:
         scrape_configs:
@@ -99,6 +113,16 @@ config:
         labels:
           - { tag_name: k8s.pod.labels.team, key: team, from: pod }
           - { tag_name: k8s.pod.labels.app, key: app.kubernetes.io/name, from: pod }
+    tail_sampling/ebpf:      # one node's spans of a trace decide together; a trace id kept by the
+      decision_wait: 10s     # probabilistic policy is kept on every node
+      num_traces: 50000
+      policies:
+        - { name: errors, type: status_code, status_code: { status_codes: [ERROR] } }
+        - { name: slow, type: latency, latency: { threshold_ms: 1000 } }
+        - name: sample
+          type: probabilistic
+          probabilistic:
+            sampling_percentage: ${env:LEASYD_EBPF_TRACES_PERCENT}
     batch:
       timeout: 5s
       send_batch_size: 2000
@@ -122,4 +146,14 @@ config:
       logs:
         receivers: [otlp]
         processors: [memory_limiter, resource_detection, resource/cluster, batch]
+        exporters: [otlphttp/leasyd]
+      # The eBPF agent's data: it names services and adds the Kubernetes details itself (k8sattributes
+      # would match its connections to the node, not the pods), so these pipelines skip that.
+      traces/ebpf:
+        receivers: [otlp/ebpf]
+        processors: [memory_limiter, tail_sampling/ebpf, resource/cluster, batch]
+        exporters: [otlphttp/leasyd]
+      metrics/ebpf:
+        receivers: [otlp/ebpf]
+        processors: [memory_limiter, resource/cluster, batch]
         exporters: [otlphttp/leasyd]
