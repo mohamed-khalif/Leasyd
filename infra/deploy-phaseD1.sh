@@ -14,11 +14,15 @@ PARAM=/obs/demo/api-key
 
 FIRST=""
 if ! aws ssm get-parameter --name "$PARAM" >/dev/null 2>&1; then
-  if infra/tenant.sh status "$TENANT" 2>/dev/null | grep -q '"active"'; then
-    key="$(infra/tenant.sh rotate "$TENANT" 0 2>/dev/null)"
+  # (tenant.sh prints only the key on stdout; its messages on stderr are shown, so a failure says why)
+  if infra/tenant.sh status "$TENANT" 2>/dev/null | grep -q '"status": "active"'; then
+    echo "$TENANT exists: rotating its ingest key"
+    key="$(infra/tenant.sh rotate "$TENANT" 0)" || { echo "rotating the $TENANT key failed (above)" >&2; exit 1; }
   else
-    key="$(infra/tenant.sh create "$TENANT" 2>/dev/null)"
+    echo "creating the $TENANT tenant (also after it was deleted)"
+    key="$(infra/tenant.sh create "$TENANT")" || { echo "creating $TENANT failed (above)" >&2; exit 1; }
   fi
+  [[ -n "$key" ]] || { echo "no key came back for $TENANT" >&2; exit 1; }
   aws ssm put-parameter --name "$PARAM" --type SecureString --value "$key" --overwrite >/dev/null
   unset key
   echo "$TENANT tenant key stored in SSM $PARAM"
