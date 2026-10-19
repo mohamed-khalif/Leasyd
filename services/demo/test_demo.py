@@ -14,8 +14,10 @@ NIGHT = NOON - 12 * 60                          # 03:30 UTC: quietest
 INCIDENT = NOON // demo.INCIDENT_EVERY * demo.INCIDENT_EVERY + 180 + 5   # 5 minutes into an incident
 
 
-def spans(docs):
-    return [s for rs in docs["traces"]["resourceSpans"] for ss in rs["scopeSpans"] for s in ss["spans"]]
+def spans(docs, agents=False):
+    """The shop's spans (or, agents=True, only the support assistant's AI agent spans)."""
+    return [s for rs in docs["traces"]["resourceSpans"] if (svc(rs) == demo.agents.SERVICE) == agents
+            for ss in rs["scopeSpans"] for s in ss["spans"]]
 
 
 def svc(rs):
@@ -41,7 +43,7 @@ def test_traces_are_connected_trees_and_logs_point_at_their_spans():
         assert all(s["parentSpanId"] in ids for s in trace if "parentSpanId" in s)
         assert all(int(s["startTimeUnixNano"]) < int(s["endTimeUnixNano"]) for s in trace)
     assert max(len(t) for t in by_trace.values()) >= 12           # a checkout crosses most services
-    assert len({svc(rs) for rs in docs["traces"]["resourceSpans"]}) == len(demo.SERVICES)
+    assert {svc(rs) for rs in docs["traces"]["resourceSpans"]} == {*demo.SERVICES, demo.agents.SERVICE}
     span_ids = {(s["traceId"], s["spanId"]) for s in ss}
     logs = [r for rl in docs["logs"]["resourceLogs"] for sl in rl["scopeLogs"] for r in sl["logRecords"]
             if sl["scope"]["name"] != "leasyd-rum" and "k8seventsreceiver" not in sl["scope"]["name"]]
@@ -126,3 +128,45 @@ def test_the_cluster_rides_along_and_compacts(tmp_path):
     assert gpus == 16
     events = duckdb.sql(f"SELECT count(*) FROM '{tmp_path}/logs/**/*.parquet' WHERE attributes['k8s.event.reason'] IS NOT NULL").fetchone()[0]
     assert events >= 1   # NOON is a multiple of 5 minutes: the stalled job's FailedScheduling
+
+
+def test_the_support_assistant_sends_agent_sessions_with_their_failures(tmp_path):
+    """agents.py: sessions over several minutes, one trace a turn, GenAI spans whose agent fields
+    compact into columns, and over an hour each failure the Agents page looks for."""
+    import duckdb
+    import compact
+    import ingest
+    hour = range(NOON, NOON + 60)
+    by_trace, sessions, failures = {}, {}, {"tool": set(), "llm": 0, "empty": 0, "loop": 0}
+    for m in hour:
+        ss = spans(demo.documents(m), agents=True)
+        assert json.dumps(ss) == json.dumps(spans(demo.documents(m), agents=True))   # deterministic
+        for s in ss:
+            by_trace.setdefault(s["traceId"], []).append(s)
+    for trace in by_trace.values():
+        a = {s["spanId"]: {x["key"]: next(iter(x["value"].values())) for x in s["attributes"]} for s in trace}
+        [root] = [s for s in trace if "parentSpanId" not in s]
+        assert all(s["parentSpanId"] == root["spanId"] for s in trace if s is not root)
+        sessions.setdefault(a[root["spanId"]]["gen_ai.conversation.id"], set()).add(root["traceId"])
+        tools = [a[s["spanId"]]["gen_ai.tool.name"] for s in trace if a[s["spanId"]]["gen_ai.operation.name"] == "execute_tool"]
+        failures["loop"] += tools.count("searchProducts") >= 5
+        for s in trace:
+            at = a[s["spanId"]]
+            if s.get("status", {}).get("code") == 2:
+                if at["gen_ai.operation.name"] == "execute_tool":
+                    failures["tool"].add(at["gen_ai.tool.name"])
+                else:
+                    failures["llm"] += 1
+            elif at["gen_ai.operation.name"] == "chat" and at["gen_ai.usage.output_tokens"] == "0":
+                failures["empty"] += 1
+    assert 40 <= len(sessions) <= 120 and max(len(t) for t in sessions.values()) >= 3   # conversations span turns
+    assert failures["tool"] == {"initiateReturn", "checkInventory"}
+    assert failures["llm"] >= 1 and failures["empty"] >= 1 and failures["loop"] >= 1
+    body = json.dumps(demo.documents(NOON)["traces"]).encode()
+    ingest.parse("traces", body, "application/json")
+    raw = tmp_path / "t.json.gz"
+    raw.write_bytes(gzip.compress(body))
+    compact.compact("traces", [str(raw)], str(tmp_path / "t"), "b1", "2025-09-16", "15")
+    got = duckdb.sql(f"SELECT count(DISTINCT session_id), sum(gen_ai_input_tokens) > 0, count(gen_ai_tool) > 0 "
+                     f"FROM '{tmp_path}/t/**/*.parquet' WHERE service = 'support-assistant'").fetchone()
+    assert got[0] >= 1 and got[1] and got[2]

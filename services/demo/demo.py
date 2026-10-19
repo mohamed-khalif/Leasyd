@@ -31,6 +31,7 @@ import urllib.request
 
 import boto3
 
+import agents
 import cluster
 
 ENDPOINT = os.environ.get("INGEST_ENDPOINT", "")
@@ -356,13 +357,14 @@ def web(m):
 
 def documents(minute):
     """-> {"traces": doc, "logs": doc, "metrics": doc}: one OTLP JSON request per signal. The shop's
-    Kubernetes cluster and GPUs (cluster.py) ride along in the logs and metrics."""
+    Kubernetes cluster and GPUs (cluster.py) ride along in the logs and metrics, its support
+    assistant's AI agent traces (agents.py) in the traces."""
     m = Minute(minute)
     mets = metrics(m)
     k8s = cluster.documents(minute)
     return {
         "traces": {"resourceSpans": [{"resource": _resource(s, p), "scopeSpans": [{"scope": {"name": s}, "spans": v}]}
-                                     for (s, p), v in sorted(m.spans.items())]},
+                                     for (s, p), v in sorted(m.spans.items())] + agents.resource_spans(minute)},
         "logs": {"resourceLogs": [{"resource": _resource(s, p), "scopeLogs": [{"scope": {"name": s}, "logRecords": v}]}
                                   for (s, p), v in sorted(m.logs.items())] + web(m) + k8s["logs"]},
         "metrics": {"resourceMetrics": [{"resource": _resource(s, p), "scopeMetrics": [{"scope": {"name": s}, "metrics": v}]}

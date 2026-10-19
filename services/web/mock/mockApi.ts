@@ -384,6 +384,8 @@ function rumMock(sql: string): { columns: string[]; rows: unknown[][] } {
 
 // SQL over Kubernetes and GPU data goes to the real query engine over the demo cluster
 const ENGINE_SQL = /DCGM_FI_|'k8s\.|k8s\.event\.reason|k8s\.pod\.|k8s\.node\./;
+// JSON queries over the AI agent columns (Agents page) also go to the real engine
+const AGENT_FIELDS = /"(session_id|gen_ai_[a-z_]+)"/;
 
 function sqlMock(q: { sql: string }) {
   if (!/^\s*(select|with)\b/i.test(q.sql)) return [400, { error: "only one SELECT query is allowed" }];
@@ -784,6 +786,13 @@ export function mockApi(): Plugin {
               res.statusCode = r.status;
               res.end(await r.text());
             }, () => { res.statusCode = 503; res.end(JSON.stringify({ error: "start mock/engine_server.py for Kubernetes and GPU data" })); });
+            return;
+          }
+          if (!parsed.promql && !parsed.sql && AGENT_FIELDS.test(body)) {   // the Agents page: the real engine too
+            fetch("http://127.0.0.1:5299/query", { method: "POST", body }).then(async (r) => {
+              res.statusCode = r.status;
+              res.end(await r.text());
+            }, () => { res.statusCode = 503; res.end(JSON.stringify({ error: "start mock/engine_server.py for AI agent data" })); });
             return;
           }
           if (parsed.promql || parsed.sql) {

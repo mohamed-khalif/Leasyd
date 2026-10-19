@@ -169,6 +169,6 @@ Phase 4 recommendation (STOP for choice) -> Phase 6.
 ## AI agents: sessions, transcripts, silent failures (asked 2026-10-19): docs/agents-design.md
 - [x] Design: agent fields lifted to their own Parquet columns at compaction (prompts stay in the attribute map, never read by lists); session_id bloom for transcripts; the page = aggregate queries over those columns; issues and alerts with no AI and no stored state
 - [x] A1 engine: 8 agent columns (session_id, gen_ai_operation/model/agent/tool, input/output tokens, cost) in compaction and the fast lane; session_id in the per-file blooms and day digests and accepted by `match`; API, SQL page and Leasyd AI know the columns. Tests: extraction (3 SDK spellings, non-agent spans NULL, bloom), end to end through the local engine (session aggregates across a trace's spans, a session lookup reads 1 of 3 files). 250 engine tests pass
-- [ ] A2 demo agent traffic and the engine mock's JSON queries
+- [x] A2 demo agent traffic: services/demo/agents.py, the shop's support assistant (sessions over several minutes, tool calls, the five failure kinds at realistic rates), in the demo tenant's traces and the engine mock; the mock sends Agents-page JSON queries to the real engine (POST /query). Demo tests: deterministic, connected traces, sessions span turns, every failure kind within an hour, compacts into the agent columns
 - [ ] A3 Agents page and session transcript
 - [ ] A4 issues, alert templates, Get started, docs

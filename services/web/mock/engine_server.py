@@ -1,6 +1,8 @@
-"""The web app's local preview of Kubernetes and GPU data: Leasyd's real query engine (in-process,
-services/compaction/localengine.py) over the demo cluster (services/demo/cluster.py) for the last
-HOURS hours. mock/mockApi.ts sends it the SQL that reads Kubernetes or GPU data.
+"""The web app's local preview of Kubernetes, GPU and AI agent data: Leasyd's real query engine
+(in-process, services/compaction/localengine.py) over the demo cluster (services/demo/cluster.py) and
+the demo support assistant's agent traces (services/demo/agents.py) for the last HOURS hours.
+mock/mockApi.ts sends it the SQL that reads Kubernetes or GPU data (POST /sql) and the JSON queries
+of the Agents page (POST /query).
 
     python3 mock/engine_server.py [HOURS=6]      # then: npx vite --mode mock
 """
@@ -14,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "..", "compaction"), os.path.join(HERE, "..", "..", "demo")]
 
 from localengine import LocalEngine, load_minutes  # noqa: E402
+import agents  # noqa: E402
 import cluster  # noqa: E402
 
 HOURS = float(sys.argv[1]) if len(sys.argv) > 1 else 6
@@ -24,7 +27,11 @@ t0 = time.time()
 
 def docs(m):
     d = cluster.documents(m)
-    return {"metrics": {"resourceMetrics": d["metrics"]}, "logs": {"resourceLogs": d["logs"]}}
+    out = {"metrics": {"resourceMetrics": d["metrics"]}, "logs": {"resourceLogs": d["logs"]}}
+    spans = agents.resource_spans(m)
+    if spans:
+        out["traces"] = {"resourceSpans": spans}
+    return out
 
 
 load_minutes(eng, docs, range(now - int(HOURS * 60), now))
@@ -35,7 +42,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         q = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         try:
-            out, status = eng.sql(q["sql"], q["start"], q["end"], services=q.get("services")), 200
+            if self.path == "/query":   # a JSON query, as /v1/app/query takes it
+                out, status = eng.query_json(q), 200
+            else:
+                out, status = eng.sql(q["sql"], q["start"], q["end"], services=q.get("services")), 200
         except Exception as e:   # noqa: BLE001  (a preview: say what went wrong)
             out, status = {"error": str(e)}, 400
         body = json.dumps(out).encode()
