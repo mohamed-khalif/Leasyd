@@ -374,9 +374,9 @@ def summaries_backfill(job):
                 _batch_write(new)
                 keep = {(it["pk"]["S"], it["sk"]["S"]) for it in new}
                 stale = [it for it in old if (it["pk"]["S"], it["sk"]["S"]) not in keep]
+                # Unindexed, the replaced files are never read; the bucket's 35-day rule removes them (this role
+                # may not delete compacted data).
                 _batch_delete([{"pk": it["pk"], "sk": it["sk"]} for it in stale])
-                fresh = {w["key"] for w in summaries}
-                _delete_keys([k for it in stale if (k := it["file_path"]["S"].split(f"s3://{BUCKET}/", 1)[1]) not in fresh])
                 _register_summaries(tenant, summaries)
                 done += [f"{w['table']} {w['dt']}T{w['hour']}" for w in summaries]
             finally:
