@@ -317,6 +317,7 @@ LEASYD_API_KEY=YOUR_KEY bash leasyd-k8s.sh --cluster prod [--gpu] [--no-logs]</c
         <li>Data is sent and shown over HTTPS only, and encrypted at rest on AWS (us-east-1).</li>
         <li>Each account's data is stored separately; every query runs with credentials that can only read that account's data.</li>
         <li>API keys are stored as hashes; check secrets are encrypted with a dedicated key.</li>
+        <li>A signed-in session ends after 15 minutes without activity in any of its tabs.</li>
         <li>Leasyd stores what you send as it is: keep passwords, card numbers and other sensitive personal data out of logs and attributes (the OpenTelemetry Collector can remove or mask them before they leave your systems).</li>
       </ul>
       <p>Found a security problem? Email <a href="mailto:support@leasyd.com">support@leasyd.com</a>. See also our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.</p>

@@ -2,6 +2,7 @@ import type React from "react";
 import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, me } from "./api";
 import { idToken, signOut } from "./auth";
+import { isIdle, useIdleSignOut } from "./idle";
 import { getConfig } from "./config";
 import { CONTACT_EMAIL, Shell } from "./Shell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -102,11 +103,22 @@ export function App() {
       setNotice(`Our self-serve demo has closed. Book a demo and we'll walk you through Leasyd: ${CONTACT_EMAIL}`);
       location.hash = "/";
     }
+    if (isIdle()) {   // back after a break: signed out before anything loads
+      signOut();
+      setNotice("You were signed out after 15 minutes without activity. Sign in again to continue.");
+      return setUser(null);
+    }
     if (!(await idToken())) return setUser(null);
     // Signed out only when the API says so; any other failure is shown, with Retry.
     me().then(setUser, (e: Error) => (e instanceof ApiError && (e.status === 401 || e.status === 403) ? setUser(null) : setMeError(e.message)));
   }, []);
   useEffect(() => { loadUser(); }, [loadUser]);
+  const idle = useCallback(() => {
+    signOut();
+    setUser(null);
+    setNotice("You were signed out after 15 minutes without activity. Sign in again to continue.");
+  }, []);
+  useIdleSignOut(!!user, idle);
 
   const ctx: Ctx = useMemo(() => ({ range, tick, now, go }), [range, tick, now, go]);   // the same object until one changes
 

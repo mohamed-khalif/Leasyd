@@ -7,6 +7,7 @@ import {
   AuthenticationDetails, CognitoUser, CognitoUserPool, CognitoUserSession,
 } from "amazon-cognito-identity-js";
 import { getConfig } from "./config";
+import { markActive } from "./idle";
 
 let pool: CognitoUserPool | null = null;
 function userPool(): CognitoUserPool {
@@ -22,7 +23,7 @@ export function signIn(email: string, password: string): Promise<SignInResult> {
   const details = new AuthenticationDetails({ Username: email.trim().toLowerCase(), Password: password });
   return new Promise((resolve, reject) => {
     user.authenticateUser(details, {
-      onSuccess: () => resolve({ kind: "ok" }),
+      onSuccess: () => { markActive(); resolve({ kind: "ok" }); },
       onFailure: (err) => reject(friendly(err)),
       newPasswordRequired: () =>
         resolve({
@@ -30,7 +31,7 @@ export function signIn(email: string, password: string): Promise<SignInResult> {
           complete: (pw) =>
             new Promise((res, rej) =>
               user.completeNewPasswordChallenge(pw, {}, {
-                onSuccess: () => res(),
+                onSuccess: () => { markActive(); res(); },
                 onFailure: (err) => rej(friendly(err)),
               })),
         }),
