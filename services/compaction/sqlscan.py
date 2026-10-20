@@ -33,6 +33,13 @@ TABLE_COLUMNS = {
                           "is_monotonic", "value", "count", "sum", "min", "max", "flags", "bucket_counts",
                           "explicit_bounds", "quantiles", "scale", "zero_count", "positive", "negative", "exemplars"},
 }
+TABLE_COLUMNS.update({   # summaries (compact.SUMMARIES)
+    "svc_1m": {"ts", "service", "platform", "requests", "errors", "duration_ns_sum", "namespace", "version", "language",
+               "runtime", "runtime_version", "k8s_namespace", "k8s_deployment", "k8s_pod", "cloud", "account", "region",
+               "zone", "host"},
+    "edge_1m": {"ts", "source", "target", "calls", "errors"},
+    "rum": {"ts", "service", "trace_id", "body", "severity_number", "attributes", "resource_attributes"},
+})
 _INTEGER_TYPES = {"TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT"}
 _SERVICE_LIMIT = 50
 

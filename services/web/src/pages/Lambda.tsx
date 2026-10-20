@@ -20,7 +20,6 @@ import { isError } from "../lib/telemetry";
 import { useRangeWindow } from "../useNow";
 
 const ENTRY = "(kind IN (2, 5) OR parent_span_id IS NULL)";
-const TRACED = "resource_attributes['cloud.platform'] = 'aws_lambda'";
 // CloudWatch's per-function series (it also sends each function by alias / version, and account totals)
 const PER_FN = "attributes['FunctionName'] IS NOT NULL AND attributes['Resource'] IS NULL AND attributes['ExecutedVersion'] IS NULL";
 const CW = "metric_name IN ('aws.lambda.invocations', 'aws.lambda.errors', 'aws.lambda.duration')";
@@ -41,9 +40,9 @@ export function Lambda({ ctx, fn }: { ctx: Ctx; fn?: string }) {
 function Functions({ ctx }: { ctx: Ctx }) {
   const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
-  const traced = useSql(`SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,
-      any_value(resource_attributes['cloud.region']) AS region, any_value(resource_attributes['cloud.account.id']) AS account
-    FROM spans WHERE ${TRACED} AND ${ENTRY} GROUP BY 1`, w, "t" + key);
+  const traced = useSql(`SELECT service, sum(requests) AS n, sum(errors) AS e, sum(duration_ns_sum) / nullif(sum(requests), 0) / 1e6 AS ms,
+      any_value(region) AS region, any_value(account) AS account
+    FROM svc_1m WHERE platform = 'aws_lambda' GROUP BY 1 HAVING sum(requests) > 0`, w, "t" + key);   // per-minute summaries
   const cw = useSql(`SELECT service, ${CW_AGGS}, any_value(resource_attributes['cloud.region']) AS region,
       any_value(resource_attributes['cloud.account.id']) AS account
     FROM metrics WHERE ${CW} AND ${PER_FN} GROUP BY 1`, w, "c" + key);

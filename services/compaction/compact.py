@@ -133,6 +133,70 @@ ID_COLUMNS = {"logs": ("trace_id",), "traces": ("trace_id", "session_id"), "metr
 
 SIGNALS = ("logs", "traces", "metrics")
 
+# Summaries (docs/summaries.md): small tables derived from a signal's Parquet as it is written (fast lane
+# and compaction), so pages read them instead of every raw record. table -> (source signal, SQL over {src}).
+# The engine reads them as SQL tables of the same names. Rows of the request filter below match the
+# Services page's "requests" (server or entry spans).
+_REQ = "(kind IN (2, 5) OR parent_span_id IS NULL)"
+_SVC_ATTRS = {"namespace": "service.namespace", "version": "service.version", "language": "telemetry.sdk.language",
+              "runtime": "process.runtime.name", "runtime_version": "process.runtime.version",
+              "k8s_namespace": "k8s.namespace.name", "k8s_deployment": "k8s.deployment.name", "k8s_pod": "k8s.pod.name",
+              "cloud": "cloud.provider", "account": "cloud.account.id", "region": "cloud.region",
+              "zone": "cloud.availability_zone", "host": "host.name"}
+SUMMARIES = {
+    # per minute, service and platform: requests, errors, their total duration; the service's details
+    "svc_1m": ("traces", f"""
+        SELECT time_bucket(INTERVAL 1 MINUTE, ts) AS ts, service, resource_attributes['cloud.platform'] AS platform,
+          count(*) FILTER (WHERE {_REQ}) AS requests,
+          count(*) FILTER (WHERE {_REQ} AND status_code = 2) AS errors,
+          (sum(duration_ns) FILTER (WHERE {_REQ}))::BIGINT AS duration_ns_sum,
+          """ + ", ".join(f"any_value(resource_attributes['{k}']) AS {n}" for n, k in _SVC_ATTRS.items()) + """
+        FROM {src} GROUP BY ALL"""),
+    # per minute: calls from one service to another (a span whose parent is another service's)
+    "edge_1m": ("traces", """
+        SELECT time_bucket(INTERVAL 1 MINUTE, c.ts) AS ts, p.service AS source, c.service AS target,
+          count(*) AS calls, count(*) FILTER (WHERE c.status_code = 2) AS errors
+        FROM {src} c JOIN {src} p ON c.trace_id = p.trace_id AND c.parent_span_id = p.span_id
+        WHERE c.service <> p.service GROUP BY ALL"""),
+    # the browser script's events only (the Web page), with the columns it reads
+    "rum": ("logs", """
+        SELECT ts, service, trace_id, body, severity_number, attributes, resource_attributes FROM {src}
+        WHERE resource_attributes['telemetry.sdk.name'] = 'leasyd-rum'"""),
+}
+
+
+def summarize(signal, written, out_dir, batch_id):
+    """The summaries of a signal's just-written Parquet files (compact()'s result): one file per summary and
+    event hour, as dicts like compact()'s (service "all", an empty bloom). Same inputs, same names."""
+    paths = [w["path"] for w in written]
+    out = []
+    if not paths:
+        return out
+    con = duckdb.connect()
+    try:
+        con.execute("SET TimeZone='UTC'")
+        files = ", ".join("'" + p.replace("'", "''") + "'" for p in paths)
+        con.execute(f"CREATE TEMP VIEW src AS SELECT * FROM read_parquet([{files}], union_by_name = true)")
+        for table, (source, sql) in SUMMARIES.items():
+            if source != signal:
+                continue
+            con.execute(f"CREATE OR REPLACE TEMP TABLE s AS {sql.format(src='src')}")
+            hours = con.execute("SELECT DISTINCT strftime(ts, '%Y-%m-%d'), strftime(ts, '%H') FROM s ORDER BY 1, 2").fetchall()
+            for dt, hour in hours:
+                rel = f"dt={dt}/hour={hour}/service=all/part-{batch_id}-000.parquet"
+                path = os.path.join(out_dir, table, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                where = f"strftime(ts, '%Y-%m-%d') = '{dt}' AND strftime(ts, '%H') = '{hour}'"
+                con.execute(f"COPY (SELECT * FROM s WHERE {where} ORDER BY ts) TO '{path}' (FORMAT parquet, COMPRESSION zstd)")
+                n, lo, hi = con.execute(f"SELECT count(*), strftime(min(ts), '%Y-%m-%dT%H:%M:%S.%fZ'), "
+                                        f"strftime(max(ts), '%Y-%m-%dT%H:%M:%S.%fZ') FROM s WHERE {where}").fetchone()
+                out.append({"table": table, "service": "all", "dt": dt, "hour": hour, "part": 0, "relpath": rel,
+                            "path": path, "rows": n, "min_ts": lo, "max_ts": hi, "size_bytes": os.path.getsize(path),
+                            "bloom": _empty_bloom()})
+        return out
+    finally:
+        con.close()
+
 
 def bloom_fields(signal, bloom_attributes=DEFAULT_BLOOM_ATTRIBUTES):
     """Fields in a signal's bloom filters: the ID columns (trace_id; for spans also session_id) plus
@@ -500,6 +564,12 @@ def _select_group(con, service, dt, hour, signal="logs"):
     return con.execute("SELECT count(*) FROM grp").fetchone()[0]
 
 
+def _empty_bloom(fpp=bloom.DEFAULT_FPP):
+    b = bloom.Bloom.for_capacity(0, fpp)
+    b.n = 0
+    return b
+
+
 def _bloom_for(con, table, fields, fpp, where="true"):
     """Bloom filter of the distinct values of `fields` (trace_id, or an
     attribute key) in the rows of `table` matching `where`."""
@@ -513,9 +583,7 @@ def _bloom_for(con, table, fields, fpp, where="true"):
                          f"WHERE {where} AND attributes[?] IS NOT NULL")
             params += [field, field, field]
     if not parts:
-        b = bloom.Bloom.for_capacity(0, fpp)
-        b.n = 0
-        return b
+        return _empty_bloom(fpp)
     sql = "SELECT DISTINCT t FROM (" + " UNION ALL ".join(parts) + ")"
     n = con.execute(f"SELECT count(*) FROM ({sql})", params).fetchone()[0]
     b = bloom.Bloom.for_capacity(n, fpp)

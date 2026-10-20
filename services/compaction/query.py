@@ -608,7 +608,8 @@ def _out_of_fds(e):
 
 # ------------------------------------------------------------ SQL (read-only, one tenant)
 
-SQL_TABLES = {"logs": "logs", "spans": "traces", "metrics": "metrics"}   # table -> signal
+SQL_TABLES = {"logs": "logs", "spans": "traces", "metrics": "metrics",   # table -> signal
+              **{t: t for t in compact.SUMMARIES}}                         # summaries: their own
 SQL_MAX_BYTES = int(os.environ.get("SQL_MAX_BYTES", str(1 << 30)))       # files one SQL query may read (29 s API limit)
 SQL_MAX_ROWS = 10_000
 SQL_MAX_FILES = 4_000
@@ -911,13 +912,14 @@ def _run_locked_sql(work, sql, start, end, cancel, parquet, raw, fs=None):
                 compact.load_rows(con, [local], parsed[2], parsed[3], signal)
                 con.execute(f"CREATE TEMP TABLE raw_{table}_{i} AS SELECT * FROM rows")
                 parts.append(f"SELECT * FROM raw_{table}_{i}")
-            if not parts:   # no data: an empty table with the signal's columns
+            if not parts:   # no data: an empty table with the table's columns
+                source, derive = compact.SUMMARIES.get(table, (signal, None))
                 empty = os.path.join(work, f"empty-{table}.json")
                 with open(empty, "w") as fh:
                     json.dump({"logs": {"resourceLogs": []}, "traces": {"resourceSpans": []},
-                               "metrics": {"resourceMetrics": []}}[signal], fh)
-                compact.load_rows(con, [empty], "2000-01-01", "00", signal)
-                con.execute(f"CREATE TEMP TABLE empty_{table} AS SELECT * FROM rows")
+                               "metrics": {"resourceMetrics": []}}[source], fh)
+                compact.load_rows(con, [empty], "2000-01-01", "00", source)
+                con.execute(f"CREATE TEMP TABLE empty_{table} AS " + (derive.format(src="rows") if derive else "SELECT * FROM rows"))
                 parts.append(f"SELECT * FROM empty_{table}")
             if signal in compact.COLUMNS_SINCE:
                 parts.append(compact.COLUMNS_SINCE[signal])

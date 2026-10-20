@@ -1,7 +1,8 @@
 // Web monitoring (real users): what the browser script (examples/web/leasyd-rum.js, served at
 // /install/leasyd-rum.js) sends through POST /v1/rum, stored as the tenant's logs with
 // telemetry.sdk.name = leasyd-rum and rum.type = page_view | web_vital | js_error | api_call
-// (services/ingest/rum.py). Per site (service): page views and visits, Core Web Vitals at the 75th
+// (services/ingest/rum.py), read here from the rum table: those records only (compact.SUMMARIES).
+// Per site (service): page views and visits, Core Web Vitals at the 75th
 // percentile (as Google rates them) with the share of good ones, pages, JavaScript errors, failing
 // or slow API calls (each linked to its backend trace) and browsers; a visit opens with its events.
 import { useState } from "react";
@@ -37,7 +38,7 @@ export function Web({ ctx }: { ctx: Ctx }) {
   const w = useRangeWindow(ctx);
   const key = ctx.range.key + ctx.tick;
   const apps = useSql(`SELECT service, count(*) FILTER (WHERE ${A("rum.type")} = 'page_view') AS views
-    FROM logs WHERE ${RUM} GROUP BY 1 ORDER BY 2 DESC`, w, "apps" + key);
+    FROM rum WHERE ${RUM} GROUP BY 1 ORDER BY 2 DESC`, w, "apps" + key);
   const list = rows(apps.data).map((r) => String(r.service));
   const [picked, setPicked] = useState<string | null>(null);
   const app = picked && list.includes(picked) ? picked : list[0];
@@ -80,29 +81,29 @@ function Site({ ctx, app, w, k }: { ctx: Ctx; app: string; w: { start: string; e
       count(*) FILTER (WHERE ${A("rum.type")} = 'api_call' AND (TRY_CAST(${A("http.response.status_code")} AS INT) >= 500
                                                              OR ${A("http.response.status_code")} = '0')) AS failed_calls,
       quantile_cont(${N("rum.load_ms")}, 0.75) FILTER (WHERE ${A("rum.type")} = 'page_view' AND ${A("rum.spa")} = 'false') AS load75
-    FROM logs WHERE ${S}`, w, "tot" + k);
+    FROM rum WHERE ${S}`, w, "tot" + k);
   const vitals = useSql(`SELECT ${A("rum.vital.name")} AS name, quantile_cont(${N("rum.vital.value")}, 0.75) AS p75, count(*) AS n,
       count(*) FILTER (WHERE ${A("rum.vital.rating")} = 'good') AS good
-    FROM logs WHERE ${S} AND ${A("rum.type")} = 'web_vital' GROUP BY 1`, w, "vit" + k);
+    FROM rum WHERE ${S} AND ${A("rum.type")} = 'web_vital' GROUP BY 1`, w, "vit" + k);
   const views = useSql(`SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t,
       count(*) FILTER (WHERE ${A("rum.type")} = 'page_view') AS views, count(*) FILTER (WHERE ${A("rum.type")} = 'js_error') AS errors
-    FROM logs WHERE ${S} GROUP BY 1 ORDER BY 1`, w, "views" + k);
+    FROM rum WHERE ${S} GROUP BY 1 ORDER BY 1`, w, "views" + k);
   const pages = useSql(`SELECT ${A("url.path")} AS page, count(*) FILTER (WHERE ${A("rum.type")} = 'page_view') AS views,
       quantile_cont(${N("rum.load_ms")}, 0.75) FILTER (WHERE ${A("rum.type")} = 'page_view' AND ${A("rum.spa")} = 'false') AS load75,
       quantile_cont(${N("rum.vital.value")}, 0.75) FILTER (WHERE ${A("rum.vital.name")} = 'LCP') AS lcp75,
       quantile_cont(${N("rum.vital.value")}, 0.75) FILTER (WHERE ${A("rum.vital.name")} = 'INP') AS inp75,
       count(*) FILTER (WHERE ${A("rum.type")} = 'js_error') AS errors
-    FROM logs WHERE ${S} GROUP BY 1 ORDER BY 2 DESC LIMIT 50`, w, "pages" + k);
+    FROM rum WHERE ${S} GROUP BY 1 ORDER BY 2 DESC LIMIT 50`, w, "pages" + k);
   const errors = useSql(`SELECT ${A("error.message")} AS message, count(*) AS n, count(DISTINCT ${A("rum.session_id")}) AS visits,
       max(ts) AS last, any_value(${A("url.path")}) AS page, any_value(${A("error.source")}) AS source,
       any_value(${A("rum.session_id")}) AS session
-    FROM logs WHERE ${S} AND ${A("rum.type")} = 'js_error' GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, w, "err" + k);
+    FROM rum WHERE ${S} AND ${A("rum.type")} = 'js_error' GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, w, "err" + k);
   const calls = useSql(`SELECT ${A("http.request.method")} AS method, ${A("url.full")} AS url, ${A("http.response.status_code")} AS status,
       count(*) AS n, quantile_cont(${N("rum.duration_ms")}, 0.75) AS p75, max(trace_id) AS trace
-    FROM logs WHERE ${S} AND ${A("rum.type")} = 'api_call' GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT 20`, w, "calls" + k);
+    FROM rum WHERE ${S} AND ${A("rum.type")} = 'api_call' GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT 20`, w, "calls" + k);
   const browsers = useSql(`SELECT resource_attributes['browser.name'] AS browser, resource_attributes['device.type'] AS device,
       count(DISTINCT ${A("rum.session_id")}) AS visits, count(*) FILTER (WHERE ${A("rum.type")} = 'js_error') AS errors
-    FROM logs WHERE ${S} GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 12`, w, "br" + k);
+    FROM rum WHERE ${S} GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 12`, w, "br" + k);
 
   const t = rows(totals.data)[0] ?? {};
   const byVital = new Map(rows(vitals.data).map((r) => [String(r.name), r]));
@@ -227,7 +228,7 @@ function tone(name: string, v: unknown) {
 function Visit({ ctx, app, session, w, onClose }: { ctx: Ctx; app: string; session: string; w: { start: string; end: string }; onClose: () => void }) {
   const ev = useSql(`SELECT ts, severity_text AS sev, body, ${A("rum.type")} AS type, ${A("url.path")} AS page, trace_id,
       resource_attributes['browser.name'] AS browser, resource_attributes['os.name'] AS os, resource_attributes['device.type'] AS device
-    FROM logs WHERE ${RUM} AND service = ${q(app)} AND ${A("rum.session_id")} = ${q(session)} ORDER BY ts LIMIT 500`, w, "visit" + session);
+    FROM rum WHERE ${RUM} AND service = ${q(app)} AND ${A("rum.session_id")} = ${q(session)} ORDER BY ts LIMIT 500`, w, "visit" + session);
   const list = rows(ev.data);
   const first = list[0];
   return (

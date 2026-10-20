@@ -28,15 +28,12 @@ const ATTRS: [string, string][] = [
   ["cloud", "cloud.provider"], ["platform", "cloud.platform"], ["account", "cloud.account.id"], ["region", "cloud.region"], ["zone", "cloud.availability_zone"],
   ["host", "host.name"],
 ];
-const NODES_SQL = `SELECT service, count(*) FILTER (WHERE ${ENTRY}) AS requests,
-  count(*) FILTER (WHERE ${ENTRY} AND status_code = 2) AS errors,
-  avg(duration_ns) FILTER (WHERE ${ENTRY}) / 1e6 AS avg_ms,
-  ${ATTRS.map(([k, a]) => `any_value(resource_attributes['${a}']) AS ${k}`).join(", ")}
-FROM spans GROUP BY service`;
-const EDGES_SQL = `SELECT p.service AS source, c.service AS target, count(*) AS calls,
-  count(*) FILTER (WHERE c.status_code = 2) AS errors
-FROM spans c JOIN spans p ON c.trace_id = p.trace_id AND c.parent_span_id = p.span_id
-WHERE c.service <> p.service GROUP BY 1, 2`;
+// From the per-minute summaries (compact.SUMMARIES svc_1m / edge_1m), not every span.
+const NODES_SQL = `SELECT service, sum(requests) AS requests, sum(errors) AS errors,
+  sum(duration_ns_sum) / nullif(sum(requests), 0) / 1e6 AS avg_ms,
+  ${ATTRS.map(([k]) => `any_value(${k}) AS ${k}`).join(", ")}
+FROM svc_1m GROUP BY service`;
+const EDGES_SQL = `SELECT source, target, sum(calls) AS calls, sum(errors) AS errors FROM edge_1m GROUP BY 1, 2`;
 
 const errPct = (n: { requests: number; errors: number }) => (n.requests ? (n.errors / n.requests) * 100 : 0);
 const health = (pct: number) => (pct >= 5 ? "critical" : pct >= 1 ? "warning" : "ok");

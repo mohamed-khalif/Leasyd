@@ -384,7 +384,7 @@ function rumMock(sql: string): { columns: string[]; rows: unknown[][] } {
 
 // SQL over Kubernetes and GPU data goes to the real query engine over the demo cluster, and so do the
 // service map's (its nodes read k8s attributes; its edges join the demo shop's spans)
-const ENGINE_SQL = /DCGM_FI_|'k8s\.|k8s\.event\.reason|k8s\.pod\.|k8s\.node\.|JOIN spans p ON/;
+const ENGINE_SQL = /DCGM_FI_|'k8s\.|k8s\.event\.reason|k8s\.pod\.|k8s\.node\.|FROM (svc_1m|edge_1m)\b/;
 // JSON queries over the AI agent columns (Agents page) also go to the real engine
 const AGENT_FIELDS = /"(session_id|gen_ai_[a-z_]+)"/;
 // ... and those over the eBPF agent's metrics (the service map's eBPF view: services/demo/ebpf.py)

@@ -218,6 +218,8 @@ def _invoke_worker(payload):
 # -------------------------------------------------------------------- worker
 
 def worker(event, context):
+    if "summaries_backfill" in event:
+        return summaries_backfill(event["summaries_backfill"])
     tenant = layout.check_tenant(event["tenant"])
     signal, dt, hour, batch_id = event["signal"], event["dt"], event["hour"], event["batch_id"]
     if signal not in compact.SIGNALS:
@@ -260,6 +262,8 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
                 bloom_attributes=BLOOM_ATTRIBUTES, id_digests=digests,
             )
             _upload(_name(written, layout.data_prefix(tenant, signal)))
+            summaries = _summaries(tenant, signal, written, work, batch_id, layout.data_prefix)
+            _upload(summaries)
             # ID digests for the day and hour filters (same keys on a re-run).
             for (day, ev_hour), groups in digests.items():
                 for g, buf in groups.items():
@@ -278,7 +282,9 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
                                 ExpressionAttributeValues={":one": {"N": "1"}, ":fs": fieldsets})
             now = datetime.now(timezone.utc).isoformat()
             plan_pk = layout.plan_pk(tenant, signal, dt, hour)
-            _batch_write([_index_item(tenant, signal, batch_id, w, now, plan_pk) for w in written])
+            _batch_write([_index_item(tenant, signal, batch_id, w, now, plan_pk) for w in written]
+                         + [_index_item(tenant, w["table"], batch_id, w, now, plan_pk) for w in summaries])
+            _register_summaries(tenant, summaries)
             if written:  # registry of services, for lookups across all of them
                 ddb.update_item(
                     TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}},
@@ -325,6 +331,68 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
     )
 
 
+# ------------------------------------------------------- summaries backfill
+
+def summaries_backfill(job):
+    """{"tenant", "day"}: the summaries (compact.SUMMARIES) of that day's compacted hours that have none,
+    i.e. compacted before summaries existed (infra/backfill-summaries.sh runs it per day). Idempotent:
+    an hour that has a summary file is skipped; a re-run rewrites the same keys."""
+    tenant, day = layout.check_tenant(job["tenant"]), str(job["day"])
+    datetime.strptime(day, "%Y-%m-%d")
+    done = []
+    for signal in sorted({src for src, _ in compact.SUMMARIES.values()}):
+        tables = [t for t, (src, _) in compact.SUMMARIES.items() if src == signal]
+        services = ddb.get_item(TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}}
+                                ).get("Item", {}).get("services", {}).get("SS", [])
+        for hour in (f"{h:02d}" for h in range(24)):
+            if all(_has_entries(tenant, t, "all", day, hour) for t in tables):
+                continue
+            items = [it for svc in services for it in _entries(tenant, signal, svc, day, hour) if it.get("kind", {}).get("S") == "parquet"]
+            if not items:
+                continue
+            work = tempfile.mkdtemp(dir="/tmp")
+            try:
+                written = []
+                for i, it in enumerate(items):
+                    local = os.path.join(work, "in", f"{i:05d}.parquet")
+                    os.makedirs(os.path.dirname(local), exist_ok=True)
+                    s3.download_file(BUCKET, it["file_path"]["S"].split(f"s3://{BUCKET}/", 1)[1], local)
+                    written.append({"path": local})
+                batch_id = f"backfill{day.replace('-', '')}{hour}"
+                summaries = [w for w in _summaries(tenant, signal, written, work, batch_id, layout.data_prefix)
+                             if not _has_entries(tenant, w["table"], "all", w["dt"], w["hour"])]
+                _upload(summaries)
+                now = datetime.now(timezone.utc).isoformat()
+                _batch_write([_index_item(tenant, w["table"], batch_id, w, now, layout.plan_pk(tenant, signal, day, hour))
+                              for w in summaries])
+                _register_summaries(tenant, summaries)
+                done += [f"{w['table']} {w['dt']}T{w['hour']}" for w in summaries]
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+    print(json.dumps({"summaries_backfill": tenant, "day": day, "written": len(done)}))
+    return {"written": done}
+
+
+def _entries(tenant, signal, service, day, hour):
+    """Index entries of one service whose first row is in that hour."""
+    out, kw = [], dict(TableName=TABLE, KeyConditionExpression="pk = :pk AND begins_with(sk, :h)",
+                       ExpressionAttributeValues={":pk": {"S": layout.index_pk(tenant, signal, service)},
+                                                  ":h": {"S": f"{day}T{hour}:"}})
+    while True:
+        r = ddb.query(**kw)
+        out += r["Items"]
+        if "LastEvaluatedKey" not in r:
+            return out
+        kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+
+def _has_entries(tenant, signal, service, day, hour):
+    r = ddb.query(TableName=TABLE, KeyConditionExpression="pk = :pk AND begins_with(sk, :h)", Limit=1,
+                  ExpressionAttributeValues={":pk": {"S": layout.index_pk(tenant, signal, service)},
+                                             ":h": {"S": f"{day}T{hour}:"}})
+    return bool(r["Items"])
+
+
 # ---------------------------------------------------------------- fast lane
 
 def recent_indexer(event, context):
@@ -364,22 +432,26 @@ def recent_indexer(event, context):
                                   bloom_attributes=BLOOM_ATTRIBUTES, one_bloom=True, spill_safe=False)
         # One bloom for the whole raw file, shared by its entries (one per service).
         _name(written, layout.fast_prefix(tenant, signal), bloom_name=fid)
+        summaries = _summaries(tenant, signal, written, work, fid, layout.fast_prefix)
         now = datetime.now(timezone.utc).isoformat()
         plan_pk = layout.plan_pk(tenant, signal, dt, hour)
         # Freshness stages: S3 event time (Firehose delivered the file), this
         # invocation's start, and parsed (now); lookups return them.
         timing = {"delivered_at": event.get("time"), "received_at": received_at}
         items = [_index_item(tenant, signal, fid, w, now, plan_pk, raw_key=key, timing=timing) for w in written]
+        # Summaries ride the same raw-file record: retired with the file's entries when its hour is compacted.
+        items += [_index_item(tenant, w["table"], fid, w, now, plan_pk, raw_key=key, timing=timing) for w in summaries]
         _put_raw_record(layout.raw_files_pk(tenant, signal, dt, hour), key,
                         [{"M": {"pk": it["pk"], "sk": it["sk"]}} for it in items],
                         # S3 objects of those entries (Parquet and blooms), deleted with them
                         [{"S": k} for k in dict.fromkeys(
-                            k for w in written for k in (w["key"], w.get("bloom_key")) if k)])
-        _upload(written)
+                            k for w in written + summaries for k in (w["key"], w.get("bloom_key")) if k)])
+        _upload(written + summaries)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
     _batch_write(items)
+    _register_summaries(tenant, summaries)
     if items:
         ddb.update_item(
             TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}},
@@ -606,6 +678,21 @@ def _name(written, prefix, bloom_name=None):
             # and part number for several event hours.
             w["bloom_key"] = f"{prefix}_bloom/{bloom_name or w['relpath'][:-len('.parquet')]}.bloom"
     return written
+
+
+def _summaries(tenant, signal, written, work, batch_id, prefix):
+    """compact.summarize of these files, named under prefix(tenant, summary table); not uploaded yet."""
+    out = compact.summarize(signal, written, os.path.join(work, "summaries"), batch_id)
+    for w in out:
+        w["key"] = prefix(tenant, w["table"]) + w["relpath"]
+    return out
+
+
+def _register_summaries(tenant, summaries):
+    """Lookups find a table's files through its services registry: summaries have one service, "all"."""
+    for table in sorted({w["table"] for w in summaries}):
+        ddb.update_item(TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, table)}, "sk": {"S": "all"}},
+                        UpdateExpression="ADD services :s", ExpressionAttributeValues={":s": {"SS": ["all"]}})
 
 
 def _upload(written):

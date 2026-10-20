@@ -115,6 +115,7 @@ BUFFER_SECONDS = int(os.environ.get("BUFFER_SECONDS", "30"))
 SETTLE = timedelta(minutes=int(os.environ.get("SETTLE_MINUTES", "20")))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 SIGNALS = ("logs", "traces", "metrics")
+SUMMARY_TABLES = ("svc_1m", "edge_1m", "rum")   # compaction/compact.py SUMMARIES: indexed like signals
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 USER_POOL = os.environ.get("USER_POOL_ID", "")   # Cognito user pool of obs-state (empty: no logins)
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
@@ -757,7 +758,7 @@ def retention(after=None, context=None):
 def _expire_tenant(tenant, cutoff):
     """Everything of one tenant from before the cutoff day -> number of objects and items deleted."""
     n, before = 0, f"{cutoff}T00:00:00"
-    for signal in SIGNALS:
+    for signal in SIGNALS + SUMMARY_TABLES:
         # 1. Index entries of files whose rows are all older than the cutoff (then those files).
         services = index.get_item(Key={"pk": f"{tenant}#_services#{signal}", "sk": "all"}).get("Item", {}).get("services", set())
         files = []
