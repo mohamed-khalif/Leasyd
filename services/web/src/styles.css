@@ -872,3 +872,8 @@ td.warn { color: var(--sev-warn); }
 .agent-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .agent-code { font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
 .agent-err { color: var(--sev-error); font-size: 12px; overflow-wrap: anywhere; }
+
+/* Header Refresh icon spins while any question is loading (limiter.ts); after 0.2 s, so quick answers don't flicker. */
+.btn.busy svg { animation: spin 0.9s linear 0.2s infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .btn.busy svg { animation: none; opacity: .5; } }

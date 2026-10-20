@@ -1,7 +1,7 @@
 // The query limiter (6 at once per page) with aborts (design §4.1).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { limited } from "./limiter";
+import { busyCount, limited, onBusy } from "./limiter";
 
 const flush = () => new Promise<void>((r) => setImmediate(r));
 
@@ -30,4 +30,17 @@ test("an aborted query leaves the queue or frees its place for the next", async 
   assert.deepEqual(started, [0, 1, 2, 3, 4, 5, 7, 8]);
   [2, 3, 4, 5, 7, 8].forEach((i) => ends.get(i)!());   // leave the limiter empty
   await Promise.all([2, 3, 4, 5, 7, 8].map((i) => ps[i]));
+});
+
+test("the busy count covers running and waiting questions, and drops back when they end", async () => {
+  const ends: (() => void)[] = [];
+  let seen = 0;
+  const stop = onBusy(() => { seen++; });
+  const runs = Array.from({ length: 8 }, () => limited(() => new Promise<void>((r) => ends.push(r))));
+  assert.equal(busyCount(), 8);   // 6 running + 2 waiting
+  while (ends.length) { ends.shift()!(); await flush(); }
+  await Promise.all(runs);
+  assert.equal(busyCount(), 0);
+  assert.ok(seen >= 16);
+  stop();
 });

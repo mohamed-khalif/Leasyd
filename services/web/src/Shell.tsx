@@ -1,7 +1,8 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { fmtDay } from "./lib/format";
 import { IconClock, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu, IconAgent } from "./icons";
 import { customRange, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
+import { busyCount, onBusy } from "./limiter";
 import { useAccount } from "./useAccount";
 
 export const CONTACT_EMAIL = "support@leasyd.com";
@@ -45,6 +46,7 @@ type Props = {
 };
 
 export function Shell(p: Props) {
+  const busy = useSyncExternalStore(onBusy, busyCount) > 0;   // any question running or waiting
   const [light, setLight] = useState(document.documentElement.dataset.theme === "light");
   const toggleTheme = () => {
     const next = !light;
@@ -98,7 +100,8 @@ export function Shell(p: Props) {
             {light ? <IconMoon /> : <IconSun />}
           </button>
           <RangePicker range={p.range} onRange={p.onRange} />
-          <button className="btn" onClick={p.onRefresh} title="Refresh" aria-label="Refresh"><IconRefresh /></button>
+          <button className={busy ? "btn busy" : "btn"} onClick={p.onRefresh} title={busy ? "Loading…" : "Refresh"}
+                  aria-label={busy ? "Loading, refresh" : "Refresh"} aria-busy={busy}><IconRefresh /></button>
         </header>
         <TrialBanner />
         <div className="content">{p.children}</div>
