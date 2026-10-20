@@ -41,8 +41,8 @@ Web 1 h 5.5 -> 11.4 s, 24 h 14.2 -> 20.8 s; Kubernetes 24 h 12.6 -> 20.1 s.
 **Cause: when the benchmark runs relative to compaction.** An hour of the demo account is about
 1,000 fast-lane files per signal (one per service per 30 s flush); compacted, it is 22-34. Compaction
 takes an hour 10 minutes after it ends (`GRACE_MINUTES`) and runs every 15 minutes, so for up to about
-25 minutes after each hour, the previous hour is still ~1,000 small files as well. Measured at 13:20:
-metrics 05:00-11:00 had 34 files per hour, 12:00 had 1,020 (not yet compacted), 13:00 had 255 so far.
+25 minutes after each hour, the previous hour is still ~1,000 small files as well. Measured at about 13:15:
+metrics 05:00-11:00 had 34 files per hour, 12:00 had 1,020 (not yet compacted), 13:00 had 255 so far. By 13:18 the 12:00 hour was compacted to 34.
 This morning's run mostly missed that window; Phase 0 ran inside it (1 h questions read up to 1,003
 files instead of 595).
 
