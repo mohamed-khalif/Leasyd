@@ -157,3 +157,27 @@ def test_direct_calls_can_choose_the_path_and_nothing_else(data, monkeypatch):
     assert out["stats"]["path"] == "scan_fanout"
     with pytest.raises(query.BadQuery, match="sql_path"):
         query.run_sql("acme", QUERIES[0], S, E, invoke_worker=invoke, path="fast")
+
+
+def test_scan_slices_hold_at_most_so_many_files(data, spans, counters, monkeypatch):
+    monkeypatch.setattr(query, "SCAN_FILES_PER_WORKER", 2)
+    text = "SELECT count(*) FROM metrics"
+    fanned = run(text, monkeypatch, fanout=True)
+    assert fanned["stats"]["workers"] == math.ceil(fanned["stats"]["files"] / 2)
+    same(fanned, run(text, monkeypatch, fanout=False))
+
+
+def test_small_files_are_fetched_whole_in_one_request():
+    class S3:
+        calls = []
+
+        def get_object(self, Bucket, Key, Range):
+            self.calls.append(Range)
+            data = bytes(range(100))
+            a, b = (int(x) for x in Range.split("=")[1].split("-"))
+            return {"Body": __import__("io").BytesIO(data[a:b + 1])}
+    s3 = S3()
+    fs = query.TenantS3(s3, "b", {"k": 100}, whole_below=1000)
+    with fs.open("k") as fh:
+        fh.seek(90), fh.read(10), fh.seek(0), fh.read(20)
+    assert s3.calls == ["bytes=0-99"]

@@ -1,7 +1,9 @@
 """Correctness gate for the SQL speed-ups (docs/perf-plan.md): every SQL question the app's pages send
 (from the capture), on the previous full UTC day, run on each path of obs-query and compared with the
 single-worker path. Counts and integers must be equal; floating-point values within 1e-9 relative;
-row order compared as returned when the query has ORDER BY, else sorted.
+row order compared as returned when the query has ORDER BY, else sorted. Columns that are any_value(...)
+are left out (and listed): any_value returns whichever matching value is read first, so it varies
+between runs of the same path (measured 2026-10-20: q00's k8s_pod on the single worker).
 
     python3 infra/bench/sql_gate.py PAGE_QUERIES.json TENANT [--paths in_place,fanout] [--day YYYY-MM-DD]
 
@@ -9,6 +11,7 @@ Exit status 1 if any question differs. Prints per question: the paths' times and
 import argparse
 import json
 import math
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -33,13 +36,19 @@ def norm(v):
     return round(v, 9) if isinstance(v, float) else v
 
 
-def differs(a, b, ordered):
+def arbitrary_columns(sql):
+    """The output columns that are any_value(...): no single right value."""
+    return set(re.findall(r"any_value\((?:[^()]|\([^()]*\))*\)\s+AS\s+(\w+)", sql, re.I))
+
+
+def differs(a, b, ordered, skip=()):
     """The first difference between two answers, or None."""
     if a.get("error") or b.get("error"):
         return None if a.get("error") == b.get("error") else f"error {a.get('error')!r} vs {b.get('error')!r}"
     if a["columns"] != b["columns"]:
         return f"columns {a['columns']} vs {b['columns']}"
-    ra, rb = a["rows"], b["rows"]
+    keep = [j for j, c in enumerate(a["columns"]) if c not in skip]
+    ra, rb = [[r[j] for j in keep] for r in a["rows"]], [[r[j] for j in keep] for r in b["rows"]]
     if len(ra) != len(rb):
         return f"{len(ra)} rows vs {len(rb)}"
     if not ordered:
@@ -71,14 +80,16 @@ def main():
     print(f"{len(seen)} distinct SQL questions, {start} to {end}")
     for i, sql in enumerate(seen):
         base = ask(a.tenant, sql, start, end, "single")
+        skip = arbitrary_columns(sql)
         line = [f"q{i:02d} single {base['_ms'] / 1000:5.1f}s files={(base.get('timing') or {}).get('files')}"]
         for p in a.paths.split(","):
             other = ask(a.tenant, sql, start, end, p)
-            d = differs(base, other, ordered="order by" in sql.lower())
+            d = differs(base, other, ordered="order by" in sql.lower(), skip=skip)
             failed += d is not None
             line.append(f"{p} {other['_ms'] / 1000:5.1f}s {'OK' if d is None else 'DIFF ' + d[:200]}"
                         + (f" via={other.get('stats', {}).get('path', 'single')}" if p == "fanout" else ""))
-        print("  ".join(line), "|", " ".join(sql.split())[:70], flush=True)
+        print("  ".join(line), "|", " ".join(sql.split())[:70],
+              f"| not compared (any_value): {', '.join(sorted(skip))}" if skip else "", flush=True)
     print("FAILED" if failed else "all equal", f"({failed} differences)")
     sys.exit(1 if failed else 0)
 

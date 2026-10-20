@@ -698,7 +698,8 @@ def _run_sql_fanout(tenant, sql, start, end, plan, files, invoke_worker, cancel)
     per_table = max(1, MAX_WORKERS // max(1, len(files)))
     jobs = [{"scan": {"table": table, **{k: plan[table][k] for k in ("columns", "filter")}}, "tenant": tenant,
              "start": start, "end": end, "files": chunk, "cancel": cancel}
-            for table, fs in files.items() for chunk in plan_chunks(fs, per_table)]
+            for table, fs in files.items()
+            for chunk in plan_chunks(fs, per_table, min_chunks=math.ceil(len(fs) / SCAN_FILES_PER_WORKER))]
     def scan(job):
         try:
             return invoke_worker(job)
@@ -765,7 +766,8 @@ def run_sql_worker(event):
         with ThreadPoolExecutor(SQL_DOWNLOAD_THREADS) as pool:
             list(pool.map(lambda x: s3.download_file(lookup.BUCKET, x[1]["file_path"][len(prefix):], x[2]), todo))
         t_dl = time.perf_counter()
-        ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for _, f in in_place})
+        ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for _, f in in_place},
+                          whole_below=SMALL_FILE_BYTES)
         parquet = {t: [local for tt, f, local in todo if tt == t and _is_parquet(f)]
                       + [f"{TenantS3.protocol}://{f['file_path'][len(prefix):]}" for tt, f in in_place if tt == t]
                    for t in SQL_TABLES}
@@ -841,6 +843,8 @@ def _run_locked_sql(work, sql, start, end, cancel, parquet, raw, fs=None):
 
 
 SCAN_MAX_BYTES = 4_000_000   # one scan slice's rows, as Parquet (base64 in Lambda's 6 MB response)
+SCAN_FILES_PER_WORKER = 16   # a scan slice's most files: reading a file costs S3 round trips, however small
+SMALL_FILE_BYTES = 512 * 1024   # SQL paths fetch files this small whole (one request, not footer + chunks)
 
 
 def run_scan_worker(event):
@@ -856,7 +860,8 @@ def run_scan_worker(event):
     files = sorted({f["file_path"]: f for f in event["files"]}.values(), key=lambda f: f["file_path"])
     if not all(_is_parquet(f) for f in files):
         raise ValueError("scan slices are Parquet only")
-    ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for f in files})
+    ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for f in files},
+                      whole_below=SMALL_FILE_BYTES)
     work = tempfile.mkdtemp(dir="/tmp")
     try:
         con = compact._connect(work, f"{int(MEMORY_MB * 0.6)}MB")
@@ -1014,9 +1019,10 @@ class TenantS3(AbstractFileSystem):
     sizes come from the index, so no HEAD request per file."""
     protocol = "obsq"
 
-    def __init__(self, s3, bucket, sizes, **kw):
+    def __init__(self, s3, bucket, sizes, whole_below=0, **kw):
         super().__init__(skip_instance_cache=True, **kw)
         self.s3, self.bucket, self.sizes = s3, bucket, sizes
+        self.whole_below = whole_below   # files this small are fetched whole, in one request
         self.lock = threading.Lock()
         self.requests = self.bytes_read = 0
 
@@ -1029,8 +1035,9 @@ class TenantS3(AbstractFileSystem):
 
     def _open(self, path, mode="rb", block_size=None, **kw):
         path = self._strip_protocol(path)
+        small = self.sizes[path] <= self.whole_below
         return _RangeFile(self, path, mode, block_size=block_size or RANGE_BLOCK_BYTES,
-                          cache_type="readahead", size=self.sizes[path])
+                          cache_type="all" if small else "readahead", size=self.sizes[path])
 
 
 def _jsonable(v):
@@ -1755,7 +1762,7 @@ def run(q, invoke_worker=None):
     return result
 
 
-def plan_chunks(files, max_workers, contiguous=False):
+def plan_chunks(files, max_workers, contiguous=False, min_chunks=1):
     """Split files into <= max_workers chunks of similar total cost (largest first); a file costs
     its size plus FILE_COST_BYTES. contiguous: each chunk is instead a run of files in time order
     (by min_ts), cut at about equal costs, and only where no earlier file reaches past the next file's
@@ -1766,7 +1773,7 @@ def plan_chunks(files, max_workers, contiguous=False):
     if not files:
         return []
     total = sum(cost(f) for f in files)
-    n = max(1, min(max_workers, MAX_WORKERS, len(files), math.ceil(total / TARGET_BYTES_PER_WORKER)))
+    n = max(1, min(max_workers, MAX_WORKERS, len(files), max(min_chunks, math.ceil(total / TARGET_BYTES_PER_WORKER))))
     if contiguous:
         chunks, size, reach = [[]], 0, None   # reach: the latest max_ts so far
         for f in sorted(files, key=lambda f: (lookup._parse(f["min_ts"]), f["file_path"])):

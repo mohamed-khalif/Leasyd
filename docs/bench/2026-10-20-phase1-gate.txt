@@ -1,0 +1,29 @@
+27 distinct SQL questions, 2026-10-19T00:00:00Z to 2026-10-20T00:00:00Z
+q00 single   4.1s files=299  in_place   4.5s OK  fanout   2.5s OK via=scan_fanout | SELECT service, count(*) FILTER (WHERE (kind IN (2, 5) OR parent_span_ | not compared (any_value): account, cloud, host, k8s_deployment, k8s_namespace, k8s_pod, language, namespace, platform, region, runtime, runtime_version, version, zone
+q01 single   2.0s files=299  in_place   3.7s OK  fanout   2.0s OK via=scan_fanout | SELECT p.service AS source, c.service AS target, count(*) AS calls, co 
+q02 single   3.2s files=276  in_place   2.3s OK  fanout   1.6s OK via=scan_fanout | SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_ 
+q03 single   2.8s files=276  in_place   2.2s OK  fanout   2.5s OK via=scan_fanout | SELECT count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS 
+q04 single   3.0s files=276  in_place   2.2s OK  fanout   2.6s OK via=scan_fanout | SELECT attributes['rum.vital.name'] AS name, quantile_cont(TRY_CAST(at 
+q05 single   2.8s files=276  in_place   2.3s OK  fanout   2.6s OK via=scan_fanout | SELECT time_bucket(INTERVAL '30 seconds', ts) AS t, count(*) FILTER (W 
+q06 single   3.0s files=276  in_place   2.3s OK  fanout   2.5s OK via=scan_fanout | SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attribut 
+q07 single   3.0s files=276  in_place   2.1s OK  fanout   0.9s OK via=scan_fanout | SELECT attributes['error.message'] AS message, count(*) AS n, count(DI | not compared (any_value): page, session, source
+q08 single   2.7s files=276  in_place   2.1s OK  fanout   0.9s OK via=scan_fanout | SELECT attributes['http.request.method'] AS method, attributes['url.fu 
+q09 single   2.8s files=276  in_place   2.3s OK  fanout   2.5s OK via=scan_fanout | SELECT resource_attributes['browser.name'] AS browser, resource_attrib 
+q10 single   3.3s files=299  in_place   2.3s OK  fanout   0.9s OK via=scan_fanout | SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) | not compared (any_value): account, region
+q11 single   3.2s files=322  in_place   2.0s OK  fanout   0.7s OK via=scan_fanout | SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invoc | not compared (any_value): account, region
+q12 single   5.5s files=598  in_place   4.4s OK  fanout   1.0s OK via=scan_fanout | SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric 
+q13 single   4.0s files=322  in_place   3.2s OK  fanout   1.4s OK via=scan_fanout | WITH p AS ( SELECT time_bucket(INTERVAL '30 seconds', ts) AS t, resour 
+q14 single   3.5s files=322  in_place   2.8s OK  fanout   1.0s OK via=scan_fanout | SELECT resource_attributes['k8s.namespace.name'] AS namespace, coalesc | not compared (any_value): cluster
+q15 single   2.8s files=276  in_place   2.1s OK  fanout   1.0s OK via=scan_fanout | SELECT coalesce(attributes['k8s.namespace.name'], '') AS namespace, co 
+q16 single   4.2s files=322  in_place   4.0s OK  fanout   1.3s OK via=scan_fanout | WITH n AS ( SELECT resource_attributes['k8s.node.name'] AS node, any_v | not compared (any_value): cluster
+q17 single   4.7s files=322  in_place   4.5s OK  fanout   2.6s OK via=scan_fanout | WITH k AS ( SELECT resource_attributes['k8s.namespace.name'] AS ns, re | not compared (any_value): cluster, kind, node, team, workload
+q18 single   3.4s files=322  in_place   2.5s OK  fanout   1.2s OK via=scan_fanout | WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['ho | not compared (any_value): cloud, cluster, instance_type, model
+q19 single   3.5s files=322  in_place   2.7s OK  fanout   1.6s OK via=scan_fanout | SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], a | not compared (any_value): model
+q20 single   3.4s files=322  in_place   2.6s OK  fanout   1.3s OK via=scan_fanout | WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['ho | not compared (any_value): cloud, cluster, instance_type, model, node
+q21 single   2.5s files=276  in_place   2.0s OK  fanout   2.2s OK via=scan_fanout | SELECT time_bucket(INTERVAL '300 seconds', ts) AS t, count(*) FILTER ( 
+q22 single   3.2s files=322  in_place   2.6s OK  fanout   1.3s OK via=scan_fanout | WITH p AS ( SELECT time_bucket(INTERVAL '300 seconds', ts) AS t, resou 
+q23 single   3.3s files=276  in_place   2.1s OK  fanout   2.4s OK via=scan_fanout | SELECT time_bucket(INTERVAL '900 seconds', ts) AS t, count(*) FILTER ( 
+q24 single   3.8s files=322  in_place   2.8s OK  fanout   1.3s OK via=scan_fanout | WITH p AS ( SELECT time_bucket(INTERVAL '900 seconds', ts) AS t, resou 
+q25 single   3.3s files=322  in_place   2.4s OK  fanout   1.2s OK via=scan_fanout | WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['ho | not compared (any_value): cloud, cluster, instance_type, model
+q26 single   3.4s files=322  in_place   2.6s OK  fanout   1.3s OK via=scan_fanout | WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['ho | not compared (any_value): cloud, cluster, instance_type, model, node
+all equal (0 differences)
