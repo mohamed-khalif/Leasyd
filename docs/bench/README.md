@@ -48,3 +48,30 @@ files instead of 595).
 
 Consequences for the plan: benchmark results are only comparable at the same minute past the hour,
 so later runs record it and start at :30; Phase 4 (fewer small files) matters more than estimated.
+
+## 2026-10-20 Phase 1: SQL scan fan-out (`2026-10-20-phase1.*`, gate: `2026-10-20-phase1-gate.txt`)
+
+Flags on for leasyd-demo (`SqlScanFanoutAccounts`, `SqlInPlaceAccounts`). Correctness gate on 2026-10-19:
+all 27 page SQL questions equal on the single, in-place and fan-out paths (any_value columns excluded:
+they vary between runs of the same path). Benchmark started 14:30 UTC; Phase 0 started 12:45, inside
+the after-the-hour compaction window, so pages Phase 1 did not change (Logs, Home) were also 20-39%
+faster at 1 h from timing alone. The SQL pages' 76-89% drops are well beyond that.
+
+Best of 2, seconds:
+
+| Page | 1 h P0 -> P1 | 6 h P0 -> P1 | 24 h P0 -> P1 | Target 24 h <= 3.5 s |
+|---|---|---|---|---|
+| Web | 11.4 -> 1.8 | 15.1 -> 2.3 | 20.8 -> 3.0 | met |
+| Kubernetes | 10.2 -> 1.4 | 14.5 -> 1.7 | 20.1 -> 4.3 | **not met** |
+| GPUs | 8.8 -> 1.2 | 11.8 -> 1.7 | 15.8 -> 2.0 | met |
+| Lambda | 6.9 -> 1.2 | 11.6 -> 1.4 | 14.1 -> 1.8 | met |
+| Services (map) | 7.3 -> 1.7 | 9.5 -> 1.6 | 11.2 -> 2.2 | met |
+| Home | 3.7 -> 2.3 | 3.1 -> 2.5 | 3.9 -> 3.1 | |
+| Built-in dashboard | 3.5 -> 3.3 | 5.2 -> 4.3 | 5.2 -> 4.9 | |
+| Logs / Traces / Metrics / Agents | 0.7-1.2 | 0.8-1.2 | 0.8-1.4 | |
+
+Kubernetes 24 h: 6 SQL questions, each at the 64-worker cap (1,129 files / 16 per slice), so up to 384
+workers at once; cold workers (up to 50 in one question) add 1-1.5 s per question. Remedies: Phase 3, or
+fewer, larger slices when a page sends many questions. 24 h Traces (+17%) and Agents (+13%) are JSON
+questions Phase 1 didn't change; one 24 h Metrics run hit a 12.9 s straggler worker (the other: 1.0 s).
+Noisy pages (best-of-2 apart by > 20%) are re-run 5 times: below.
