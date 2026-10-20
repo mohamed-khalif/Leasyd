@@ -475,6 +475,8 @@ def _worker(event):
     try:
         if "job" in event:
             return run_job(event)
+        if "scan" in event:
+            return run_scan_worker(event)
         if "sql" in event:
             return run_sql_worker(event)
         return run_worker(event)
@@ -622,38 +624,129 @@ def sql_services(v):
     return sorted({_SERVICE_UNSAFE.sub("_", x)[:128] or "unknown" for x in v})   # as stored (compact.safe_service)
 
 
-def run_sql(tenant, sql, start, end, invoke_worker=None, services=None):
+# Per-account switches for the SQL speed-ups (docs/perf-flags.md): comma-separated accounts, "*" = all.
+SQL_IN_PLACE_FLAG = "SQL_IN_PLACE_ACCOUNTS"          # the single SQL worker reads Parquet in place
+SQL_SCAN_FANOUT_FLAG = "SQL_SCAN_FANOUT_ACCOUNTS"    # the scan fan-out (sqlscan.py)
+SQL_FANOUT_MAX_FILES = 20_000                        # the fan-out's own limit; the single worker keeps SQL_MAX_FILES
+
+
+def flag_on(name, tenant):
+    accounts = {a.strip() for a in os.environ.get(name, "").split(",") if a.strip()}
+    return "*" in accounts or tenant in accounts
+
+
+SQL_PATHS = ("single", "in_place", "fanout")
+
+
+def run_sql(tenant, sql, start, end, invoke_worker=None, services=None, path=None):
     """One read-only SELECT over the tenant's logs / spans / metrics between start and end
-    (with services: only those services' data)."""
+    (with services: only those services' data). path: one of SQL_PATHS instead of what the account's
+    flags choose (direct calls only: the correctness gate compares the paths on the same data)."""
+    if path is not None and path not in SQL_PATHS:
+        raise BadQuery(f"sql_path: one of {', '.join(SQL_PATHS)}")
+    fanout = flag_on(SQL_SCAN_FANOUT_FLAG, tenant) if path is None else path == "fanout"
+    in_place = flag_on(SQL_IN_PLACE_FLAG, tenant) if path is None else path == "in_place"
     t0 = time.perf_counter()
     used = check_sql(sql)
     services = sql_services(services)
+    import sqlscan
+    plan = sqlscan.plan(sql) if fanout else None
+    if plan is not None and set(plan) != set(used):
+        plan = None
     files = {}
     for table in used:
-        found = lookup.lookup(tenant=tenant, start=start, end=end, signal=SQL_TABLES[table], services=services)
+        # Services the query itself limits every read of the table to skip the other services' files.
+        only = services if services is not None or plan is None else \
+            (sql_services(plan[table]["services"]) if plan[table]["services"] else None)
+        found = lookup.lookup(tenant=tenant, start=start, end=end, signal=SQL_TABLES[table], services=only)
         files[table] = found["files"]
     size = sum(f.get("size_bytes", 0) for fs in files.values() for f in fs)
     count = sum(len(fs) for fs in files.values())
+    cancel = _stop_if_cancelled()
+    invoke_worker = invoke_worker or _invoke_worker
+    if plan is not None and count <= SQL_FANOUT_MAX_FILES and all(_is_parquet(f) for fs in files.values() for f in fs):
+        out, parts = _run_sql_fanout(tenant, sql, start, end, plan, files, invoke_worker, cancel)
+        if out is not None:
+            out["stats"] = {**out.get("stats", {}), "files": count, "bytes": size, "path": "scan_fanout",
+                            "total_ms": round((time.perf_counter() - t0) * 1000)}
+            used_units(tenant, max(1, math.ceil(size / TARGET_BYTES_PER_WORKER)) if count else 0)
+            _noted(out["stats"], parts)
+            return out
+        _noted({"files": 0}, parts)   # the scan's workers ran: their time still counts
     if count > SQL_MAX_FILES:
         raise BadQuery(f"this time range has {count:,} files to read (at most {SQL_MAX_FILES:,}); choose a shorter time range")
     if size > SQL_MAX_BYTES:
         raise BadQuery(f"this would read {size / 2**30:.1f} GB (at most {SQL_MAX_BYTES / 2**30:.0f} GB); choose a shorter time range")
-    cancel = _stop_if_cancelled()
     used_units(tenant, max(1, math.ceil(size / TARGET_BYTES_PER_WORKER)) if count else 0)
-    event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files, "cancel": cancel}
-    out = (invoke_worker or _invoke_worker)(event)
+    event = {"sql": sql, "tenant": tenant, "start": start, "end": end, "tables": files, "cancel": cancel,
+             **({"in_place": True} if in_place else {})}
+    out = invoke_worker(event)
     if out.get("cancelled"):
         raise Cancelled()
-    out["stats"] = {**out.get("stats", {}), "files": sum(len(v) for v in files.values()), "bytes": size,
+    out["stats"] = {**out.get("stats", {}), "files": count, "bytes": size,
                     "total_ms": round((time.perf_counter() - t0) * 1000)}
     _noted(out["stats"], [out])
     return out
 
 
+def _run_sql_fanout(tenant, sql, start, end, plan, files, invoke_worker, cancel):
+    """Many workers read the files, each keeping only what the question can use; the question then runs
+    here, unchanged, over what they kept. -> (the answer, the workers' answers); the answer is None when
+    the fan-out can't answer (a slice too big for its response, a worker failing, the query failing over
+    the kept rows): the caller then runs the question the single-worker way, which decides."""
+    t0 = time.perf_counter()
+    per_table = max(1, MAX_WORKERS // max(1, len(files)))
+    jobs = [{"scan": {"table": table, **{k: plan[table][k] for k in ("columns", "filter")}}, "tenant": tenant,
+             "start": start, "end": end, "files": chunk, "cancel": cancel}
+            for table, fs in files.items() for chunk in plan_chunks(fs, per_table)]
+    def scan(job):
+        try:
+            return invoke_worker(job)
+        except Unavailable:
+            raise
+        except Exception as e:      # noqa: BLE001  (the single-worker path decides)
+            return {"failed": str(e)[:300]}
+    if jobs:
+        with ThreadPoolExecutor(len(jobs)) as pool:
+            parts = list(pool.map(scan, jobs))
+    else:
+        parts = []
+    t_scan = time.perf_counter()
+    if any(p.get("cancelled") for p in parts):
+        raise Cancelled()
+    if any(p.get("timed_out") for p in parts):
+        raise BadQuery(timed_out_message())
+    why = ("a slice's rows are too big for its response" if any(p.get("too_big") for p in parts)
+           else next((p["failed"] for p in parts if p.get("failed")), None))
+    if why:
+        print(json.dumps({"scan_fanout_declined": why, "tenant": tenant, "slices": len(parts)}))
+        return None, parts
+    work = tempfile.mkdtemp(dir="/tmp")
+    try:
+        parquet = {t: [] for t in SQL_TABLES}
+        for i, (job, part) in enumerate(zip(jobs, parts)):
+            path = os.path.join(work, f"scan-{i:05d}.parquet")
+            with open(path, "wb") as fh:
+                fh.write(base64.b64decode(part["parquet"]))
+            parquet[job["scan"]["table"]].append(path)
+        out = _run_locked_sql(work, sql, start, end, cancel, parquet, {})
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if out.get("cancelled"):
+        raise Cancelled()
+    if out.get("error"):
+        print(json.dumps({"scan_fanout_declined": out["error"], "tenant": tenant, "slices": len(parts)}))
+        return None, parts
+    out["stats"] = {**out.get("stats", {}), "workers": len(jobs), "scan_ms": round((t_scan - t0) * 1000),
+                    "scan_out_bytes": sum(p.get("stats", {}).get("out_bytes", 0) for p in parts)}
+    return out, parts
+
+
 def run_sql_worker(event):
-    """Download the tenant's files, expose them as the views logs / spans / metrics (limited to
-    the time range), then lock DuckDB down (no file, network or extension access; settings
-    locked) and run the query."""
+    """Expose the tenant's files as the views logs / spans / metrics (limited to the time range),
+    then lock DuckDB down (no file, network or extension access; settings locked) and run the query.
+    Parquet is downloaded, or read in place when the coordinator asks ("in_place": only the columns
+    and row groups the query needs, as for JSON questions)."""
     t0 = time.perf_counter()
     tenant = layout.check_tenant(event["tenant"])
     check_sql(event["sql"])
@@ -661,64 +754,144 @@ def run_sql_worker(event):
     work = tempfile.mkdtemp(dir="/tmp")
     prefix = f"s3://{lookup.BUCKET}/"
     try:
-        allowed = []
-        # Every file of every table, downloaded in parallel (an hour is hundreds of small fast-lane files).
-        todo = []
+        todo, in_place = [], []
         for table in SQL_TABLES:
             for f in sorted({f["file_path"]: f for f in (event["tables"].get(table) or [])}.values(), key=lambda f: f["file_path"]):
-                todo.append((table, f, os.path.join(work, f"{len(todo):05d}{'.parquet' if _is_parquet(f) else '.json.gz'}")))
+                if event.get("in_place") and _is_parquet(f):
+                    in_place.append((table, f))
+                else:
+                    todo.append((table, f, os.path.join(work, f"{len(todo):05d}{'.parquet' if _is_parquet(f) else '.json.gz'}")))
+        # Downloaded in parallel (an hour is hundreds of small fast-lane files).
         with ThreadPoolExecutor(SQL_DOWNLOAD_THREADS) as pool:
             list(pool.map(lambda x: s3.download_file(lookup.BUCKET, x[1]["file_path"][len(prefix):], x[2]), todo))
         t_dl = time.perf_counter()
-        con = compact._connect(work, f"{int(int(os.environ.get('AWS_LAMBDA_FUNCTION_MEMORY_SIZE', '2048')) * 0.6)}MB")
+        ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for _, f in in_place})
+        parquet = {t: [local for tt, f, local in todo if tt == t and _is_parquet(f)]
+                      + [f"{TenantS3.protocol}://{f['file_path'][len(prefix):]}" for tt, f in in_place if tt == t]
+                   for t in SQL_TABLES}
+        raw = {t: [(f, local) for tt, f, local in todo if tt == t and not _is_parquet(f)] for t in SQL_TABLES}
+        out = _run_locked_sql(work, event["sql"], event["start"], event["end"], event.get("cancel"), parquet, raw,
+                              fs=ranges if in_place else None)
+        out.setdefault("stats", {})["download_ms"] = round((t_dl - t0) * 1000)
+        if in_place:
+            out["stats"].update(read_mode="ranges", range_bytes=ranges.bytes_read, range_requests=ranges.requests)
+        return out
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _run_locked_sql(work, sql, start, end, cancel, parquet, raw, fs=None):
+    """Run one read-only SELECT over these files, as the views logs / spans / metrics limited to
+    [start, end), in a DuckDB locked down before the query runs. parquet: table -> local paths (or
+    paths on fs, a TenantS3 registered first); raw: table -> [(index entry, local raw file)]."""
+    t0 = time.perf_counter()
+    prefix = f"s3://{lookup.BUCKET}/"
+    allowed = []
+    con = compact._connect(work, f"{int(MEMORY_MB * 0.6)}MB")
+    try:
+        if fs is not None:
+            con.register_filesystem(fs)
+            con.execute(f"SET threads = {RANGE_THREADS}")
+        for table, signal in SQL_TABLES.items():
+            pq, parts = parquet.get(table) or [], []
+            if pq:
+                allowed += pq
+                paths = ", ".join("'" + p.replace("'", "''") + "'" for p in pq)
+                parts.append(f"SELECT * FROM read_parquet([{paths}], union_by_name = true, hive_partitioning = false)")
+            for i, (f, local) in enumerate(raw.get(table) or []):
+                parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
+                compact.load_rows(con, [local], parsed[2], parsed[3], signal)
+                con.execute(f"CREATE TEMP TABLE raw_{table}_{i} AS SELECT * FROM rows")
+                parts.append(f"SELECT * FROM raw_{table}_{i}")
+            if not parts:   # no data: an empty table with the signal's columns
+                empty = os.path.join(work, f"empty-{table}.json")
+                with open(empty, "w") as fh:
+                    json.dump({"logs": {"resourceLogs": []}, "traces": {"resourceSpans": []},
+                               "metrics": {"resourceMetrics": []}}[signal], fh)
+                compact.load_rows(con, [empty], "2000-01-01", "00", signal)
+                con.execute(f"CREATE TEMP TABLE empty_{table} AS SELECT * FROM rows")
+                parts.append(f"SELECT * FROM empty_{table}")
+            if signal in compact.COLUMNS_SINCE:
+                parts.append(compact.COLUMNS_SINCE[signal])
+            con.execute(f"CREATE TEMP VIEW {table} AS SELECT * FROM ({' UNION ALL BY NAME '.join(parts)}) "
+                        f"WHERE ts >= '{_naive(start)}'::TIMESTAMP AND ts < '{_naive(end)}'::TIMESTAMP")
+        con.execute("DROP TABLE IF EXISTS rows")
+        if allowed:
+            con.execute("SET allowed_paths=[" + ", ".join("'" + p.replace("'", "''") + "'" for p in allowed) + "]")
+        for setting in ("enable_external_access=false", "autoinstall_known_extensions=false",
+                        "autoload_known_extensions=false", "lock_configuration=true"):
+            con.execute(f"SET {setting}")
+        t_load = time.perf_counter()
+        deadline = _Deadline(con, cancel).__enter__()
         try:
-            deadline = _Deadline(con, event.get("cancel")).__enter__()
-            for table, signal in SQL_TABLES.items():
-                mine = [(f, local) for t, f, local in todo if t == table]
-                pq = [local for f, local in mine if _is_parquet(f)]
-                parts = []
-                if pq:
-                    allowed += pq
-                    paths = ", ".join("'" + p.replace("'", "''") + "'" for p in pq)
-                    parts.append(f"SELECT * FROM read_parquet([{paths}], union_by_name = true, hive_partitioning = false)")
-                for i, (f, local) in enumerate((f, l) for f, l in mine if not _is_parquet(f)):
-                    parsed = layout.parse_incoming_key(f["file_path"][len(prefix):])
-                    compact.load_rows(con, [local], parsed[2], parsed[3], signal)
-                    con.execute(f"CREATE TEMP TABLE raw_{table}_{i} AS SELECT * FROM rows")
-                    parts.append(f"SELECT * FROM raw_{table}_{i}")
-                if not parts:   # no data: an empty table with the signal's columns
-                    empty = os.path.join(work, f"empty-{table}.json")
-                    with open(empty, "w") as fh:
-                        json.dump({"logs": {"resourceLogs": []}, "traces": {"resourceSpans": []},
-                                   "metrics": {"resourceMetrics": []}}[signal], fh)
-                    compact.load_rows(con, [empty], "2000-01-01", "00", signal)
-                    con.execute(f"CREATE TEMP TABLE empty_{table} AS SELECT * FROM rows")
-                    parts.append(f"SELECT * FROM empty_{table}")
-                if signal in compact.COLUMNS_SINCE:
-                    parts.append(compact.COLUMNS_SINCE[signal])
-                con.execute(f"CREATE TEMP VIEW {table} AS SELECT * FROM ({' UNION ALL BY NAME '.join(parts)}) "
-                            f"WHERE ts >= '{_naive(event['start'])}'::TIMESTAMP AND ts < '{_naive(event['end'])}'::TIMESTAMP")
-            con.execute("DROP TABLE IF EXISTS rows")
-            if allowed:
-                con.execute("SET allowed_paths=[" + ", ".join("'" + p.replace("'", "''") + "'" for p in allowed) + "]")
-            for setting in ("enable_external_access=false", "autoinstall_known_extensions=false",
-                            "autoload_known_extensions=false", "lock_configuration=true"):
-                con.execute(f"SET {setting}")
-            t_load = time.perf_counter()
-            try:
-                cur = con.execute(event["sql"])
-                cols = [d[0] for d in cur.description]
-                rows = cur.fetchmany(SQL_MAX_ROWS + 1)
-            except duckdb_interrupt():
-                return {"cancelled": True} if deadline.cancelled else {"error": timed_out_message()}
-            except duckdb_error() as e:
-                return {"error": str(e).split("\n")[0][:500]}
+            cur = con.execute(sql)
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchmany(SQL_MAX_ROWS + 1)
+        except duckdb_interrupt():
+            return {"cancelled": True} if deadline.cancelled else {"error": timed_out_message()}
+        except duckdb_error() as e:
+            return {"error": str(e).split("\n")[0][:500]}
         finally:
             deadline.__exit__()
+    finally:
+        con.close()
+    return {"columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:SQL_MAX_ROWS]],
+            "truncated": len(rows) > SQL_MAX_ROWS,
+            "stats": {"load_ms": round((t_load - t0) * 1000), "query_ms": round((time.perf_counter() - t_load) * 1000)}}
+
+
+SCAN_MAX_BYTES = 4_000_000   # one scan slice's rows, as Parquet (base64 in Lambda's 6 MB response)
+
+
+def run_scan_worker(event):
+    """One slice of a SQL question's scan fan-out (sqlscan.py): this slice's Parquet files of one table,
+    read in place, keeping only the columns and rows the question can use -> them as one Parquet file
+    (base64), or {"too_big": true} when they don't fit in a response."""
+    t0 = time.perf_counter()
+    tenant = layout.check_tenant(event["tenant"])
+    scan = event["scan"]
+    signal = SQL_TABLES[scan["table"]]
+    _, s3 = lookup._clients_for(tenant)
+    prefix = f"s3://{lookup.BUCKET}/"
+    files = sorted({f["file_path"]: f for f in event["files"]}.values(), key=lambda f: f["file_path"])
+    if not all(_is_parquet(f) for f in files):
+        raise ValueError("scan slices are Parquet only")
+    ranges = TenantS3(s3, lookup.BUCKET, {f["file_path"][len(prefix):]: f["size_bytes"] for f in files})
+    work = tempfile.mkdtemp(dir="/tmp")
+    try:
+        con = compact._connect(work, f"{int(MEMORY_MB * 0.6)}MB")
+        try:
+            con.register_filesystem(ranges)
+            con.execute(f"SET threads = {RANGE_THREADS}")
+            paths = ", ".join("'" + f"{TenantS3.protocol}://{f['file_path'][len(prefix):]}".replace("'", "''") + "'"
+                              for f in files)
+            parts = [f"SELECT * FROM read_parquet([{paths}], union_by_name = true, hive_partitioning = false)"]
+            if signal in compact.COLUMNS_SINCE:
+                parts.append(compact.COLUMNS_SINCE[signal])
+            con.execute("CREATE TEMP VIEW t AS " + " UNION ALL BY NAME ".join(parts))
+            have = [r[0] for r in con.execute("DESCRIBE t").fetchall()]
+            wanted = scan.get("columns")
+            cols = ", ".join('"' + c.replace('"', '""') + '"' for c in have if wanted is None or c.lower() in wanted)
+            where = f"ts >= '{_naive(event['start'])}'::TIMESTAMP AND ts < '{_naive(event['end'])}'::TIMESTAMP"
+            if scan.get("filter"):
+                where += f" AND ({scan['filter']})"
+            out = os.path.join(work, "scan.parquet")
+            deadline = _Deadline(con, event.get("cancel")).__enter__()
+            try:
+                con.execute(f"COPY (SELECT {cols} FROM t WHERE {where}) TO '{out}' (FORMAT parquet, COMPRESSION zstd)")
+            except duckdb_interrupt():
+                return {"cancelled": True} if deadline.cancelled else {"timed_out": True}
+            finally:
+                deadline.__exit__()
+        finally:
             con.close()
-        return {"columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:SQL_MAX_ROWS]],
-                "truncated": len(rows) > SQL_MAX_ROWS,
-                "stats": {"download_ms": round((t_dl - t0) * 1000), "load_ms": round((t_load - t_dl) * 1000), "query_ms": round((time.perf_counter() - t_load) * 1000)}}
+        size = os.path.getsize(out)
+        stats = {"files": len(files), "bytes": ranges.bytes_read, "range_requests": ranges.requests,
+                 "out_bytes": size, "query_ms": round((time.perf_counter() - t0) * 1000)}
+        if size > SCAN_MAX_BYTES:
+            return {"too_big": True, "stats": stats}
+        with open(out, "rb") as fh:
+            return {"parquet": base64.b64encode(fh.read()).decode(), "stats": stats}
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -916,7 +1089,7 @@ def _direct(event):
             tenant = layout.check_tenant(event["tenant"])
             start, end = (max(datetime.fromtimestamp(_epoch_of(event[k], k), timezone.utc), kept_from()).strftime("%Y-%m-%dT%H:%M:%SZ")
                           for k in ("start", "end"))
-            return run_sql(tenant, event["sql"], start, end, services=event.get("services"))
+            return run_sql(tenant, event["sql"], start, end, services=event.get("services"), path=event.get("sql_path"))
         return run(event)
     except BadQuery as e:
         return {"error": str(e)}

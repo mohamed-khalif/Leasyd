@@ -24,6 +24,18 @@ Parameters:
     Description: >
       Target bytes of files per worker (64 MB). Fewer bytes, more workers in
       parallel: faster, at about the same total cost (billed per GB-second).
+  SqlInPlaceAccounts:
+    Type: String
+    Default: ""
+    Description: >
+      Accounts (comma-separated, * = all) whose SQL questions, when run by one worker, read Parquet in
+      place (only the columns and row groups needed) instead of downloading whole files. docs/perf-flags.md.
+  SqlScanFanoutAccounts:
+    Type: String
+    Default: ""
+    Description: >
+      Accounts (comma-separated, * = all) whose SQL questions use the scan fan-out: many workers read the
+      files, keeping only what the question can use, and the question runs over that. docs/perf-flags.md.
   ReadMode:
     Type: String
     Default: ranges
@@ -93,6 +105,8 @@ Resources:
           QUERY_MAX_WORKERS: !Ref MaxWorkers
           QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker
           RETENTION_DAYS: !Ref RetentionDays
+          SQL_IN_PLACE_ACCOUNTS: !Ref SqlInPlaceAccounts
+          SQL_SCAN_FANOUT_ACCOUNTS: !Ref SqlScanFanoutAccounts
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "4" }
