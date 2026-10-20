@@ -171,13 +171,15 @@ def test_small_files_are_fetched_whole_in_one_request():
     class S3:
         calls = []
 
-        def get_object(self, Bucket, Key, Range):
-            self.calls.append(Range)
+        def get_object(self, Bucket, Key, Range=None):
+            self.calls.append(Range or "whole")
             data = bytes(range(100))
-            a, b = (int(x) for x in Range.split("=")[1].split("-"))
+            a, b = (int(x) for x in Range.split("=")[1].split("-")) if Range else (0, 99)
             return {"Body": __import__("io").BytesIO(data[a:b + 1])}
     s3 = S3()
     fs = query.TenantS3(s3, "b", {"k": 100}, whole_below=1000)
-    with fs.open("k") as fh:
-        fh.seek(90), fh.read(10), fh.seek(0), fh.read(20)
-    assert s3.calls == ["bytes=0-99"]
+    for _ in range(3):   # DuckDB opens a file more than once: still one request
+        with fs.open("k") as fh:
+            fh.seek(90), fh.read(10), fh.seek(0)
+            assert fh.read(20) == bytes(range(20))
+    assert s3.calls == ["whole"]

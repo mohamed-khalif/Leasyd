@@ -845,6 +845,7 @@ def _run_locked_sql(work, sql, start, end, cancel, parquet, raw, fs=None):
 SCAN_MAX_BYTES = 4_000_000   # one scan slice's rows, as Parquet (base64 in Lambda's 6 MB response)
 SCAN_FILES_PER_WORKER = 16   # a scan slice's most files: reading a file costs S3 round trips, however small
 SMALL_FILE_BYTES = 512 * 1024   # SQL paths fetch files this small whole (one request, not footer + chunks)
+WHOLE_KEPT_BYTES = 256 * 1024 * 1024   # most bytes of such files one reader keeps in memory
 
 
 def run_scan_worker(event):
@@ -1022,7 +1023,8 @@ class TenantS3(AbstractFileSystem):
     def __init__(self, s3, bucket, sizes, whole_below=0, **kw):
         super().__init__(skip_instance_cache=True, **kw)
         self.s3, self.bucket, self.sizes = s3, bucket, sizes
-        self.whole_below = whole_below   # files this small are fetched whole, in one request
+        self.whole_below = whole_below   # files this small are fetched whole, in one request, and kept:
+        self.whole, self.whole_bytes = {}, 0   # DuckDB opens a file several times (schema, then each read)
         self.lock = threading.Lock()
         self.requests = self.bytes_read = 0
 
@@ -1035,9 +1037,29 @@ class TenantS3(AbstractFileSystem):
 
     def _open(self, path, mode="rb", block_size=None, **kw):
         path = self._strip_protocol(path)
-        small = self.sizes[path] <= self.whole_below
+        size = self.sizes[path]
+        if size <= self.whole_below:
+            data = self._whole(path, size)
+            if data is not None:
+                return _RangeFile(self, path, mode, block_size=block_size or RANGE_BLOCK_BYTES,
+                                  cache_type="all", cache_options={"data": data}, size=size)
         return _RangeFile(self, path, mode, block_size=block_size or RANGE_BLOCK_BYTES,
-                          cache_type="all" if small else "readahead", size=self.sizes[path])
+                          cache_type="readahead", size=size)
+
+    def _whole(self, path, size):
+        """The file's bytes, fetched once; None once WHOLE_KEPT_BYTES are kept (read in ranges then)."""
+        with self.lock:
+            if path in self.whole:
+                return self.whole[path]
+            if self.whole_bytes + size > WHOLE_KEPT_BYTES:
+                return None
+            self.whole_bytes += size
+        body = self.s3.get_object(Bucket=self.bucket, Key=path)["Body"].read()
+        with self.lock:
+            self.requests += 1
+            self.bytes_read += len(body)
+            self.whole[path] = body
+        return body
 
 
 def _jsonable(v):
