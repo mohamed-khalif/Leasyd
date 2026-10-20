@@ -43,6 +43,7 @@ query and returns partial aggregates or rows.
 import base64
 import contextvars
 import errno
+import hashlib
 import json
 import math
 import os
@@ -415,6 +416,7 @@ def _naive(ts):
 MEMORY_MB = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048"))
 _warm = set()                                                  # roles this container has run as
 _question = contextvars.ContextVar("question", default=None)   # the engine runs of the current question
+_cache_state = contextvars.ContextVar("cache_state", default="none")   # the result cache's answer: hit / miss
 
 
 def _path_of(q):
@@ -455,9 +457,110 @@ def _observed(path, tenant, fn):
                   "scan_ms": sum(r.get("scan_ms", 0) for r in runs), "merge_ms": sum(r.get("merge_ms", 0) for r in runs),
                   # Lambda GB-seconds: the workers' plus this coordinator's own
                   "gb_s": round((sum(w["ms"] * w["mb"] for w in ws) + ms * MEMORY_MB) / 1024 / 1000, 3),
-                  "cache": "none"}
+                  "cache": _cache_state.get()}
         print(json.dumps({"question": timing}), flush=True)
     return out, timing
+
+
+# ------------------------------------------------------- result cache
+
+# Answers kept for repeat questions (docs/perf-flags.md, RESULT_CACHE_ACCOUNTS): in this container's
+# memory, and in S3 (_results/cache/, expired by the bucket after a day) so every container shares them.
+# A question's time range is rounded down to 30 s, so repeat visits within 30 s ask the same question:
+# an answer is at most 30 s behind. Kept 30 s when the range reaches into the last 15 minutes, else
+# 10 minutes. "cache": false (the benchmark's --no-cache) skips it.
+RESULT_CACHE_FLAG = "RESULT_CACHE_ACCOUNTS"
+CACHE_STEP_S = 30
+CACHE_RECENT_S, CACHE_OLD_S, CACHE_RECENT_RANGE_S = 30, 600, 15 * 60
+CACHE_MEMORY_ENTRIES, CACHE_MAX_BYTES = 500, 2_000_000
+CACHE_VERSION = 1   # bump when answers change shape
+_memory = {}         # key -> (expires epoch, answer)
+
+
+def cached(kind, tenant, q, compute, ok):
+    """compute(q) -> answer, or the kept answer to the same question. ok: whether an answer may be kept."""
+    if not tenant or not flag_on(RESULT_CACHE_FLAG, tenant) or q.get("cache") is False:
+        return compute({k: v for k, v in q.items() if k != "cache"})
+    q = _rounded({k: v for k, v in q.items() if k != "cache"})
+    key = hashlib.sha256(json.dumps({"v": CACHE_VERSION, "kind": kind, "tenant": tenant, "q": q},
+                                    sort_keys=True, default=str).encode()).hexdigest()
+    now = time.time()
+    ends = [_epoch_of(q[k], k) for k in ("end", "time") if q.get(k) is not None]
+    keep = CACHE_RECENT_S if not ends or max(ends) > now - CACHE_RECENT_RANGE_S else CACHE_OLD_S
+    s3key = f"_results/cache/{tenant}/{key}.json"
+    hit = _memory.get(key)
+    if hit and hit[0] > now:
+        _cache_state.set("hit")
+        return json.loads(hit[1])
+    try:
+        obj = _s3().get_object(Bucket=lookup.BUCKET, Key=s3key)
+        if obj["LastModified"].timestamp() > now - keep:
+            text = obj["Body"].read().decode()
+            _remember(key, obj["LastModified"].timestamp() + keep, text)
+            _cache_state.set("hit")
+            return json.loads(text)
+    except ClientError:
+        pass   # not there (403 without ListBucket) or unreadable: compute it
+    _cache_state.set("miss")
+    out = compute(q)
+    if ok(out):
+        text = json.dumps(out)
+        if len(text) <= CACHE_MAX_BYTES:
+            _remember(key, now + keep, text)
+            try:
+                _s3().put_object(Bucket=lookup.BUCKET, Key=s3key, Body=text.encode(), ContentType="application/json")
+            except ClientError as e:
+                print(json.dumps({"cache_put_failed": str(e)[:200]}))
+    return out
+
+
+def _remember(key, expires, text):
+    if len(_memory) >= CACHE_MEMORY_ENTRIES:
+        for k in sorted(_memory, key=lambda k: _memory[k][0])[:CACHE_MEMORY_ENTRIES // 5]:
+            del _memory[k]
+    _memory[key] = (expires, text)
+
+
+def _rounded(q):
+    """The question with its times rounded down to CACHE_STEP_S (ISO, as every path takes)."""
+    out = dict(q)
+    for k in ("start", "end", "time"):
+        if out.get(k) is not None:
+            t = _epoch_of(out[k], k)
+            out[k] = datetime.fromtimestamp(t - t % CACHE_STEP_S, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return out
+
+
+# ------------------------------------------------------------- warming
+
+# A schedule (infra/phase4-query.yaml, WarmRule) calls this every few minutes in business hours: it holds
+# `coordinators` coordinator containers and `workers` worker containers busy at once for a moment, so
+# Lambda keeps that many ready and pages don't wait for new containers. obs-query-api is pinged by the
+# same schedule directly.
+WARM_HOLD_S = 0.5
+
+
+def warm(spec):
+    spec = spec if isinstance(spec, dict) else {}
+    n_coord, n_work = int(spec.get("coordinators", 0)), int(spec.get("workers", 0))
+    if not n_coord and not n_work:
+        time.sleep(WARM_HOLD_S)   # one of the containers being held
+        return {"warm": True}
+    client = boto3.client("lambda", config=botocore.config.Config(
+        max_pool_connections=max(1, n_coord + n_work), read_timeout=60, retries={"max_attempts": 0}))
+    calls = [COORDINATOR_FUNCTION] * max(0, n_coord - 1) + [WORKER_FUNCTION] * n_work
+    def ping(fn):
+        try:
+            client.invoke(FunctionName=fn, Payload=b'{"warm": {}}')
+            return True
+        except Exception as e:      # noqa: BLE001  (a missed ping only costs a cold start)
+            print(json.dumps({"warm_failed": fn, "error": str(e)[:200]}))
+            return False
+    with ThreadPoolExecutor(max(1, len(calls))) as pool:
+        held = sum(pool.map(ping, calls))
+        time.sleep(WARM_HOLD_S)   # this container is held too
+    print(json.dumps({"warmed": held + 1, "asked": len(calls) + 1}))
+    return {"warm": True, "warmed": held + 1}
 
 
 # -------------------------------------------------------------- worker
@@ -472,6 +575,9 @@ def worker(event, context):
 
 
 def _worker(event):
+    if "warm" in event:
+        time.sleep(WARM_HOLD_S)
+        return {"warm": True}
     try:
         if "job" in event:
             return run_job(event)
@@ -1088,12 +1194,15 @@ def handler(event, context):
     without it (alert evaluation) the query is neither charged nor refused."""
     if "answer_job" in event:
         return answer_job(event["answer_job"])
+    if "warm" in event:
+        return warm(event["warm"])
     bill, want_timing = event.get("bill"), event.get("timing")
     if bill and (refused := over_daily(layout.check_tenant(event["tenant"]))):
         return {"error": refused, **({"retryable": True} if refused == limits.UNAVAILABLE else {})}
     try:
         q = {k: v for k, v in event.items() if k not in ("bill", "timing")}
-        out, timing = _observed(_path_of(q), event.get("tenant"), lambda: _direct(q))
+        out, timing = _observed(_path_of(q), event.get("tenant"), lambda: cached(
+            "direct", event.get("tenant"), q, _direct, lambda o: isinstance(o, dict) and not o.get("error")))
         if want_timing and isinstance(out, dict):   # the benchmark (infra/bench/bench.py)
             out["timing"] = timing
         return out
@@ -1156,6 +1265,9 @@ def api(event, context):
     the user). A tenant or any other field in the body outside API_FIELDS is
     ignored. Unexpected errors raise, so they count as Lambda errors
     (alarmed) and the caller gets a 5xx."""
+    if event.get("warm"):   # the warming schedule's ping (warm)
+        time.sleep(WARM_HOLD_S)
+        return {"warm": True}
     auth = (event.get("requestContext") or {}).get("authorizer") or {}
     claims = auth.get("claims") or {}
     tenant = auth.get("tenant") or claims.get("custom:tenant")
@@ -1261,7 +1373,8 @@ def answer_job(job):
     in_time = (lambda: not started or time.time() < started + JOB_TIMEOUT_S)
     context = _job.set((_cancel_key(tenant, job["id"]), job.get("store_after", 0)))   # reset below: Lambda reuses the thread
     try:
-        out, _ = _observed(_path_of(job["query"]), tenant, lambda: answer(tenant, job["query"]))
+        out, _ = _observed(_path_of(job["query"]), tenant, lambda: cached(
+            "api", tenant, job["query"], lambda q: answer(tenant, q), lambda o: o.get("statusCode") == 200))
     except Cancelled:
         out = CANCELLED_ANSWER
     except Unavailable as e:

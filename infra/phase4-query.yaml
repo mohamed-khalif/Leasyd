@@ -36,6 +36,22 @@ Parameters:
     Description: >
       Accounts (comma-separated, * = all) whose SQL questions use the scan fan-out: many workers read the
       files, keeping only what the question can use, and the question runs over that. docs/perf-flags.md.
+  ResultCacheAccounts:
+    Type: String
+    Default: ""
+    Description: Accounts (comma-separated, * = all) whose answers are kept for repeat questions (30 s for recent data). docs/perf-flags.md.
+  WarmSchedule:
+    Type: String
+    Default: "cron(0/5 6-18 ? * MON-FRI *)"
+    Description: When to keep query containers warm (UTC; default every 5 min, weekdays ~07:00-19:00 London). "" = never.
+  WarmCoordinators:
+    Type: Number
+    Default: 3
+    Description: obs-query containers kept warm (obs-query-api gets three pings each time too).
+  WarmWorkers:
+    Type: Number
+    Default: 128
+    Description: obs-query-worker containers kept warm.
   ReadMode:
     Type: String
     Default: ranges
@@ -67,6 +83,7 @@ Conditions:
   CapWorkers: !Not [!Equals [!Ref WorkerConcurrency, 0]]
   CapApi: !Not [!Equals [!Ref ApiConcurrency, 0]]
   CapCoordinator: !Not [!Equals [!Ref CoordinatorConcurrency, 0]]
+  Warm: !Not [!Equals [!Ref WarmSchedule, ""]]
 
 Resources:
   CoordinatorLogGroup:
@@ -107,6 +124,7 @@ Resources:
           RETENTION_DAYS: !Ref RetentionDays
           SQL_IN_PLACE_ACCOUNTS: !Ref SqlInPlaceAccounts
           SQL_SCAN_FANOUT_ACCOUNTS: !Ref SqlScanFanoutAccounts
+          RESULT_CACHE_ACCOUNTS: !Ref ResultCacheAccounts
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "4" }
@@ -206,6 +224,41 @@ Resources:
       Tags:
         - { Key: project, Value: obs }
         - { Key: phase, Value: "Q1" }
+
+  # Keeps containers ready (services/compaction/query.py, warm): the coordinator holds WarmCoordinators
+  # coordinators and WarmWorkers workers busy for a moment; three pings hold three API containers.
+  WarmRule:
+    Type: AWS::Events::Rule
+    Condition: Warm
+    Properties:
+      Name: obs-query-warm
+      Description: Keeps query Lambda containers warm in business hours
+      ScheduleExpression: !Ref WarmSchedule
+      Targets:
+        - Id: coordinator
+          Arn: !GetAtt CoordinatorFunction.Arn
+          Input: !Sub '{"warm": {"coordinators": ${WarmCoordinators}, "workers": ${WarmWorkers}}}'
+        - { Id: api1, Arn: !GetAtt ApiFunction.Arn, Input: '{"warm": true}' }
+        - { Id: api2, Arn: !GetAtt ApiFunction.Arn, Input: '{"warm": true}' }
+        - { Id: api3, Arn: !GetAtt ApiFunction.Arn, Input: '{"warm": true}' }
+
+  WarmCoordinatorPermission:
+    Type: AWS::Lambda::Permission
+    Condition: Warm
+    Properties:
+      FunctionName: !Ref CoordinatorFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WarmRule.Arn
+
+  WarmApiPermission:
+    Type: AWS::Lambda::Permission
+    Condition: Warm
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WarmRule.Arn
 
 Outputs:
   QueryFunction:

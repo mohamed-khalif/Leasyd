@@ -1027,3 +1027,53 @@ def test_a_worker_reports_its_time_memory_and_whether_it_was_cold(monkeypatch):
     first, second = query.worker({"query": {}}, None), query.worker({"query": {}}, None)
     assert first["stats"]["lambda"]["cold"] is True and second["stats"]["lambda"]["cold"] is False
     assert first["stats"]["files"] == 1 and first["stats"]["lambda"]["mb"] == query.MEMORY_MB
+
+
+# ---- result cache and warming (docs/perf-flags.md)
+
+def test_repeat_questions_are_answered_from_the_cache(aws, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(query, "_memory", {})
+    calls = []
+    def compute(q):
+        calls.append(q)
+        return {"rows": [[len(calls)]]}
+    ok = lambda o: True   # noqa: E731
+    q = {"signal": "logs", "start": "2026-09-26T10:00:10Z", "end": "2026-09-26T10:30:10Z"}
+    monkeypatch.setenv(query.RESULT_CACHE_FLAG, "acme")
+    first = query.cached("direct", "acme", q, compute, ok)
+    assert calls[0]["start"] == "2026-09-26T10:00:00Z"   # rounded down to 30 s
+    again = query.cached("direct", "acme", {**q, "end": "2026-09-26T10:30:25Z"}, compute, ok)   # same 30 s
+    assert again == first and len(calls) == 1
+    query._memory.clear()   # another container: from S3
+    assert query.cached("direct", "acme", q, compute, ok) == first and len(calls) == 1
+    query.cached("direct", "globex", q, compute, ok)   # another account never shares it
+    query.cached("direct", "acme", {**q, "cache": False}, compute, ok)   # the benchmark's --no-cache
+    assert len(calls) == 3
+    monkeypatch.setenv(query.RESULT_CACHE_FLAG, "")
+    query.cached("direct", "acme", q, compute, ok)   # flag off: always computed
+    assert len(calls) == 4
+
+
+def test_failed_answers_are_not_kept(aws, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(query, "_memory", {})
+    monkeypatch.setenv(query.RESULT_CACHE_FLAG, "*")
+    calls = []
+    def compute(q):
+        calls.append(q)
+        return {"error": "nope"}
+    q = {"sql": "SELECT 1", "start": 1790000000, "end": 1790000600}
+    for _ in range(2):
+        query.cached("direct", "acme", q, compute, lambda o: not o.get("error"))
+    assert len(calls) == 2
+
+
+def test_warming_holds_the_asked_containers(monkeypatch):
+    invoked = []
+    class Client:
+        def invoke(self, FunctionName, Payload):
+            invoked.append(FunctionName)
+    monkeypatch.setattr(query.boto3, "client", lambda *a, **k: Client())
+    monkeypatch.setattr(query, "WARM_HOLD_S", 0)
+    assert query.warm({"coordinators": 3, "workers": 5})["warmed"] == 8
+    assert sorted(invoked) == ["obs-query"] * 2 + ["obs-query-worker"] * 5
+    assert query.worker({"warm": {}}, None)["warm"] and query.api({"warm": True}, None) == {"warm": True}
