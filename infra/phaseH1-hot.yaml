@@ -1,0 +1,388 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Hot store (docs/hot-store.md): ingest copies each batch to the obs-hot Kinesis stream; one Fargate task
+  (services/hot/server.py) reads it and keeps the last 2 hours in memory; obs-query (in this VPC's private
+  subnets) asks it about recent time and the files about the rest. If the task is down, obs-query asks
+  the files about everything. Also the image repository and its CodeBuild project.
+  Deploy with infra/deploy-phaseH1.sh. Needs obs-phase0 redeployed first (boundary: HotStream).
+
+Parameters:
+  ImageUri:
+    Type: String
+    Default: ""
+    Description: The hot store image (set by deploy-phaseH1.sh). Empty = no task yet.
+  DesiredCount:
+    Type: Number
+    Default: 1
+    AllowedValues: [0, 1]
+    Description: 1 = running; 0 = stopped (obs-query then asks the files about everything).
+  KeepSeconds:
+    Type: Number
+    Default: 7200
+    Description: Seconds of recent data kept in memory.
+
+Conditions:
+  HasImage: !Not [!Equals [!Ref ImageUri, ""]]
+
+Resources:
+  # ------------------------------------------------------------- network
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.40.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: obs-hot }, { Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: obs-hot }, { Key: project, Value: obs }]
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref Igw }
+
+  PublicA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.40.0.0/20
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: obs-hot-public-a }]
+  PublicB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.40.16.0/20
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: obs-hot-public-b }]
+  PrivateA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.40.128.0/20
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: obs-hot-private-a }]
+  PrivateB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.40.144.0/20
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: obs-hot-private-b }]
+
+  PublicRoutes:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc, Tags: [{ Key: Name, Value: obs-hot-public }] }
+  PublicDefault:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties: { RouteTableId: !Ref PublicRoutes, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref Igw }
+  PublicAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicA, RouteTableId: !Ref PublicRoutes }
+  PublicAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicB, RouteTableId: !Ref PublicRoutes }
+
+  # Private: no internet; obs-query reaches AWS through the endpoints below.
+  PrivateRoutes:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc, Tags: [{ Key: Name, Value: obs-hot-private }] }
+  PrivateAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateA, RouteTableId: !Ref PrivateRoutes }
+  PrivateAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateB, RouteTableId: !Ref PrivateRoutes }
+
+  QuerySG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: obs-query
+      GroupDescription: obs-query in the hot VPC
+      VpcId: !Ref Vpc
+  HotSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: obs-hot
+      GroupDescription: The hot store server; port 8080 from obs-query only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: !Ref QuerySG }
+  EndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: obs-hot-endpoints
+      GroupDescription: AWS API endpoints for obs-query
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref QuerySG }
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRoutes]
+  DynamoEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.dynamodb"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRoutes]
+  LambdaEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.lambda"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateA, !Ref PrivateB]
+      SecurityGroupIds: [!Ref EndpointSG]
+  StsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.sts"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateA, !Ref PrivateB]
+      SecurityGroupIds: [!Ref EndpointSG]
+
+  # ------------------------------------------------------------- stream
+  Stream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: obs-hot
+      StreamModeDetails: { StreamMode: ON_DEMAND }
+      RetentionPeriodHours: 24
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  # ------------------------------------------------------------- image
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: obs-hot
+      EmptyOnDelete: true
+      ImageScanningConfiguration: { ScanOnPush: true }
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: >
+          {"rules": [{"rulePriority": 1, "description": "keep the last 5 images",
+            "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5},
+            "action": {"type": "expire"}}]}
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/codebuild/obs-hot, RetentionInDays: 14 }
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-hot-build
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: codebuild.amazonaws.com }, Action: sts:AssumeRole }
+      Policies:
+        - PolicyName: build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:aws:s3:::obs-artifacts-${AWS::AccountId}-${AWS::Region}/builds/*"
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:InitiateLayerUpload, ecr:UploadLayerPart,
+                         ecr:CompleteLayerUpload, ecr:PutImage, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt BuildLogGroup.Arn
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  Build:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: obs-hot
+      Description: Build and push the hot store image
+      ServiceRole: !GetAtt BuildRole.Arn
+      Source:
+        Type: S3
+        Location: !Sub "obs-artifacts-${AWS::AccountId}-${AWS::Region}/builds/hot.zip"   # overridden per build
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password | docker login --username AWS --password-stdin "${REPOSITORY%%/*}"
+            build:
+              commands:
+                - docker build -t "$REPOSITORY:$IMAGE_TAG" .
+            post_build:
+              commands:
+                - docker push "$REPOSITORY:$IMAGE_TAG"
+      Artifacts: { Type: NO_ARTIFACTS }
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-aarch64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - { Name: REPOSITORY, Value: !GetAtt Repository.RepositoryUri }
+          - { Name: IMAGE_TAG, Value: set-per-build }
+      LogsConfig:
+        CloudWatchLogs: { Status: ENABLED, GroupName: !Ref BuildLogGroup }
+      TimeoutInMinutes: 20
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  # ------------------------------------------------------------- server
+  Namespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: obs.internal
+      Vpc: !Ref Vpc
+  Discovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: hot
+      NamespaceId: !Ref Namespace
+      DnsConfig:
+        DnsRecords: [{ Type: A, TTL: 10 }]
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /ecs/obs-hot, RetentionInDays: 14 }
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-hot
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }
+      Policies:
+        - PolicyName: read-stream
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [kinesis:ListShards, kinesis:GetShardIterator, kinesis:GetRecords, kinesis:DescribeStreamSummary]
+                Resource: !GetAtt Stream.Arn
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-hot-execution
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }
+      Policies:
+        - PolicyName: pull-and-log
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt LogGroup.Arn
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: obs-hot
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  Task:
+    Type: AWS::ECS::TaskDefinition
+    Condition: HasImage
+    Properties:
+      Family: obs-hot
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "1024"
+      Memory: "4096"
+      RuntimePlatform: { CpuArchitecture: ARM64, OperatingSystemFamily: LINUX }
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: hot
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings: [{ ContainerPort: 8080, Protocol: tcp }]
+          Environment:
+            - { Name: HOT_STREAM, Value: !Ref Stream }
+            - { Name: HOT_KEEP_S, Value: !Ref KeepSeconds }
+            - { Name: AWS_DEFAULT_REGION, Value: !Ref "AWS::Region" }
+            # query.py's imports need these; the server reads no files.
+            - { Name: BUCKET, Value: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}" }
+            - { Name: INDEX_TABLE, Value: obs-index }
+            - { Name: TENANT_READER_ROLE_ARN, Value: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader" }
+          HealthCheck:
+            Command: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: hot
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+  Service:
+    Type: AWS::ECS::Service
+    Condition: HasImage
+    DependsOn: PublicDefault
+    Properties:
+      ServiceName: obs-hot
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref Task
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      # One task: a new one starts before the old stops; obs-query uses the files while it fills.
+      DeploymentConfiguration: { MinimumHealthyPercent: 0, MaximumPercent: 200 }
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED      # pulls the image, reads Kinesis and logs without a NAT
+          Subnets: [!Ref PublicA, !Ref PublicB]
+          SecurityGroups: [!Ref HotSG]
+      ServiceRegistries: [{ RegistryArn: !GetAtt Discovery.Arn }]
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: H1 }]
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  Project:
+    Value: !Ref Build
+  StreamName:
+    Value: !Ref Stream
+  HotUrl:
+    Value: "http://hot.obs.internal:8080"
+  QuerySecurityGroup:
+    Value: !Ref QuerySG
+  QuerySubnets:
+    Value: !Join [",", [!Ref PrivateA, !Ref PrivateB]]

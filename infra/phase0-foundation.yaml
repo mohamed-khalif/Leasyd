@@ -205,6 +205,20 @@ Resources:
             Effect: Allow
             Action: events:ListRules
             Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/*"
+          - Sid: VpcLambdaNetwork      # obs-query runs in the hot store's VPC (H1); these actions take no resource
+            Effect: Allow
+            Action:
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DeleteNetworkInterface
+              - ec2:AssignPrivateIpAddresses
+              - ec2:UnassignPrivateIpAddresses
+            Resource: "*"
+          - Sid: HotStream             # ingest puts on it, the hot store server reads it (H1)
+            Effect: Allow
+            Action: [kinesis:PutRecords, kinesis:PutRecord, kinesis:ListShards, kinesis:GetShardIterator,
+                     kinesis:GetRecords, kinesis:DescribeStreamSummary]
+            Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/obs-hot"
           - Sid: Telemetry
             Effect: Allow
             Action:
@@ -354,6 +368,7 @@ Resources:
             - !Ref AWS::NoValue
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole   # obs-query runs in the hot VPC (H1)
       Policies:
         - PolicyName: query
           PolicyDocument:

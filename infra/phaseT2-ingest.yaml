@@ -32,6 +32,14 @@ Parameters:
       gzip: ingest compresses each record before Firehose, which bills the bytes
       it receives (~5x less). Set it only after every tenant stream passes
       records through (infra/migrate-stream-compression.py); readers accept both.
+  HotStream:
+    Type: String
+    Default: ""
+    Description: Kinesis stream of the hot store (obs-hot, phaseH1). Empty = off.
+  HotAccounts:
+    Type: String
+    Default: ""
+    Description: Comma-separated tenants copied to HotStream ("*" = all).
 
   ApiHostName:
     Type: String
@@ -163,6 +171,9 @@ Resources:
               - Effect: Allow
                 Action: [firehose:PutRecord, firehose:PutRecordBatch]
                 Resource: !Sub "arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/obs-t-*"
+              - Effect: Allow
+                Action: [kinesis:PutRecords, kinesis:PutRecord]
+                Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/obs-hot"
               # Daily caps: the tenant's cap (tenant#), and today's bytes (meter#<tenant>#<day>).
               - Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:UpdateItem]
@@ -195,6 +206,8 @@ Resources:
         Variables:
           STREAM_PREFIX: obs-t-
           RECORD_COMPRESSION: !Ref RecordCompression
+          HOT_STREAM: !Ref HotStream
+          HOT_ACCOUNTS: !Ref HotAccounts
           TENANTS_TABLE: obs-tenants
       Tags:
         - { Key: project, Value: obs }

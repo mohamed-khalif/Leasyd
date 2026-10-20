@@ -760,17 +760,36 @@ def run_sql(tenant, sql, start, end, invoke_worker=None, services=None, path=Non
     plan = sqlscan.plan(sql) if fanout else None
     if plan is not None and set(plan) != set(used):
         plan = None
-    files = {}
-    for table in used:
-        # Services the query itself limits every read of the table to skip the other services' files.
-        only = services if services is not None or plan is None else \
-            (sql_services(plan[table]["services"]) if plan[table]["services"] else None)
-        found = lookup.lookup(tenant=tenant, start=start, end=end, signal=SQL_TABLES[table], services=only)
-        files[table] = found["files"]
+    def files_until(until):
+        out = {t: [] for t in used}
+        if _epoch_of(until, "end") <= _epoch_of(start, "start"):
+            return out   # all of the range is the hot store's
+        for table in used:
+            # Services the query itself limits every read of the table to skip the other services' files.
+            only = services if services is not None or plan is None else \
+                (sql_services(plan[table]["services"]) if plan[table]["services"] else None)
+            out[table] = lookup.lookup(tenant=tenant, start=start, end=until, signal=SQL_TABLES[table], services=only)["files"]
+        return out
+    invoke_worker = invoke_worker or _invoke_worker
+    cut = hot_cutoff(tenant, sorted({compact.SUMMARIES.get(t, (SQL_TABLES[t], None))[0] for t in used}), end) \
+        if plan is not None else None
+    if cut is not None:   # files until the cut, the hot store from it
+        files = files_until(_iso_at(cut))
+        if sum(len(fs) for fs in files.values()) <= SQL_FANOUT_MAX_FILES and all(_is_parquet(f) for fs in files.values() for f in fs):
+            out, parts = _run_sql_fanout(tenant, sql, start, end, plan, files, invoke_worker, _stop_if_cancelled(), hot_from=cut)
+            if out is not None:
+                count = sum(len(fs) for fs in files.values())
+                out["stats"] = {**out.get("stats", {}), "files": count, "path": "scan_fanout", "hot_from": _iso_at(cut),
+                                "bytes": sum(f.get("size_bytes", 0) for fs in files.values() for f in fs),
+                                "total_ms": round((time.perf_counter() - t0) * 1000)}
+                used_units(tenant, max(1, math.ceil(out["stats"]["bytes"] / TARGET_BYTES_PER_WORKER)) if count else 0)
+                _noted(out["stats"], parts)
+                return out
+            _noted({"files": 0}, parts)   # their time still counts; the files answer for the whole range
+    files = files_until(end)
     size = sum(f.get("size_bytes", 0) for fs in files.values() for f in fs)
     count = sum(len(fs) for fs in files.values())
     cancel = _stop_if_cancelled()
-    invoke_worker = invoke_worker or _invoke_worker
     if plan is not None and count <= SQL_FANOUT_MAX_FILES and all(_is_parquet(f) for fs in files.values() for f in fs):
         out, parts = _run_sql_fanout(tenant, sql, start, end, plan, files, invoke_worker, cancel)
         if out is not None:
@@ -796,20 +815,25 @@ def run_sql(tenant, sql, start, end, invoke_worker=None, services=None, path=Non
     return out
 
 
-def _run_sql_fanout(tenant, sql, start, end, plan, files, invoke_worker, cancel):
+def _run_sql_fanout(tenant, sql, start, end, plan, files, invoke_worker, cancel, hot_from=None):
     """Many workers read the files, each keeping only what the question can use; the question then runs
     here, unchanged, over what they kept. -> (the answer, the workers' answers); the answer is None when
     the fan-out can't answer (a slice too big for its response, a worker failing, the query failing over
     the kept rows): the caller then runs the question the single-worker way, which decides."""
     t0 = time.perf_counter()
     per_table = max(1, MAX_WORKERS // max(1, len(files)))
+    cold_end = end if hot_from is None else _iso_at(hot_from)
     jobs = [{"scan": {"table": table, **{k: plan[table][k] for k in ("columns", "filter")}}, "tenant": tenant,
-             "start": start, "end": end, "files": chunk, "cancel": cancel}
+             "start": start, "end": cold_end, "files": chunk, "cancel": cancel}
             for table, fs in files.items()
             for chunk in plan_chunks(fs, per_table, min_chunks=math.ceil(len(fs) / SCAN_FILES_PER_WORKER))]
+    if hot_from is not None:   # from hot_from on, every table: the hot store
+        jobs += [{"scan": {"table": table, **{k: plan[table][k] for k in ("columns", "filter")}}, "tenant": tenant,
+                  "start": _iso_at(max(hot_from, _epoch_of(start, "start"))), "end": end, "hot": True} for table in files]
+
     def scan(job):
         try:
-            return invoke_worker(job)
+            return hot_call("/scan", job) if job.get("hot") else invoke_worker(job)
         except Unavailable:
             raise
         except Exception as e:      # noqa: BLE001  (the single-worker path decides)
@@ -956,6 +980,18 @@ SMALL_FILE_BYTES = 512 * 1024   # SQL paths fetch files this small whole (one re
 WHOLE_KEPT_BYTES = 256 * 1024 * 1024   # most bytes of such files one reader keeps in memory
 
 
+def scan_view(con, scan, start, end, out):
+    """Write the rows of the view t in [start, end) that the scan keeps (sqlscan.plan: its columns and row
+    filter) to the Parquet file out."""
+    have = [r[0] for r in con.execute("DESCRIBE t").fetchall()]
+    wanted = scan.get("columns")
+    cols = ", ".join('"' + c.replace('"', '""') + '"' for c in have if wanted is None or c.lower() in wanted)
+    where = f"ts >= '{_naive(start)}'::TIMESTAMP AND ts < '{_naive(end)}'::TIMESTAMP"
+    if scan.get("filter"):
+        where += f" AND ({scan['filter']})"
+    con.execute(f"COPY (SELECT {cols} FROM t WHERE {where}) TO '{out}' (FORMAT parquet, COMPRESSION zstd)")
+
+
 def run_scan_worker(event):
     """One slice of a SQL question's scan fan-out (sqlscan.py): this slice's Parquet files of one table,
     read in place, keeping only the columns and rows the question can use -> them as one Parquet file
@@ -983,16 +1019,10 @@ def run_scan_worker(event):
             if signal in compact.COLUMNS_SINCE:
                 parts.append(compact.COLUMNS_SINCE[signal])
             con.execute("CREATE TEMP VIEW t AS " + " UNION ALL BY NAME ".join(parts))
-            have = [r[0] for r in con.execute("DESCRIBE t").fetchall()]
-            wanted = scan.get("columns")
-            cols = ", ".join('"' + c.replace('"', '""') + '"' for c in have if wanted is None or c.lower() in wanted)
-            where = f"ts >= '{_naive(event['start'])}'::TIMESTAMP AND ts < '{_naive(event['end'])}'::TIMESTAMP"
-            if scan.get("filter"):
-                where += f" AND ({scan['filter']})"
             out = os.path.join(work, "scan.parquet")
             deadline = _Deadline(con, event.get("cancel")).__enter__()
             try:
-                con.execute(f"COPY (SELECT {cols} FROM t WHERE {where}) TO '{out}' (FORMAT parquet, COMPRESSION zstd)")
+                scan_view(con, scan, event["start"], event["end"], out)
             except duckdb_interrupt():
                 return {"cancelled": True} if deadline.cancelled else {"timed_out": True}
             finally:
@@ -1018,6 +1048,22 @@ def duckdb_error():
 def duckdb_interrupt():
     import duckdb
     return duckdb.InterruptException
+
+
+def answer_view(con, q, sql, params, kind):
+    """A JSON question's partial answer over the view t (this worker's rows): rows, and for counters
+    each series' first and last point (edges) so merge can stitch rises across workers."""
+    cur = con.execute(sql, params)
+    cols = [d[0] for d in cur.description]
+    cap = _row_cap(q)
+    rows = cur.fetchmany(cap + 1)
+    edges = compile_query(q, edges=True) if kind == "aggregate" else None
+    if edges:
+        cur = con.execute(*edges)
+        edges = {"columns": [d[0] for d in cur.description],
+                 "rows": [[_jsonable(v) for v in r] for r in cur.fetchall()]}
+    return {"kind": kind, "columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:cap]],
+            "truncated": len(rows) > cap, **({"edges": edges} if edges else {})}
 
 
 def run_worker(event):
@@ -1082,15 +1128,7 @@ def run_worker(event):
             if signal in compact.COLUMNS_SINCE:
                 parts.append(compact.COLUMNS_SINCE[signal])
             con.execute("CREATE TEMP VIEW t AS " + " UNION ALL BY NAME ".join(parts))
-            cur = con.execute(sql, params)
-            cols = [d[0] for d in cur.description]
-            cap = _row_cap(q)
-            rows = cur.fetchmany(cap + 1)
-            edges = compile_query(q, edges=True) if kind == "aggregate" else None
-            if edges:
-                cur = con.execute(*edges)
-                edges = {"columns": [d[0] for d in cur.description],
-                         "rows": [[_jsonable(v) for v in r] for r in cur.fetchall()]}
+            answer = answer_view(con, q, sql, params, kind)
             scanned = con.execute("SELECT count(*) FROM t").fetchone()[0] if event.get("count_scanned") else None
         except duckdb_interrupt():
             return {"kind": kind, "rows": [], "columns": [], "stats": {"files": len(files)},
@@ -1098,8 +1136,7 @@ def run_worker(event):
         finally:
             deadline.__exit__()
             con.close()
-        return {"kind": kind, "columns": cols, "rows": [[_jsonable(v) for v in r] for r in rows[:cap]],
-                "truncated": len(rows) > cap, **({"edges": edges} if edges else {}),
+        return {**answer,
                 "stats": {"files": len(files), "read_mode": mode,
                           "bytes": sum(os.path.getsize(p) for _, p in local) + ranges.bytes_read,
                           "range_requests": ranges.requests,
@@ -1862,11 +1899,73 @@ def _unavailable(e):
 CANCELLED_ANSWER = _http(410, {"error": "the query was cancelled"})
 
 
-def run(q, invoke_worker=None):
+# ------------------------------------------------------------ hot store
+
+# The always-on hot store (hotstore.py, services/hot) holds the last HOT_KEEP_S of flagged accounts' data
+# in memory, seconds after it arrives. A question reaching into that time asks it about the part from a cut
+# on and the files about the rest; if it can't answer, the files answer for the whole range.
+HOT_URL = os.environ.get("HOT_URL", "")      # e.g. http://hot.obs.internal:8080 (Cloud Map, in the VPC)
+HOT_FLAG = "HOT_ACCOUNTS"
+HOT_MARGIN_S = 120          # ask only about events this long after the store's cover began
+HOT_MAX_BEHIND_MS = 15_000  # a store this far behind the stream isn't asked
+HOT_STATUS_S = 5            # how long the store's status is trusted
+HOT_TIMEOUT_S = 20
+_hot_status = {"at": 0.0, "status": None}
+_hot_pool = ThreadPoolExecutor(8)
+
+
+def _iso_at(epoch):
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def hot_call(path, body, timeout=HOT_TIMEOUT_S):
+    import urllib.request
+    req = urllib.request.Request(HOT_URL + path, data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="GET" if body is None else "POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        out = json.loads(r.read())
+    if isinstance(out, dict) and out.get("error"):
+        raise RuntimeError(out["error"])
+    return out
+
+
+def hot_cutoff(tenant, signals, end):
+    """The whole second from which the hot store answers about these signals of the tenant, or None (not
+    configured, not flagged, unreachable, behind, not covering them, or the range ends before it)."""
+    if not HOT_URL or not flag_on(HOT_FLAG, tenant):
+        return None
+    now = time.time()
+    if now - _hot_status["at"] > HOT_STATUS_S:
+        try:
+            _hot_status["status"] = hot_call("/status", None, timeout=2)
+        except Exception as e:   # noqa: BLE001  unreachable: the files answer
+            print(json.dumps({"hot_status_failed": str(e)[:200]}))
+            _hot_status["status"] = None
+        _hot_status["at"] = now
+    st = _hot_status["status"]
+    if not st or st.get("behind_ms", HOT_MAX_BEHIND_MS + 1) > HOT_MAX_BEHIND_MS:
+        return None
+    covered = st.get("covered", {}).get(tenant, {})
+    if any(s not in covered for s in signals):
+        return None
+    since = max(_epoch_of(covered[s], "covered") for s in signals)
+    cut = math.ceil(max(since, now - st["keep_s"]) + HOT_MARGIN_S)
+    return cut if cut < _epoch_of(end, "end") else None
+
+
+def run(q, invoke_worker=None, hot=True):
     t0 = time.perf_counter()
     compile_query(q)  # reject bad queries before any work
-    found = lookup.lookup(tenant=q["tenant"], start=q["start"], end=q["end"], signal=q.get("signal", "logs"),
-                          services=q.get("services"), match=q.get("match"))
+    whole, hot_part = q, None
+    cut = hot_cutoff(q["tenant"], [q.get("signal", "logs")], q["end"]) if hot else None
+    if cut is not None:   # the hot store answers from the cut on; files before it (rows at the cut are the store's)
+        hot_part = _hot_pool.submit(hot_call, "/worker", {**q, "start": _iso_at(max(cut, _epoch_of(q["start"], "start")))})
+        q = {**q, "end": _iso_at(cut - 1e-6)}
+    if cut is not None and _epoch_of(q["start"], "start") >= cut:
+        found = {"files": [], "stats": {}}
+    else:
+        found = lookup.lookup(tenant=q["tenant"], start=q["start"], end=q["end"], signal=q.get("signal", "logs"),
+                              services=q.get("services"), match=q.get("match"))
     t_lookup = time.perf_counter()
     # A counter's rise is taken between consecutive points, so each worker needs an unbroken
     # stretch of time: otherwise the rise over a stretch another worker holds is counted twice.
@@ -1880,11 +1979,18 @@ def run(q, invoke_worker=None):
     else:
         with ThreadPoolExecutor(len(chunks)) as pool:
             partials = list(pool.map(lambda c: invoke_worker({"query": q, "files": c, "cancel": cancel}), chunks))
+    if hot_part is not None:
+        try:
+            partials.append(hot_part.result())   # the latest stretch of time: last, for stitching counters
+        except Exception as e:   # noqa: BLE001  the files hold everything: ask them about the whole range
+            print(json.dumps({"hot_failed": str(e)[:200], "tenant": q["tenant"]}))
+            return run(whole, invoke_worker, hot=False)
     t_scan = time.perf_counter()
     if any(p.get("cancelled") for p in partials):
         raise Cancelled()
     if any(p.get("timed_out") for p in partials):
         raise BadQuery(timed_out_message())
+    q = whole
     result = merge(q, partials)
     result["stats"] = {
         "files": len(found["files"]), "workers": max(1, len(chunks)),
@@ -1893,7 +1999,7 @@ def run(q, invoke_worker=None):
         "merge_ms": round((time.perf_counter() - t_scan) * 1000), "total_ms": round((time.perf_counter() - t0) * 1000),
         "slowest_worker_download_ms": max((p.get("stats", {}).get("download_ms", 0) for p in partials), default=0),
         "slowest_worker_query_ms": max((p.get("stats", {}).get("query_ms", 0) for p in partials), default=0),
-        "lookup": found["stats"],
+        "lookup": found["stats"], **({"hot_from": _iso_at(cut)} if cut is not None else {}),
     }
     _noted(result["stats"], partials)
     return result

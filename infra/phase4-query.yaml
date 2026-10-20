@@ -40,6 +40,24 @@ Parameters:
     Type: String
     Default: ""
     Description: Accounts (comma-separated, * = all) whose answers are kept for repeat questions (30 s for recent data). docs/perf-flags.md.
+  HotUrl:
+    Type: String
+    Default: ""
+    Description: >
+      The hot store (obs-phaseH1 output HotUrl). Set: obs-query runs in the hot VPC and asks the store
+      about recent time for HotAccounts. Empty = files only, no VPC. docs/hot-store.md.
+  HotAccounts:
+    Type: String
+    Default: ""
+    Description: Accounts (comma-separated, * = all) whose recent time the hot store answers.
+  HotSubnets:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: obs-phaseH1 output QuerySubnets.
+  HotSecurityGroup:
+    Type: String
+    Default: ""
+    Description: obs-phaseH1 output QuerySecurityGroup.
   WarmSchedule:
     Type: String
     Default: "cron(0/5 6-18 ? * MON-FRI *)"
@@ -84,6 +102,7 @@ Conditions:
   CapApi: !Not [!Equals [!Ref ApiConcurrency, 0]]
   CapCoordinator: !Not [!Equals [!Ref CoordinatorConcurrency, 0]]
   Warm: !Not [!Equals [!Ref WarmSchedule, ""]]
+  Hot: !Not [!Equals [!Ref HotUrl, ""]]
 
 Resources:
   CoordinatorLogGroup:
@@ -113,11 +132,18 @@ Resources:
       MemorySize: 2048
       Timeout: 300
       EphemeralStorage: { Size: 4096 }
+      VpcConfig: !If
+        - Hot
+        - { SubnetIds: !Ref HotSubnets, SecurityGroupIds: [!Ref HotSecurityGroup] }
+        - !Ref "AWS::NoValue"
       Environment:
         Variables:
           BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
           INDEX_TABLE: obs-index
           TENANT_READER_ROLE_ARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/obs-tenant-reader"
+          HOT_URL: !Ref HotUrl
+          HOT_ACCOUNTS: !Ref HotAccounts
+          AWS_STS_REGIONAL_ENDPOINTS: regional   # STS through the VPC endpoint
           QUERY_WORKER_FUNCTION: obs-query-worker
           QUERY_MAX_WORKERS: !Ref MaxWorkers
           QUERY_BYTES_PER_WORKER: !Ref BytesPerWorker

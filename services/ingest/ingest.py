@@ -78,6 +78,13 @@ TRUNCATED_BODY_BYTES = 256 * 1024
 _ID_KEYS = {"traceId", "spanId", "parentSpanId"}
 
 firehose = boto3.client("firehose")
+
+# Hot store (docs/hot-store.md): each batch also goes to this Kinesis stream for the accounts listed
+# (comma-separated, * = all), where the always-on server reads it within seconds. Best effort: S3 (via
+# Firehose) stays the record, so a failed or slow put never fails or holds up ingest.
+HOT_STREAM = os.environ.get("HOT_STREAM", "")
+HOT_ACCOUNTS = {a.strip() for a in os.environ.get("HOT_ACCOUNTS", "").split(",") if a.strip()}
+_kinesis = None
 ddb = boto3.client("dynamodb")
 
 
@@ -143,6 +150,8 @@ def accept(tenant, signal, doc, drop=False, rejected=0):
         records = [gzip.compress(r, compresslevel=6) for r in records]
     if records:
         put_records(f"{STREAM_PREFIX}{tenant}-{signal}", records)
+        if HOT_STREAM and ("*" in HOT_ACCOUNTS or tenant in HOT_ACCOUNTS):
+            put_hot(tenant, signal, records)
     meter.add(tenant, raw_bytes, received, signal=signal, dropped=dropped, rejected=rejected)
     return {"records": len(records), "bytes": raw_bytes, "sent_bytes": sum(len(r) for r in records),
             "items": received, "dropped": dropped}
@@ -539,6 +548,22 @@ def put_records(stream, records):
             time.sleep(min(0.1 * 2 ** attempt, 1.0))
         else:
             raise HttpError(503, f"{len(pending)} records not accepted by Firehose; retry")
+
+
+def put_hot(tenant, signal, records):
+    """The batch's records on the hot stream: data "<tenant> <signal>\\n" + the record (as sent to Firehose),
+    partition key the tenant. One try with short timeouts; failures are logged, not raised."""
+    global _kinesis
+    from botocore.config import Config
+    _kinesis = _kinesis or boto3.client("kinesis", config=Config(connect_timeout=1, read_timeout=2, retries={"max_attempts": 1}))
+    head = f"{tenant} {signal}\n".encode()
+    try:
+        for chunk in _chunks([head + r for r in records]):
+            resp = _kinesis.put_records(StreamName=HOT_STREAM, Records=[{"Data": r, "PartitionKey": tenant} for r in chunk])
+            if resp.get("FailedRecordCount"):
+                print(json.dumps({"hot_put_failed": resp["FailedRecordCount"], "tenant": tenant, "signal": signal}))
+    except Exception as e:   # noqa: BLE001  the hot store is a copy: never fail ingest for it
+        print(json.dumps({"hot_put_failed": type(e).__name__, "tenant": tenant, "signal": signal, "error": str(e)[:200]}))
 
 
 def _chunks(records):

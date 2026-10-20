@@ -727,3 +727,38 @@ def test_every_request_is_metered_at_once(fh, monkeypatch):
     for _ in range(3):
         assert ingest.handler(event(logs_pb().SerializeToString()), None)["statusCode"] == 200
     assert len(writes) == 3 and not ingest.meter.pending
+
+
+# ---- hot store copy (docs/hot-store.md)
+
+class FakeKinesis:
+    def __init__(self, fail=None):
+        self.puts, self.fail = [], fail
+
+    def put_records(self, StreamName, Records):
+        if self.fail:
+            raise self.fail
+        self.puts += [(StreamName, r["PartitionKey"], r["Data"]) for r in Records]
+        return {"FailedRecordCount": 0}
+
+
+def test_flagged_accounts_send_a_copy_to_the_hot_stream(fh, monkeypatch):
+    k = FakeKinesis()
+    monkeypatch.setattr(ingest, "_kinesis", k)
+    monkeypatch.setattr(ingest, "HOT_STREAM", "obs-hot")
+    monkeypatch.setattr(ingest, "HOT_ACCOUNTS", {"acme"})
+    assert ingest.handler(event(logs_pb().SerializeToString()), None)["statusCode"] == 200
+    [(stream, key, data)] = k.puts
+    head, record = data.split(b"\n", 1)
+    assert (stream, key, head) == ("obs-hot", "acme", b"acme logs")
+    assert record == fh.puts[0][1]   # the same bytes Firehose got
+    ingest.handler(event(logs_pb().SerializeToString(), tenant="globex"), None)
+    assert len(k.puts) == 1          # not a listed account: no copy
+
+
+def test_a_failing_hot_stream_never_fails_ingest(fh, monkeypatch, capsys):
+    monkeypatch.setattr(ingest, "_kinesis", FakeKinesis(fail=RuntimeError("throttled")))
+    monkeypatch.setattr(ingest, "HOT_STREAM", "obs-hot")
+    monkeypatch.setattr(ingest, "HOT_ACCOUNTS", {"*"})
+    assert ingest.handler(event(logs_pb().SerializeToString()), None)["statusCode"] == 200
+    assert len(fh.puts) == 1 and "hot_put_failed" in capsys.readouterr().out
