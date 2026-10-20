@@ -565,6 +565,30 @@ def test_a_crashed_worker_is_run_once_more(monkeypatch):
     assert len(calls) == 1          # a real error in the query is not retried
 
 
+def test_a_dropped_connection_runs_the_worker_again(monkeypatch):
+    """Found on AWS: in the hot store's VPC, the Lambda endpoint drops connections idle 350 s, and the
+    next invoke on one fails with ConnectionClosedError. Workers only read: run it once more."""
+    import io
+    from botocore.exceptions import ConnectionClosedError
+    calls = []
+
+    class Dropped:
+        def invoke(self, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ConnectionClosedError(endpoint_url="https://lambda")
+            return {"Payload": io.BytesIO(b'{"rows": []}')}
+    monkeypatch.setattr(query, "lam", Dropped())
+    assert query._invoke_worker({}) == {"rows": []} and len(calls) == 2
+
+    class Gone:
+        def invoke(self, **kw):
+            raise ConnectionClosedError(endpoint_url="https://lambda")
+    monkeypatch.setattr(query, "lam", Gone())
+    with pytest.raises(ConnectionClosedError):
+        query._invoke_worker({})
+
+
 def test_unavailable_workers_give_a_clear_retryable_answer(data, monkeypatch):
     """Found by the fault tests: with the workers throttled, callers saw Lambda's raw
     'TooManyRequestsException ... Rate Exceeded'. Now: 503 + Retry-After, a plain message."""

@@ -2048,10 +2048,17 @@ def _invoke_worker(payload, attempts=2):
     """Run one worker. Workers only read, so a worker whose process died (DuckDB has crashed, rarely,
     in a fresh container: about 1 in 3,000 runs) is run once more instead of failing the query.
     Workers that can't be run at all raise Unavailable: the caller gets a clear, retryable answer
-    (503) instead of Lambda's own error text."""
+    (503) instead of Lambda's own error text. A connection that dropped while idle (the VPC endpoint
+    closes them after 350 s without telling the client) is also tried once more."""
     for attempt in range(attempts):
         try:
             r = lam.invoke(FunctionName=WORKER_FUNCTION, Payload=json.dumps(payload).encode())
+        except (botocore.exceptions.ConnectionClosedError, botocore.exceptions.EndpointConnectionError) as e:
+            print(json.dumps({"worker_connection_dropped": type(e).__name__, "attempt": attempt + 1,
+                              "retrying": attempt + 1 < attempts}))
+            if attempt + 1 < attempts:
+                continue
+            raise
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") in _UNAVAILABLE_CODES:
                 print(json.dumps({"worker_unavailable": e.response["Error"]["Code"]}))
