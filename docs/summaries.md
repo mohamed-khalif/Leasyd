@@ -11,7 +11,8 @@ Defined in `services/compaction/compact.py` (`SUMMARIES`); queried in SQL by the
 
 **When they're made.** The fast lane writes them for each raw file as it lands (searchable within about a
 minute), and compaction rewrites them for the whole hour, replacing the fast lane's (no double counting).
-Hours compacted before summaries existed are built once by `infra/backfill_summaries.py`.
+Hours compacted before summaries existed are rebuilt by `infra/backfill_summaries.py` (safe to re-run; it
+leaves hours that ended under 90 minutes ago to compaction).
 
 **Known differences from the raw data.**
 - Service links: a call is counted when the caller's span is in the same raw file (fast lane) or the same

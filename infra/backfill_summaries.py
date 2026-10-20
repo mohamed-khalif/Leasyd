@@ -1,5 +1,5 @@
 """One-off after deploying summaries (docs/summaries.md): builds them for hours compacted before they existed,
-for every active account, the last 31 days. Safe to re-run: hours that have summaries are skipped.
+for every active account, the last 31 days. Safe to re-run: each hour is rebuilt, not added to.
 
     AWS_DEFAULT_REGION=us-east-1 python3 infra/backfill_summaries.py [ACCOUNT ...]
 """

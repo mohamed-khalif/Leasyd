@@ -106,7 +106,7 @@ def test_the_rum_table_holds_the_browser_events_only(aws, monkeypatch):  # noqa:
     assert sql(WEB.format(t="rum")) == sql(WEB.format(t="logs"))
 
 
-def test_backfill_builds_summaries_of_hours_compacted_before_they_existed_once(traces, monkeypatch):
+def test_backfill_builds_summaries_of_hours_compacted_before_they_existed(traces, monkeypatch):
     raw = sql(NODES_RAW)
     with monkeypatch.context() as m:   # compacted before summaries existed
         m.setattr(compact, "SUMMARIES", {})
@@ -115,7 +115,22 @@ def test_backfill_builds_summaries_of_hours_compacted_before_they_existed_once(t
     first = traces.summaries_backfill({"tenant": "acme", "day": DAY})["written"]
     assert sorted(first) == [f"edge_1m {DAY}T10", f"svc_1m {DAY}T10"]
     assert sql(NODES_SUM) == raw and sql(EDGES_SUM) == sql(EDGES_RAW)
-    assert traces.summaries_backfill({"tenant": "acme", "day": DAY})["written"] == []   # already there
+    assert sorted(traces.summaries_backfill({"tenant": "acme", "day": DAY})["written"]) == sorted(first)   # rewritten
+    assert sql(NODES_SUM) == raw and sql(EDGES_SUM) == sql(EDGES_RAW)   # not counted twice
+
+
+def test_backfill_fills_an_hour_that_already_has_some_summaries(traces, monkeypatch):
+    """Found 2026-10-20: late spans of an hour compacted before summaries existed got fast-lane summaries
+    after the deploy, and the backfill took the hour for done. It now rebuilds every compacted hour."""
+    with monkeypatch.context() as m:
+        m.setattr(compact, "SUMMARIES", {})
+        compact_hour(traces, "traces")
+    api, db = calls(100, 103)   # late spans of the same hour, arriving after summaries exist
+    for svc, spans in (("api", api), ("db", db)):
+        traces.recent_indexer({"detail": {"object": {"key": put("traces", f"late-{svc}", {"service.name": svc}, spans)}}}, None)
+    raw = sql(NODES_RAW)
+    assert sql(NODES_SUM) != raw   # only the late spans are summarized
+    traces.summaries_backfill({"tenant": "acme", "day": DAY})
     assert sql(NODES_SUM) == raw
 
 

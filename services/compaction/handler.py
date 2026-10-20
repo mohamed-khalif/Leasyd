@@ -333,22 +333,28 @@ def _compact_chunk(tenant, signal, dt, hour, batch_id, crash_after):
 
 # ------------------------------------------------------- summaries backfill
 
+BACKFILL_AFTER = timedelta(minutes=90)   # an hour is compacted by then (GRACE_MINUTES + the 15-min schedule)
+
 def summaries_backfill(job):
-    """{"tenant", "day"}: the summaries (compact.SUMMARIES) of that day's compacted hours that have none,
-    i.e. compacted before summaries existed (infra/backfill-summaries.sh runs it per day). Idempotent:
-    an hour that has a summary file is skipped; a re-run rewrites the same keys."""
+    """{"tenant", "day"}: rebuild the compacted summaries (compact.SUMMARIES) of that day's hours from all of
+    their compacted files, replacing those there (infra/backfill_summaries.py runs it per day). For hours
+    compacted before summaries existed, or only partly after. Fast-lane summaries (of raw files not compacted
+    yet) are kept: their rows aren't in the compacted files. Hours that ended less than BACKFILL_AFTER ago are
+    left to compaction. Idempotent."""
     tenant, day = layout.check_tenant(job["tenant"]), str(job["day"])
-    datetime.strptime(day, "%Y-%m-%d")
+    start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     done = []
     for signal in sorted({src for src, _ in compact.SUMMARIES.values()}):
         tables = [t for t, (src, _) in compact.SUMMARIES.items() if src == signal]
         services = ddb.get_item(TableName=TABLE, Key={"pk": {"S": layout.services_pk(tenant, signal)}, "sk": {"S": "all"}}
                                 ).get("Item", {}).get("services", {}).get("SS", [])
-        for hour in (f"{h:02d}" for h in range(24)):
-            if all(_has_entries(tenant, t, "all", day, hour) for t in tables):
-                continue
+        for h in range(24):
+            hour = f"{h:02d}"
+            if start + timedelta(hours=h + 1) > datetime.now(timezone.utc) - BACKFILL_AFTER:
+                break
             items = [it for svc in services for it in _entries(tenant, signal, svc, day, hour) if it.get("kind", {}).get("S") == "parquet"]
-            if not items:
+            old = [it for t in tables for it in _entries(tenant, t, "all", day, hour) if it.get("kind", {}).get("S") == "parquet"]
+            if not items and not old:
                 continue
             work = tempfile.mkdtemp(dir="/tmp")
             try:
@@ -359,12 +365,18 @@ def summaries_backfill(job):
                     s3.download_file(BUCKET, it["file_path"]["S"].split(f"s3://{BUCKET}/", 1)[1], local)
                     written.append({"path": local})
                 batch_id = f"backfill{day.replace('-', '')}{hour}"
+                # Only this hour's rows: a file's rows are all in the hour of its first row (compact.compact).
                 summaries = [w for w in _summaries(tenant, signal, written, work, batch_id, layout.data_prefix)
-                             if not _has_entries(tenant, w["table"], "all", w["dt"], w["hour"])]
+                             if (w["dt"], w["hour"]) == (day, hour)]
                 _upload(summaries)
                 now = datetime.now(timezone.utc).isoformat()
-                _batch_write([_index_item(tenant, w["table"], batch_id, w, now, layout.plan_pk(tenant, signal, day, hour))
-                              for w in summaries])
+                new = [_index_item(tenant, w["table"], batch_id, w, now, layout.plan_pk(tenant, signal, day, hour)) for w in summaries]
+                _batch_write(new)
+                keep = {(it["pk"]["S"], it["sk"]["S"]) for it in new}
+                stale = [it for it in old if (it["pk"]["S"], it["sk"]["S"]) not in keep]
+                _batch_delete([{"pk": it["pk"], "sk": it["sk"]} for it in stale])
+                fresh = {w["key"] for w in summaries}
+                _delete_keys([k for it in stale if (k := it["file_path"]["S"].split(f"s3://{BUCKET}/", 1)[1]) not in fresh])
                 _register_summaries(tenant, summaries)
                 done += [f"{w['table']} {w['dt']}T{w['hour']}" for w in summaries]
             finally:
@@ -384,13 +396,6 @@ def _entries(tenant, signal, service, day, hour):
         if "LastEvaluatedKey" not in r:
             return out
         kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
-
-
-def _has_entries(tenant, signal, service, day, hour):
-    r = ddb.query(TableName=TABLE, KeyConditionExpression="pk = :pk AND begins_with(sk, :h)", Limit=1,
-                  ExpressionAttributeValues={":pk": {"S": layout.index_pk(tenant, signal, service)},
-                                             ":h": {"S": f"{day}T{hour}:"}})
-    return bool(r["Items"])
 
 
 # ---------------------------------------------------------------- fast lane
