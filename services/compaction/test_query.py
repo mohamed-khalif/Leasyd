@@ -997,3 +997,33 @@ def test_a_missing_marker_reads_as_absent_even_as_403(monkeypatch):
             raise ClientError({"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject")
     monkeypatch.setattr(query, "_s3", lambda: S3())
     assert query._exists("_results/jobs/acme/" + "0" * 32 + ".cancel") is False
+
+
+# ---- per-question timing (docs/perf-plan.md, Phase 0)
+
+def test_a_question_logs_its_engine_runs_and_their_workers(capsys):
+    def ask():
+        query._noted({"files": 3, "bytes": 30, "lookup_ms": 5, "scan_ms": 40, "merge_ms": 1},
+                     [{"stats": {"lambda": {"ms": 400, "cold": True, "mb": 3008}}},
+                      {"stats": {"lambda": {"ms": 200, "cold": False, "mb": 3008}}}])
+        query._noted({"files": 2, "bytes": 20}, [{"stats": {}}])   # one chunk, run in the coordinator
+        return {"rows": []}
+    out, timing = query._observed("promql", "acme", ask)
+    assert out == {"rows": []}
+    assert timing["path"] == "promql" and timing["engine_runs"] == 2
+    assert (timing["files"], timing["bytes"], timing["workers"], timing["workers_cold"]) == (5, 50, 2, 1)
+    assert (timing["worker_max_ms"], timing["worker_avg_ms"]) == (400, 300)
+    assert timing["gb_s"] >= round(600 * 3008 / 1024 / 1000, 3)
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["question"] == timing
+
+
+def test_engine_runs_outside_a_question_are_not_recorded():
+    query._noted({"files": 1}, [])   # no question being timed: nothing to record, no error
+
+
+def test_a_worker_reports_its_time_memory_and_whether_it_was_cold(monkeypatch):
+    monkeypatch.setattr(query, "_warm", set())
+    monkeypatch.setattr(query, "run_worker", lambda e: {"rows": [], "stats": {"files": 1}})
+    first, second = query.worker({"query": {}}, None), query.worker({"query": {}}, None)
+    assert first["stats"]["lambda"]["cold"] is True and second["stats"]["lambda"]["cold"] is False
+    assert first["stats"]["files"] == 1 and first["stats"]["lambda"]["mb"] == query.MEMORY_MB

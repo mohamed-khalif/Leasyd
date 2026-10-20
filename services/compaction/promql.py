@@ -28,6 +28,7 @@ engine groups by L directly. Logs and spans have no series of their own beyond s
 the labels an enclosing `by` names. Counter increases are exact (resets handled, see query.py);
 windows start and end on bucket edges.
 """
+import contextvars
 import json
 import os
 import math
@@ -560,8 +561,10 @@ class Evaluator:
         if labels is None:   # the labels of each metric series
             jobs.append({**base, "group_by": ["hash:series", "metric_name", "service", "json:resource_attributes",
                                               "json:attributes"], "aggs": [{"fn": "count"}]})
+        # Each job in a copy of this thread's context: the question's timing and cancel marker go along.
+        contexts = [contextvars.copy_context() for _ in jobs]
         with ThreadPoolExecutor(len(jobs)) as pool:
-            results = list(pool.map(self._query, jobs))
+            results = list(pool.map(lambda c, j: c.run(self._query, j), contexts, jobs))
         rows = results[0]["rows"]
         if labels is None:
             names = {}

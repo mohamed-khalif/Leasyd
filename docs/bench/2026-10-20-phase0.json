@@ -1,0 +1,6034 @@
+{
+"tenant": "leasyd-demo",
+"at": "2026-10-20T13:15:56.723Z",
+"workers": null,
+"pages": [
+{
+"route": "/",
+"range": "1h",
+"n": 20,
+"first_ms": 6999,
+"best_ms": 3716,
+"slowest": {
+"kind": "traces",
+"ms": 5308,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 2764,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:30\", \"log:duration_ns\", \"status_code\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 6999,
+"queries": [
+{
+"kind": "traces",
+"ms": 4942,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 5308,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 2764,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:30\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 4995,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 1496,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:30\", \"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 4926,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 44,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": [\"ts:30\"]}"
+},
+{
+"kind": "traces",
+"ms": 3693,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 116,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:30\"]}"
+},
+{
+"kind": "logs",
+"ms": 4765,
+"error": "",
+"files": 652,
+"bytes": 3205480,
+"workers": 11,
+"rows": 410,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"ts:30\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 830,
+"error": "",
+"files": 652,
+"bytes": 3205480,
+"workers": 11,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 1081,
+"error": "",
+"files": 652,
+"bytes": 3496189,
+"workers": 11,
+"rows": 4,
+"what": "{\"signal\": \"logs\", \"where\": [{\"field\": \"severity_number\", \"op\": \">=\", \"value\": 17}], \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1024,
+"error": "",
+"files": 986,
+"bytes": 7690794,
+"workers": 16,
+"rows": 20,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\"]}"
+},
+{
+"kind": "metrics",
+"ms": 999,
+"error": "",
+"files": 986,
+"bytes": 7690794,
+"workers": 16,
+"rows": 986,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"ts:30\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 91,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+},
+{
+"kind": "metrics",
+"ms": 66,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"value\", \"op\": \"=\", \"val"
+},
+{
+"kind": "traces",
+"ms": 716,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1110,
+"error": "",
+"files": 754,
+"bytes": 6633006,
+"workers": 12,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\", \"name\"]}"
+},
+{
+"kind": "traces",
+"ms": 686,
+"error": "",
+"files": 754,
+"bytes": 7186880,
+"workers": 12,
+"rows": 1,
+"what": "{\"signal\": \"traces\"}"
+},
+{
+"kind": "traces",
+"ms": 1132,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 1,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}]}"
+},
+{
+"kind": "logs",
+"ms": 897,
+"error": "",
+"files": 663,
+"bytes": 3259181,
+"workers": 11,
+"rows": 1,
+"what": "{\"signal\": \"logs\"}"
+},
+{
+"kind": "metrics",
+"ms": 1198,
+"error": "",
+"files": 986,
+"bytes": 8666042,
+"workers": 16,
+"rows": 1,
+"what": "{\"signal\": \"metrics\"}"
+},
+{
+"kind": "traces",
+"ms": 83,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 1000}}"
+},
+{
+"kind": "metrics",
+"ms": 79,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+}
+]
+},
+{
+"ms": 3716,
+"queries": [
+{
+"kind": "traces",
+"ms": 1006,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1068,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 2813,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:30\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1986,
+"error": "",
+"files": 767,
+"bytes": 7265899,
+"workers": 13,
+"rows": 1522,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:30\", \"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1901,
+"error": "",
+"files": 767,
+"bytes": 7265903,
+"workers": 13,
+"rows": 44,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": [\"ts:30\"]}"
+},
+{
+"kind": "traces",
+"ms": 2553,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 118,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:30\"]}"
+},
+{
+"kind": "logs",
+"ms": 2280,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 414,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"ts:30\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 647,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 1125,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 4,
+"what": "{\"signal\": \"logs\", \"where\": [{\"field\": \"severity_number\", \"op\": \">=\", \"value\": 17}], \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 836,
+"error": "",
+"files": 1003,
+"bytes": 7823437,
+"workers": 16,
+"rows": 20,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1034,
+"error": "",
+"files": 1003,
+"bytes": 7823437,
+"workers": 16,
+"rows": 1003,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"ts:30\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 88,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+},
+{
+"kind": "metrics",
+"ms": 76,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"value\", \"op\": \"=\", \"val"
+},
+{
+"kind": "traces",
+"ms": 698,
+"error": "",
+"files": 767,
+"bytes": 7784996,
+"workers": 13,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1151,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\", \"name\"]}"
+},
+{
+"kind": "traces",
+"ms": 723,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 1,
+"what": "{\"signal\": \"traces\"}"
+},
+{
+"kind": "traces",
+"ms": 1226,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 1,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}]}"
+},
+{
+"kind": "logs",
+"ms": 661,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 1,
+"what": "{\"signal\": \"logs\"}"
+},
+{
+"kind": "metrics",
+"ms": 811,
+"error": "",
+"files": 1003,
+"bytes": 7823437,
+"workers": 16,
+"rows": 1,
+"what": "{\"signal\": \"metrics\"}"
+},
+{
+"kind": "traces",
+"ms": 78,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 1000}}"
+},
+{
+"kind": "metrics",
+"ms": 71,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+}
+]
+}
+]
+},
+{
+"route": "/logs",
+"range": "1h",
+"n": 3,
+"first_ms": 1137,
+"best_ms": 1117,
+"slowest": {
+"kind": "logs",
+"ms": 1134,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1137,
+"queries": [
+{
+"kind": "logs",
+"ms": 698,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 413,
+"what": "{\"signal\": \"logs\", \"where\": [], \"group_by\": [\"ts:30\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 1134,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "logs",
+"ms": 679,
+"error": "",
+"files": 662,
+"bytes": 3248772,
+"workers": 11,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+}
+]
+},
+{
+"ms": 1117,
+"queries": [
+{
+"kind": "logs",
+"ms": 766,
+"error": "",
+"files": 662,
+"bytes": 3838448,
+"workers": 11,
+"rows": 413,
+"what": "{\"signal\": \"logs\", \"where\": [], \"group_by\": [\"ts:30\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 740,
+"error": "",
+"files": 662,
+"bytes": 3838535,
+"workers": 11,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "logs",
+"ms": 1109,
+"error": "",
+"files": 662,
+"bytes": 4133373,
+"workers": 11,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/traces",
+"range": "1h",
+"n": 3,
+"first_ms": 1522,
+"best_ms": 1191,
+"slowest": {
+"kind": "traces",
+"ms": 1517,
+"error": "",
+"files": 767,
+"bytes": 7265964,
+"workers": 13,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1522,
+"queries": [
+{
+"kind": "traces",
+"ms": 731,
+"error": "",
+"files": 767,
+"bytes": 7265903,
+"workers": 13,
+"rows": 2813,
+"what": "{\"signal\": \"traces\", \"where\": [], \"group_by\": [\"ts:30\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1152,
+"error": "",
+"files": 767,
+"bytes": 7784876,
+"workers": 13,
+"rows": 200,
+"what": "{\"signal\": \"traces\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "traces",
+"ms": 1517,
+"error": "",
+"files": 767,
+"bytes": 7265964,
+"workers": 13,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+}
+]
+},
+{
+"ms": 1191,
+"queries": [
+{
+"kind": "traces",
+"ms": 798,
+"error": "",
+"files": 767,
+"bytes": 8304158,
+"workers": 13,
+"rows": 2811,
+"what": "{\"signal\": \"traces\", \"where\": [], \"group_by\": [\"ts:30\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1188,
+"error": "",
+"files": 767,
+"bytes": 6746801,
+"workers": 13,
+"rows": 200,
+"what": "{\"signal\": \"traces\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "traces",
+"ms": 688,
+"error": "",
+"files": 767,
+"bytes": 7265964,
+"workers": 13,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/metrics",
+"range": "1h",
+"n": 3,
+"first_ms": 1054,
+"best_ms": 997,
+"slowest": {
+"kind": "metrics",
+"ms": 1052,
+"error": "",
+"files": 1003,
+"bytes": 7823437,
+"workers": 16,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1054,
+"queries": [
+{
+"kind": "metrics",
+"ms": 855,
+"error": "",
+"files": 1003,
+"bytes": 8300193,
+"workers": 16,
+"rows": 65,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"metric_type\", \"temporality\", \"is_monotonic\", \"unit\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1052,
+"error": "",
+"files": 1003,
+"bytes": 7823437,
+"workers": 16,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 778,
+"error": "",
+"files": 1003,
+"bytes": 8319773,
+"workers": 16,
+"rows": 64,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\", \"hash:attributes\"]}"
+}
+]
+},
+{
+"ms": 997,
+"queries": [
+{
+"kind": "metrics",
+"ms": 996,
+"error": "",
+"files": 1003,
+"bytes": 8810865,
+"workers": 16,
+"rows": 65,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"metric_type\", \"temporality\", \"is_monotonic\", \"unit\"]}"
+},
+{
+"kind": "metrics",
+"ms": 815,
+"error": "",
+"files": 1003,
+"bytes": 8319547,
+"workers": 16,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 877,
+"error": "",
+"files": 1003,
+"bytes": 8796977,
+"workers": 16,
+"rows": 64,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\", \"hash:attributes\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/services",
+"range": "1h",
+"n": 3,
+"first_ms": 7729,
+"best_ms": 7268,
+"slowest": {
+"kind": "sql",
+"ms": 7725,
+"error": "",
+"files": 767,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+"errors": [],
+"runs": [
+{
+"ms": 7729,
+"queries": [
+{
+"kind": "sql",
+"ms": 7331,
+"error": "",
+"files": 767,
+"bytes": null,
+"workers": null,
+"rows": 13,
+"what": "SELECT service, count(*) FILTER (WHERE (kind IN (2, 5) OR parent_span_id IS NULL)) AS requests,\n  count(*) FILTER (WHERE (kind IN (2, 5) OR "
+},
+{
+"kind": "sql",
+"ms": 7725,
+"error": "",
+"files": 767,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+{
+"kind": "metrics",
+"ms": 871,
+"error": "",
+"files": 1003,
+"bytes": 6774433,
+"workers": 16,
+"rows": 14,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"in\", \"value\": [\"traces_service_graph_request_total\", \"traces_service_graph_r"
+}
+]
+},
+{
+"ms": 7268,
+"queries": [
+{
+"kind": "sql",
+"ms": 7267,
+"error": "",
+"files": 767,
+"bytes": null,
+"workers": null,
+"rows": 13,
+"what": "SELECT service, count(*) FILTER (WHERE (kind IN (2, 5) OR parent_span_id IS NULL)) AS requests,\n  count(*) FILTER (WHERE (kind IN (2, 5) OR "
+},
+{
+"kind": "sql",
+"ms": 7155,
+"error": "",
+"files": 767,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+{
+"kind": "metrics",
+"ms": 981,
+"error": "",
+"files": 1003,
+"bytes": 7233680,
+"workers": 16,
+"rows": 14,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"in\", \"value\": [\"traces_service_graph_request_total\", \"traces_service_graph_r"
+}
+]
+}
+]
+},
+{
+"route": "/web",
+"range": "1h",
+"n": 8,
+"first_ms": 11361,
+"best_ms": 11361,
+"slowest": {
+"kind": "sql",
+"ms": 6102,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      quantile_cont(TRY_CAST(a"
+},
+"errors": [],
+"runs": [
+{
+"ms": 11361,
+"queries": [
+{
+"kind": "sql",
+"ms": 5605,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views\n    FROM logs WHERE resource_attributes['telemetry.sdk"
+},
+{
+"kind": "sql",
+"ms": 5761,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      count(DISTINCT attributes['rum.session_id']) AS visits,\n"
+},
+{
+"kind": "sql",
+"ms": 5818,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['rum.vital.name'] AS name, quantile_cont(TRY_CAST(attributes['rum.vital.value'] AS DOUBLE), 0.75) AS p75, count(*) AS n,\n "
+},
+{
+"kind": "sql",
+"ms": 5852,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 119,
+"what": "SELECT time_bucket(INTERVAL '30 seconds', ts) AS t,\n      count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views, count(*) FI"
+},
+{
+"kind": "sql",
+"ms": 6102,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      quantile_cont(TRY_CAST(a"
+},
+{
+"kind": "sql",
+"ms": 4762,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['error.message'] AS message, count(*) AS n, count(DISTINCT attributes['rum.session_id']) AS visits,\n      max(ts) AS last,"
+},
+{
+"kind": "sql",
+"ms": 4761,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['http.request.method'] AS method, attributes['url.full'] AS url, attributes['http.response.status_code'] AS status,\n      "
+},
+{
+"kind": "sql",
+"ms": 5755,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 7,
+"what": "SELECT resource_attributes['browser.name'] AS browser, resource_attributes['device.type'] AS device,\n      count(DISTINCT attributes['rum.se"
+}
+]
+},
+{
+"ms": 11559,
+"queries": [
+{
+"kind": "sql",
+"ms": 6020,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views\n    FROM logs WHERE resource_attributes['telemetry.sdk"
+},
+{
+"kind": "sql",
+"ms": 5821,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      count(DISTINCT attributes['rum.session_id']) AS visits,\n"
+},
+{
+"kind": "sql",
+"ms": 4841,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['rum.vital.name'] AS name, quantile_cont(TRY_CAST(attributes['rum.vital.value'] AS DOUBLE), 0.75) AS p75, count(*) AS n,\n "
+},
+{
+"kind": "sql",
+"ms": 5731,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 119,
+"what": "SELECT time_bucket(INTERVAL '30 seconds', ts) AS t,\n      count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views, count(*) FI"
+},
+{
+"kind": "sql",
+"ms": 6086,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      quantile_cont(TRY_CAST(a"
+},
+{
+"kind": "sql",
+"ms": 5965,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['error.message'] AS message, count(*) AS n, count(DISTINCT attributes['rum.session_id']) AS visits,\n      max(ts) AS last,"
+},
+{
+"kind": "sql",
+"ms": 5093,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['http.request.method'] AS method, attributes['url.full'] AS url, attributes['http.response.status_code'] AS status,\n      "
+},
+{
+"kind": "sql",
+"ms": 5819,
+"error": "",
+"files": 660,
+"bytes": null,
+"workers": null,
+"rows": 7,
+"what": "SELECT resource_attributes['browser.name'] AS browser, resource_attributes['device.type'] AS device,\n      count(DISTINCT attributes['rum.se"
+}
+]
+}
+]
+},
+{
+"route": "/agents",
+"range": "1h",
+"n": 4,
+"first_ms": 811,
+"best_ms": 811,
+"slowest": {
+"kind": "traces",
+"ms": 809,
+"error": "",
+"files": 754,
+"bytes": 6633528,
+"workers": 12,
+"rows": 668,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+"errors": [],
+"runs": [
+{
+"ms": 811,
+"queries": [
+{
+"kind": "traces",
+"ms": 809,
+"error": "",
+"files": 754,
+"bytes": 6633528,
+"workers": 12,
+"rows": 668,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+{
+"kind": "traces",
+"ms": 802,
+"error": "",
+"files": 754,
+"bytes": 6633528,
+"workers": 12,
+"rows": 24,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}, {\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": "
+},
+{
+"kind": "traces",
+"ms": 794,
+"error": "",
+"files": 754,
+"bytes": 6633528,
+"workers": 12,
+"rows": 6,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"in\", \"value\": [\"chat\", \"text_completion\", \"generate_content\"]}, {\"field\""
+},
+{
+"kind": "traces",
+"ms": 758,
+"error": "",
+"files": 754,
+"bytes": 6633528,
+"workers": 12,
+"rows": 283,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"=\", \"value\": \"execute_tool\"}], \"group_by\": [\"trace_id\", \"session_id\", \"g"
+}
+]
+},
+{
+"ms": 1205,
+"queries": [
+{
+"kind": "traces",
+"ms": 923,
+"error": "",
+"files": 754,
+"bytes": 7740946,
+"workers": 12,
+"rows": 668,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+{
+"kind": "traces",
+"ms": 993,
+"error": "",
+"files": 754,
+"bytes": 7187400,
+"workers": 12,
+"rows": 24,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}, {\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": "
+},
+{
+"kind": "traces",
+"ms": 719,
+"error": "",
+"files": 754,
+"bytes": 8294364,
+"workers": 12,
+"rows": 6,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"in\", \"value\": [\"chat\", \"text_completion\", \"generate_content\"]}, {\"field\""
+},
+{
+"kind": "traces",
+"ms": 1199,
+"error": "",
+"files": 754,
+"bytes": 7741331,
+"workers": 12,
+"rows": 283,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"=\", \"value\": \"execute_tool\"}], \"group_by\": [\"trace_id\", \"session_id\", \"g"
+}
+]
+}
+]
+},
+{
+"route": "/lambda",
+"range": "1h",
+"n": 2,
+"first_ms": 7360,
+"best_ms": 6930,
+"slowest": {
+"kind": "sql",
+"ms": 7357,
+"error": "",
+"files": 986,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+},
+"errors": [],
+"runs": [
+{
+"ms": 7360,
+"queries": [
+{
+"kind": "sql",
+"ms": 5610,
+"error": "",
+"files": 754,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,\n      any_value(resource_attribut"
+},
+{
+"kind": "sql",
+"ms": 7357,
+"error": "",
+"files": 986,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+}
+]
+},
+{
+"ms": 6930,
+"queries": [
+{
+"kind": "sql",
+"ms": 5943,
+"error": "",
+"files": 754,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,\n      any_value(resource_attribut"
+},
+{
+"kind": "sql",
+"ms": 6928,
+"error": "",
+"files": 986,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+}
+]
+}
+]
+},
+{
+"route": "/kubernetes",
+"range": "1h",
+"n": 6,
+"first_ms": 10250,
+"best_ms": 10250,
+"slowest": {
+"kind": "sql",
+"ms": 10244,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+"errors": [],
+"runs": [
+{
+"ms": 10250,
+"queries": [
+{
+"kind": "sql",
+"ms": 3205,
+"error": "",
+"files": 394,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 9124,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 413,
+"what": "WITH p AS (\n  SELECT time_bucket(INTERVAL '30 seconds', ts) AS t, resource_attributes['k8s.namespace.name'] AS key, resource_attributes['k8s"
+},
+{
+"kind": "sql",
+"ms": 7600,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 24,
+"what": "SELECT resource_attributes['k8s.namespace.name'] AS namespace,\n  coalesce(resource_attributes['k8s.deployment.name'], resource_attributes['k"
+},
+{
+"kind": "sql",
+"ms": 5001,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT coalesce(attributes['k8s.namespace.name'], '') AS namespace, coalesce(resource_attributes['k8s.object.kind'], '') AS kind,\n  coalesce"
+},
+{
+"kind": "sql",
+"ms": 10244,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+{
+"kind": "sql",
+"ms": 8702,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 57,
+"what": "WITH k AS (\n  SELECT resource_attributes['k8s.namespace.name'] AS ns, resource_attributes['k8s.pod.name'] AS pod, any_value(coalesce(resourc"
+}
+]
+},
+{
+"ms": 10343,
+"queries": [
+{
+"kind": "sql",
+"ms": 3190,
+"error": "",
+"files": 394,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 7358,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 413,
+"what": "WITH p AS (\n  SELECT time_bucket(INTERVAL '30 seconds', ts) AS t, resource_attributes['k8s.namespace.name'] AS key, resource_attributes['k8s"
+},
+{
+"kind": "sql",
+"ms": 7358,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 24,
+"what": "SELECT resource_attributes['k8s.namespace.name'] AS namespace,\n  coalesce(resource_attributes['k8s.deployment.name'], resource_attributes['k"
+},
+{
+"kind": "sql",
+"ms": 4871,
+"error": "",
+"files": 662,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT coalesce(attributes['k8s.namespace.name'], '') AS namespace, coalesce(resource_attributes['k8s.object.kind'], '') AS kind,\n  coalesce"
+},
+{
+"kind": "sql",
+"ms": 10336,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+{
+"kind": "sql",
+"ms": 9964,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 57,
+"what": "WITH k AS (\n  SELECT resource_attributes['k8s.namespace.name'] AS ns, resource_attributes['k8s.pod.name'] AS pod, any_value(coalesce(resourc"
+}
+]
+}
+]
+},
+{
+"route": "/gpus",
+"range": "1h",
+"n": 4,
+"first_ms": 8839,
+"best_ms": 8839,
+"slowest": {
+"kind": "sql",
+"ms": 8835,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+"errors": [],
+"runs": [
+{
+"ms": 8839,
+"queries": [
+{
+"kind": "sql",
+"ms": 3574,
+"error": "",
+"files": 394,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 7238,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 59,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+},
+{
+"kind": "sql",
+"ms": 8835,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+{
+"kind": "sql",
+"ms": 6998,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 16,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+}
+]
+},
+{
+"ms": 8868,
+"queries": [
+{
+"kind": "sql",
+"ms": 3773,
+"error": "",
+"files": 394,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 8865,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 59,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+},
+{
+"kind": "sql",
+"ms": 7476,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+{
+"kind": "sql",
+"ms": 7014,
+"error": "",
+"files": 1003,
+"bytes": null,
+"workers": null,
+"rows": 16,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+}
+]
+}
+]
+},
+{
+"route": "/dashboards/builtin-services",
+"range": "1h",
+"n": 15,
+"first_ms": 3539,
+"best_ms": 3539,
+"slowest": {
+"kind": "promql",
+"ms": 2923,
+"error": "",
+"files": null,
+"bytes": 22837653,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[30s])) or 0 * sum by (service_name) (rate(leasyd.sp"
+},
+"errors": [],
+"runs": [
+{
+"ms": 3539,
+"queries": [
+{
+"kind": "traces",
+"ms": 766,
+"error": "",
+"files": 760,
+"bytes": 6692794,
+"workers": 12,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 650,
+"error": "",
+"files": 656,
+"bytes": 3227836,
+"workers": 11,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 939,
+"error": "",
+"files": 1003,
+"bytes": 7822491,
+"workers": 16,
+"rows": 17,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "promql",
+"ms": 1130,
+"error": "",
+"files": null,
+"bytes": 6747540,
+"workers": null,
+"rows": null,
+"what": "sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[30s]))"
+},
+{
+"kind": "promql",
+"ms": 2923,
+"error": "",
+"files": null,
+"bytes": 22837653,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[30s])) or 0 * sum by (service_name) (rate(leasyd.sp"
+},
+{
+"kind": "promql",
+"ms": 2684,
+"error": "",
+"files": null,
+"bytes": 6747540,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum by (service_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 680,
+"error": "",
+"files": null,
+"bytes": 6747540,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.5, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 710,
+"error": "",
+"files": null,
+"bytes": 6747540,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 695,
+"error": "",
+"files": null,
+"bytes": 7266632,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.99, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 1262,
+"error": "",
+"files": null,
+"bytes": 7266697,
+"workers": null,
+"rows": null,
+"what": "topk(5, histogram_quantile(0.95, sum by (span_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s]))))"
+},
+{
+"kind": "promql",
+"ms": 1058,
+"error": "",
+"files": null,
+"bytes": 3251655,
+"workers": null,
+"rows": null,
+"what": "sum by (severity_range) (increase(leasyd.logs{service_name=~\".*\"}[30s]))"
+},
+{
+"kind": "promql",
+"ms": 898,
+"error": "",
+"files": null,
+"bytes": 7266632,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[3600s]))"
+},
+{
+"kind": "promql",
+"ms": 1898,
+"error": "",
+"files": null,
+"bytes": 25432796,
+"workers": null,
+"rows": null,
+"what": "100 * (sum(rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[3600s])) or 0 * sum(rate(leasyd.spans{service_name=~\".*\"}[3600s]))) / "
+},
+{
+"kind": "promql",
+"ms": 689,
+"error": "",
+"files": null,
+"bytes": 8823795,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[3600s])))"
+},
+{
+"kind": "promql",
+"ms": 867,
+"error": "",
+"files": null,
+"bytes": 3546770,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.logs{service_name=~\".*\", severity_range=\"ERROR_FATAL\"}[3600s]))"
+}
+]
+},
+{
+"ms": 4523,
+"queries": [
+{
+"kind": "traces",
+"ms": 797,
+"error": "",
+"files": 754,
+"bytes": 6629468,
+"workers": 12,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 1099,
+"error": "",
+"files": 651,
+"bytes": 3202887,
+"workers": 11,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 945,
+"error": "",
+"files": 986,
+"bytes": 7688960,
+"workers": 16,
+"rows": 17,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "promql",
+"ms": 1161,
+"error": "",
+"files": null,
+"bytes": 7266693,
+"workers": null,
+"rows": null,
+"what": "sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[30s]))"
+},
+{
+"kind": "promql",
+"ms": 2321,
+"error": "",
+"files": null,
+"bytes": 24395473,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[30s])) or 0 * sum by (service_name) (rate(leasyd.sp"
+},
+{
+"kind": "promql",
+"ms": 764,
+"error": "",
+"files": null,
+"bytes": 8823722,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum by (service_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 735,
+"error": "",
+"files": null,
+"bytes": 6747540,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.5, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 733,
+"error": "",
+"files": null,
+"bytes": 7266712,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 677,
+"error": "",
+"files": null,
+"bytes": 7266712,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.99, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s])))"
+},
+{
+"kind": "promql",
+"ms": 796,
+"error": "",
+"files": null,
+"bytes": 10899416,
+"workers": null,
+"rows": null,
+"what": "topk(5, histogram_quantile(0.95, sum by (span_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[30s]))))"
+},
+{
+"kind": "promql",
+"ms": 621,
+"error": "",
+"files": null,
+"bytes": 3844564,
+"workers": null,
+"rows": null,
+"what": "sum by (severity_range) (increase(leasyd.logs{service_name=~\".*\"}[30s]))"
+},
+{
+"kind": "promql",
+"ms": 677,
+"error": "",
+"files": null,
+"bytes": 7266691,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[3600s]))"
+},
+{
+"kind": "promql",
+"ms": 2993,
+"error": "",
+"files": null,
+"bytes": 25951858,
+"workers": null,
+"rows": null,
+"what": "100 * (sum(rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[3600s])) or 0 * sum(rate(leasyd.spans{service_name=~\".*\"}[3600s]))) / "
+},
+{
+"kind": "promql",
+"ms": 724,
+"error": "",
+"files": null,
+"bytes": 9342388,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[3600s])))"
+},
+{
+"kind": "promql",
+"ms": 815,
+"error": "",
+"files": null,
+"bytes": 3251655,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.logs{service_name=~\".*\", severity_range=\"ERROR_FATAL\"}[3600s]))"
+}
+]
+}
+]
+},
+{
+"route": "/alerts",
+"range": "1h",
+"n": 0,
+"first_ms": 0,
+"best_ms": 0,
+"slowest": null,
+"errors": [],
+"runs": [
+{
+"ms": 0,
+"queries": []
+},
+{
+"ms": 0,
+"queries": []
+}
+]
+},
+{
+"route": "/synthetics",
+"range": "1h",
+"n": 3,
+"first_ms": 79,
+"best_ms": 73,
+"slowest": {
+"kind": "metrics",
+"ms": 76,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+"errors": [],
+"runs": [
+{
+"ms": 79,
+"queries": [
+{
+"kind": "metrics",
+"ms": 69,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\""
+},
+{
+"kind": "metrics",
+"ms": 76,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+{
+"kind": "traces",
+"ms": 74,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 500}}"
+}
+]
+},
+{
+"ms": 73,
+"queries": [
+{
+"kind": "metrics",
+"ms": 67,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\""
+},
+{
+"kind": "metrics",
+"ms": 70,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+{
+"kind": "traces",
+"ms": 66,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 500}}"
+}
+]
+}
+]
+},
+{
+"route": "/slos",
+"range": "1h",
+"n": 6,
+"first_ms": 94,
+"best_ms": 81,
+"slowest": {
+"kind": "metrics",
+"ms": 86,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+"errors": [],
+"runs": [
+{
+"ms": 94,
+"queries": [
+{
+"kind": "metrics",
+"ms": 75,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 68,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 69,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 78,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 86,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 68,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+}
+]
+},
+{
+"ms": 81,
+"queries": [
+{
+"kind": "metrics",
+"ms": 80,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 74,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 71,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 73,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 65,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 72,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+}
+]
+}
+]
+},
+{
+"route": "/",
+"range": "6h",
+"n": 20,
+"first_ms": 3731,
+"best_ms": 3055,
+"slowest": {
+"kind": "traces",
+"ms": 2815,
+"error": "",
+"files": 1014,
+"bytes": 18633194,
+"workers": 17,
+"rows": 72,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:300\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 3731,
+"queries": [
+{
+"kind": "traces",
+"ms": 2714,
+"error": "",
+"files": 1014,
+"bytes": 18633355,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 931,
+"error": "",
+"files": 1014,
+"bytes": 18635750,
+"workers": 17,
+"rows": 2467,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:300\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1314,
+"error": "",
+"files": 1014,
+"bytes": 18649080,
+"workers": 17,
+"rows": 936,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:300\", \"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1286,
+"error": "",
+"files": 1014,
+"bytes": 16132008,
+"workers": 17,
+"rows": 72,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": [\"ts:300\"]}"
+},
+{
+"kind": "traces",
+"ms": 2815,
+"error": "",
+"files": 1014,
+"bytes": 18633194,
+"workers": 17,
+"rows": 72,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:300\"]}"
+},
+{
+"kind": "logs",
+"ms": 2578,
+"error": "",
+"files": 882,
+"bytes": 8325943,
+"workers": 14,
+"rows": 287,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"ts:300\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 961,
+"error": "",
+"files": 882,
+"bytes": 8325943,
+"workers": 14,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 766,
+"error": "",
+"files": 882,
+"bytes": 8324380,
+"workers": 14,
+"rows": 4,
+"what": "{\"signal\": \"logs\", \"where\": [{\"field\": \"severity_number\", \"op\": \">=\", \"value\": 17}], \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 930,
+"error": "",
+"files": 1326,
+"bytes": 12850184,
+"workers": 21,
+"rows": 20,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\"]}"
+},
+{
+"kind": "metrics",
+"ms": 862,
+"error": "",
+"files": 1326,
+"bytes": 13563290,
+"workers": 21,
+"rows": 1224,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"ts:300\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 98,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+},
+{
+"kind": "metrics",
+"ms": 75,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"value\", \"op\": \"=\", \"val"
+},
+{
+"kind": "traces",
+"ms": 769,
+"error": "",
+"files": 1014,
+"bytes": 20800819,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1083,
+"error": "",
+"files": 1014,
+"bytes": 18651213,
+"workers": 17,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\", \"name\"]}"
+},
+{
+"kind": "traces",
+"ms": 877,
+"error": "",
+"files": 1014,
+"bytes": 17650120,
+"workers": 17,
+"rows": 1,
+"what": "{\"signal\": \"traces\"}"
+},
+{
+"kind": "traces",
+"ms": 909,
+"error": "",
+"files": 1014,
+"bytes": 17107166,
+"workers": 17,
+"rows": 1,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}]}"
+},
+{
+"kind": "logs",
+"ms": 974,
+"error": "",
+"files": 882,
+"bytes": 8325943,
+"workers": 14,
+"rows": 1,
+"what": "{\"signal\": \"logs\"}"
+},
+{
+"kind": "metrics",
+"ms": 848,
+"error": "",
+"files": 1326,
+"bytes": 14128645,
+"workers": 21,
+"rows": 1,
+"what": "{\"signal\": \"metrics\"}"
+},
+{
+"kind": "traces",
+"ms": 76,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 1000}}"
+},
+{
+"kind": "metrics",
+"ms": 82,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+}
+]
+},
+{
+"ms": 3055,
+"queries": [
+{
+"kind": "traces",
+"ms": 881,
+"error": "",
+"files": 1014,
+"bytes": 19611126,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 905,
+"error": "",
+"files": 1014,
+"bytes": 21841310,
+"workers": 17,
+"rows": 2467,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:300\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 805,
+"error": "",
+"files": 1014,
+"bytes": 21502138,
+"workers": 17,
+"rows": 936,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:300\", \"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1096,
+"error": "",
+"files": 1014,
+"bytes": 17345705,
+"workers": 17,
+"rows": 72,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": [\"ts:300\"]}"
+},
+{
+"kind": "traces",
+"ms": 1026,
+"error": "",
+"files": 1014,
+"bytes": 19610962,
+"workers": 17,
+"rows": 72,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:300\"]}"
+},
+{
+"kind": "logs",
+"ms": 773,
+"error": "",
+"files": 882,
+"bytes": 8325943,
+"workers": 14,
+"rows": 287,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"ts:300\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 1348,
+"error": "",
+"files": 882,
+"bytes": 8982699,
+"workers": 14,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 860,
+"error": "",
+"files": 882,
+"bytes": 9453462,
+"workers": 14,
+"rows": 4,
+"what": "{\"signal\": \"logs\", \"where\": [{\"field\": \"severity_number\", \"op\": \">=\", \"value\": 17}], \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1084,
+"error": "",
+"files": 1326,
+"bytes": 13494307,
+"workers": 21,
+"rows": 20,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\"]}"
+},
+{
+"kind": "metrics",
+"ms": 979,
+"error": "",
+"files": 1326,
+"bytes": 12850184,
+"workers": 21,
+"rows": 1224,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"ts:300\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 94,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+},
+{
+"kind": "metrics",
+"ms": 69,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"value\", \"op\": \"=\", \"val"
+},
+{
+"kind": "traces",
+"ms": 881,
+"error": "",
+"files": 1014,
+"bytes": 22056352,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 953,
+"error": "",
+"files": 1014,
+"bytes": 21803815,
+"workers": 17,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\", \"name\"]}"
+},
+{
+"kind": "traces",
+"ms": 1055,
+"error": "",
+"files": 1014,
+"bytes": 20836848,
+"workers": 17,
+"rows": 1,
+"what": "{\"signal\": \"traces\"}"
+},
+{
+"kind": "traces",
+"ms": 1167,
+"error": "",
+"files": 1014,
+"bytes": 18350719,
+"workers": 17,
+"rows": 1,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}]}"
+},
+{
+"kind": "logs",
+"ms": 860,
+"error": "",
+"files": 882,
+"bytes": 8325943,
+"workers": 14,
+"rows": 1,
+"what": "{\"signal\": \"logs\"}"
+},
+{
+"kind": "metrics",
+"ms": 916,
+"error": "",
+"files": 1326,
+"bytes": 12850184,
+"workers": 21,
+"rows": 1,
+"what": "{\"signal\": \"metrics\"}"
+},
+{
+"kind": "traces",
+"ms": 72,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 1000}}"
+},
+{
+"kind": "metrics",
+"ms": 79,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+}
+]
+}
+]
+},
+{
+"route": "/logs",
+"range": "6h",
+"n": 3,
+"first_ms": 896,
+"best_ms": 896,
+"slowest": {
+"kind": "logs",
+"ms": 894,
+"error": "",
+"files": 882,
+"bytes": 5999874,
+"workers": 14,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 896,
+"queries": [
+{
+"kind": "logs",
+"ms": 757,
+"error": "",
+"files": 882,
+"bytes": 9559068,
+"workers": 14,
+"rows": 287,
+"what": "{\"signal\": \"logs\", \"where\": [], \"group_by\": [\"ts:300\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 894,
+"error": "",
+"files": 882,
+"bytes": 5999874,
+"workers": 14,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "logs",
+"ms": 755,
+"error": "",
+"files": 882,
+"bytes": 9478060,
+"workers": 14,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+}
+]
+},
+{
+"ms": 916,
+"queries": [
+{
+"kind": "logs",
+"ms": 736,
+"error": "",
+"files": 882,
+"bytes": 8890577,
+"workers": 14,
+"rows": 287,
+"what": "{\"signal\": \"logs\", \"where\": [], \"group_by\": [\"ts:300\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 913,
+"error": "",
+"files": 882,
+"bytes": 5844666,
+"workers": 14,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "logs",
+"ms": 802,
+"error": "",
+"files": 882,
+"bytes": 11231794,
+"workers": 14,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/traces",
+"range": "6h",
+"n": 3,
+"first_ms": 1060,
+"best_ms": 1060,
+"slowest": {
+"kind": "traces",
+"ms": 1057,
+"error": "",
+"files": 1027,
+"bytes": 9481874,
+"workers": 17,
+"rows": 200,
+"what": "{\"signal\": \"traces\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1060,
+"queries": [
+{
+"kind": "traces",
+"ms": 971,
+"error": "",
+"files": 1027,
+"bytes": 18750898,
+"workers": 17,
+"rows": 2471,
+"what": "{\"signal\": \"traces\", \"where\": [], \"group_by\": [\"ts:300\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1057,
+"error": "",
+"files": 1027,
+"bytes": 9481874,
+"workers": 17,
+"rows": 200,
+"what": "{\"signal\": \"traces\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "traces",
+"ms": 784,
+"error": "",
+"files": 1027,
+"bytes": 18764228,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+}
+]
+},
+{
+"ms": 1463,
+"queries": [
+{
+"kind": "traces",
+"ms": 1073,
+"error": "",
+"files": 1027,
+"bytes": 18750898,
+"workers": 17,
+"rows": 2471,
+"what": "{\"signal\": \"traces\", \"where\": [], \"group_by\": [\"ts:300\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1460,
+"error": "",
+"files": 1027,
+"bytes": 10037070,
+"workers": 17,
+"rows": 200,
+"what": "{\"signal\": \"traces\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "traces",
+"ms": 986,
+"error": "",
+"files": 1027,
+"bytes": 20301018,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/metrics",
+"range": "6h",
+"n": 3,
+"first_ms": 1270,
+"best_ms": 1203,
+"slowest": {
+"kind": "metrics",
+"ms": 1265,
+"error": "",
+"files": 1343,
+"bytes": 13509499,
+"workers": 22,
+"rows": 64,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\", \"hash:attributes\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1270,
+"queries": [
+{
+"kind": "metrics",
+"ms": 1039,
+"error": "",
+"files": 1343,
+"bytes": 12982925,
+"workers": 22,
+"rows": 65,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"metric_type\", \"temporality\", \"is_monotonic\", \"unit\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1036,
+"error": "",
+"files": 1343,
+"bytes": 12982925,
+"workers": 22,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1265,
+"error": "",
+"files": 1343,
+"bytes": 13509499,
+"workers": 22,
+"rows": 64,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\", \"hash:attributes\"]}"
+}
+]
+},
+{
+"ms": 1203,
+"queries": [
+{
+"kind": "metrics",
+"ms": 1018,
+"error": "",
+"files": 1343,
+"bytes": 13516247,
+"workers": 22,
+"rows": 65,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"metric_type\", \"temporality\", \"is_monotonic\", \"unit\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1001,
+"error": "",
+"files": 1343,
+"bytes": 12982925,
+"workers": 22,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1200,
+"error": "",
+"files": 1343,
+"bytes": 13509499,
+"workers": 22,
+"rows": 64,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\", \"hash:attributes\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/services",
+"range": "6h",
+"n": 3,
+"first_ms": 9913,
+"best_ms": 9483,
+"slowest": {
+"kind": "sql",
+"ms": 9911,
+"error": "",
+"files": 1027,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+"errors": [],
+"runs": [
+{
+"ms": 9913,
+"queries": [
+{
+"kind": "sql",
+"ms": 9595,
+"error": "",
+"files": 1027,
+"bytes": null,
+"workers": null,
+"rows": 13,
+"what": "SELECT service, count(*) FILTER (WHERE (kind IN (2, 5) OR parent_span_id IS NULL)) AS requests,\n  count(*) FILTER (WHERE (kind IN (2, 5) OR "
+},
+{
+"kind": "sql",
+"ms": 9911,
+"error": "",
+"files": 1027,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+{
+"kind": "metrics",
+"ms": 1168,
+"error": "",
+"files": 1343,
+"bytes": 9649522,
+"workers": 22,
+"rows": 14,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"in\", \"value\": [\"traces_service_graph_request_total\", \"traces_service_graph_r"
+}
+]
+},
+{
+"ms": 9483,
+"queries": [
+{
+"kind": "sql",
+"ms": 7913,
+"error": "",
+"files": 1027,
+"bytes": null,
+"workers": null,
+"rows": 13,
+"what": "SELECT service, count(*) FILTER (WHERE (kind IN (2, 5) OR parent_span_id IS NULL)) AS requests,\n  count(*) FILTER (WHERE (kind IN (2, 5) OR "
+},
+{
+"kind": "sql",
+"ms": 9480,
+"error": "",
+"files": 1027,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+{
+"kind": "metrics",
+"ms": 1106,
+"error": "",
+"files": 1343,
+"bytes": 10797689,
+"workers": 22,
+"rows": 14,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"in\", \"value\": [\"traces_service_graph_request_total\", \"traces_service_graph_r"
+}
+]
+}
+]
+},
+{
+"route": "/web",
+"range": "6h",
+"n": 8,
+"first_ms": 15129,
+"best_ms": 15055,
+"slowest": {
+"kind": "sql",
+"ms": 8351,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views\n    FROM logs WHERE resource_attributes['telemetry.sdk"
+},
+"errors": [],
+"runs": [
+{
+"ms": 15129,
+"queries": [
+{
+"kind": "sql",
+"ms": 8351,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views\n    FROM logs WHERE resource_attributes['telemetry.sdk"
+},
+{
+"kind": "sql",
+"ms": 6046,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      count(DISTINCT attributes['rum.session_id']) AS visits,\n"
+},
+{
+"kind": "sql",
+"ms": 8018,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['rum.vital.name'] AS name, quantile_cont(TRY_CAST(attributes['rum.vital.value'] AS DOUBLE), 0.75) AS p75, count(*) AS n,\n "
+},
+{
+"kind": "sql",
+"ms": 8016,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 72,
+"what": "SELECT time_bucket(INTERVAL '300 seconds', ts) AS t,\n      count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views, count(*) F"
+},
+{
+"kind": "sql",
+"ms": 7519,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      quantile_cont(TRY_CAST(a"
+},
+{
+"kind": "sql",
+"ms": 7829,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['error.message'] AS message, count(*) AS n, count(DISTINCT attributes['rum.session_id']) AS visits,\n      max(ts) AS last,"
+},
+{
+"kind": "sql",
+"ms": 5983,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['http.request.method'] AS method, attributes['url.full'] AS url, attributes['http.response.status_code'] AS status,\n      "
+},
+{
+"kind": "sql",
+"ms": 7603,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 7,
+"what": "SELECT resource_attributes['browser.name'] AS browser, resource_attributes['device.type'] AS device,\n      count(DISTINCT attributes['rum.se"
+}
+]
+},
+{
+"ms": 15055,
+"queries": [
+{
+"kind": "sql",
+"ms": 6138,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views\n    FROM logs WHERE resource_attributes['telemetry.sdk"
+},
+{
+"kind": "sql",
+"ms": 8023,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      count(DISTINCT attributes['rum.session_id']) AS visits,\n"
+},
+{
+"kind": "sql",
+"ms": 7965,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['rum.vital.name'] AS name, quantile_cont(TRY_CAST(attributes['rum.vital.value'] AS DOUBLE), 0.75) AS p75, count(*) AS n,\n "
+},
+{
+"kind": "sql",
+"ms": 8046,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 72,
+"what": "SELECT time_bucket(INTERVAL '300 seconds', ts) AS t,\n      count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views, count(*) F"
+},
+{
+"kind": "sql",
+"ms": 8083,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      quantile_cont(TRY_CAST(a"
+},
+{
+"kind": "sql",
+"ms": 7496,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['error.message'] AS message, count(*) AS n, count(DISTINCT attributes['rum.session_id']) AS visits,\n      max(ts) AS last,"
+},
+{
+"kind": "sql",
+"ms": 6132,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['http.request.method'] AS method, attributes['url.full'] AS url, attributes['http.response.status_code'] AS status,\n      "
+},
+{
+"kind": "sql",
+"ms": 7551,
+"error": "",
+"files": 893,
+"bytes": null,
+"workers": null,
+"rows": 7,
+"what": "SELECT resource_attributes['browser.name'] AS browser, resource_attributes['device.type'] AS device,\n      count(DISTINCT attributes['rum.se"
+}
+]
+}
+]
+},
+{
+"route": "/agents",
+"range": "6h",
+"n": 4,
+"first_ms": 1462,
+"best_ms": 1154,
+"slowest": {
+"kind": "traces",
+"ms": 1459,
+"error": "",
+"files": 1027,
+"bytes": 13986244,
+"workers": 17,
+"rows": 4032,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1462,
+"queries": [
+{
+"kind": "traces",
+"ms": 1459,
+"error": "",
+"files": 1027,
+"bytes": 13986244,
+"workers": 17,
+"rows": 4032,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+{
+"kind": "traces",
+"ms": 1399,
+"error": "",
+"files": 1027,
+"bytes": 18453140,
+"workers": 17,
+"rows": 133,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}, {\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": "
+},
+{
+"kind": "traces",
+"ms": 857,
+"error": "",
+"files": 1027,
+"bytes": 10464509,
+"workers": 17,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"in\", \"value\": [\"chat\", \"text_completion\", \"generate_content\"]}, {\"field\""
+},
+{
+"kind": "traces",
+"ms": 897,
+"error": "",
+"files": 1027,
+"bytes": 10929915,
+"workers": 17,
+"rows": 500,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"=\", \"value\": \"execute_tool\"}], \"group_by\": [\"trace_id\", \"session_id\", \"g"
+}
+]
+},
+{
+"ms": 1154,
+"queries": [
+{
+"kind": "traces",
+"ms": 1153,
+"error": "",
+"files": 1027,
+"bytes": 17385301,
+"workers": 17,
+"rows": 4031,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+{
+"kind": "traces",
+"ms": 1032,
+"error": "",
+"files": 1027,
+"bytes": 15933064,
+"workers": 17,
+"rows": 133,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}, {\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": "
+},
+{
+"kind": "traces",
+"ms": 968,
+"error": "",
+"files": 1027,
+"bytes": 9911859,
+"workers": 17,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"in\", \"value\": [\"chat\", \"text_completion\", \"generate_content\"]}, {\"field\""
+},
+{
+"kind": "traces",
+"ms": 778,
+"error": "",
+"files": 1027,
+"bytes": 11419298,
+"workers": 17,
+"rows": 500,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"=\", \"value\": \"execute_tool\"}], \"group_by\": [\"trace_id\", \"session_id\", \"g"
+}
+]
+}
+]
+},
+{
+"route": "/lambda",
+"range": "6h",
+"n": 2,
+"first_ms": 11687,
+"best_ms": 11633,
+"slowest": {
+"kind": "sql",
+"ms": 11684,
+"error": "",
+"files": 1343,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+},
+"errors": [],
+"runs": [
+{
+"ms": 11687,
+"queries": [
+{
+"kind": "sql",
+"ms": 9405,
+"error": "",
+"files": 1027,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,\n      any_value(resource_attribut"
+},
+{
+"kind": "sql",
+"ms": 11684,
+"error": "",
+"files": 1343,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+}
+]
+},
+{
+"ms": 11633,
+"queries": [
+{
+"kind": "sql",
+"ms": 9403,
+"error": "",
+"files": 1040,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,\n      any_value(resource_attribut"
+},
+{
+"kind": "sql",
+"ms": 11630,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+}
+]
+}
+]
+},
+{
+"route": "/kubernetes",
+"range": "6h",
+"n": 6,
+"first_ms": 14492,
+"best_ms": 14475,
+"slowest": {
+"kind": "sql",
+"ms": 14484,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+"errors": [],
+"runs": [
+{
+"ms": 14492,
+"queries": [
+{
+"kind": "sql",
+"ms": 3547,
+"error": "",
+"files": 392,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 12508,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 504,
+"what": "WITH p AS (\n  SELECT time_bucket(INTERVAL '300 seconds', ts) AS t, resource_attributes['k8s.namespace.name'] AS key, resource_attributes['k8"
+},
+{
+"kind": "sql",
+"ms": 9571,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 24,
+"what": "SELECT resource_attributes['k8s.namespace.name'] AS namespace,\n  coalesce(resource_attributes['k8s.deployment.name'], resource_attributes['k"
+},
+{
+"kind": "sql",
+"ms": 8021,
+"error": "",
+"files": 904,
+"bytes": null,
+"workers": null,
+"rows": 4,
+"what": "SELECT coalesce(attributes['k8s.namespace.name'], '') AS namespace, coalesce(resource_attributes['k8s.object.kind'], '') AS kind,\n  coalesce"
+},
+{
+"kind": "sql",
+"ms": 14484,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+{
+"kind": "sql",
+"ms": 13882,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 57,
+"what": "WITH k AS (\n  SELECT resource_attributes['k8s.namespace.name'] AS ns, resource_attributes['k8s.pod.name'] AS pod, any_value(coalesce(resourc"
+}
+]
+},
+{
+"ms": 14475,
+"queries": [
+{
+"kind": "sql",
+"ms": 3739,
+"error": "",
+"files": 392,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 11915,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 504,
+"what": "WITH p AS (\n  SELECT time_bucket(INTERVAL '300 seconds', ts) AS t, resource_attributes['k8s.namespace.name'] AS key, resource_attributes['k8"
+},
+{
+"kind": "sql",
+"ms": 11876,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 24,
+"what": "SELECT resource_attributes['k8s.namespace.name'] AS namespace,\n  coalesce(resource_attributes['k8s.deployment.name'], resource_attributes['k"
+},
+{
+"kind": "sql",
+"ms": 8099,
+"error": "",
+"files": 904,
+"bytes": null,
+"workers": null,
+"rows": 4,
+"what": "SELECT coalesce(attributes['k8s.namespace.name'], '') AS namespace, coalesce(resource_attributes['k8s.object.kind'], '') AS kind,\n  coalesce"
+},
+{
+"kind": "sql",
+"ms": 14467,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+{
+"kind": "sql",
+"ms": 11075,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 57,
+"what": "WITH k AS (\n  SELECT resource_attributes['k8s.namespace.name'] AS ns, resource_attributes['k8s.pod.name'] AS pod, any_value(coalesce(resourc"
+}
+]
+}
+]
+},
+{
+"route": "/gpus",
+"range": "6h",
+"n": 4,
+"first_ms": 11842,
+"best_ms": 11842,
+"slowest": {
+"kind": "sql",
+"ms": 11837,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+"errors": [],
+"runs": [
+{
+"ms": 11842,
+"queries": [
+{
+"kind": "sql",
+"ms": 3627,
+"error": "",
+"files": 366,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 11737,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 358,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+},
+{
+"kind": "sql",
+"ms": 11837,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+{
+"kind": "sql",
+"ms": 9553,
+"error": "",
+"files": 1360,
+"bytes": null,
+"workers": null,
+"rows": 16,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+}
+]
+},
+{
+"ms": 12807,
+"queries": [
+{
+"kind": "sql",
+"ms": 3577,
+"error": "",
+"files": 395,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 11782,
+"error": "",
+"files": 1377,
+"bytes": null,
+"workers": null,
+"rows": 359,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+},
+{
+"kind": "sql",
+"ms": 9805,
+"error": "",
+"files": 1377,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+{
+"kind": "sql",
+"ms": 12800,
+"error": "",
+"files": 1377,
+"bytes": null,
+"workers": null,
+"rows": 16,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+}
+]
+}
+]
+},
+{
+"route": "/dashboards/builtin-services",
+"range": "6h",
+"n": 15,
+"first_ms": 5238,
+"best_ms": 5238,
+"slowest": {
+"kind": "promql",
+"ms": 3094,
+"error": "",
+"files": null,
+"bytes": 59489131,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[300s])) or 0 * sum by (service_name) (rate(leasyd.s"
+},
+"errors": [],
+"runs": [
+{
+"ms": 5238,
+"queries": [
+{
+"kind": "traces",
+"ms": 1098,
+"error": "",
+"files": 1053,
+"bytes": 18998149,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 1108,
+"error": "",
+"files": 916,
+"bytes": 9012479,
+"workers": 15,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 2546,
+"error": "",
+"files": 1377,
+"bytes": 13247930,
+"workers": 22,
+"rows": 17,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "promql",
+"ms": 970,
+"error": "",
+"files": null,
+"bytes": 19565630,
+"workers": null,
+"rows": null,
+"what": "sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[300s]))"
+},
+{
+"kind": "promql",
+"ms": 3094,
+"error": "",
+"files": null,
+"bytes": 59489131,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[300s])) or 0 * sum by (service_name) (rate(leasyd.s"
+},
+{
+"kind": "promql",
+"ms": 1202,
+"error": "",
+"files": null,
+"bytes": 19565630,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum by (service_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 922,
+"error": "",
+"files": null,
+"bytes": 19565630,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.5, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 839,
+"error": "",
+"files": null,
+"bytes": 23149426,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 1120,
+"error": "",
+"files": null,
+"bytes": 19565630,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.99, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 1335,
+"error": "",
+"files": null,
+"bytes": 19565630,
+"workers": null,
+"rows": null,
+"what": "topk(5, histogram_quantile(0.95, sum by (span_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s]))))"
+},
+{
+"kind": "promql",
+"ms": 754,
+"error": "",
+"files": null,
+"bytes": 10241331,
+"workers": null,
+"rows": null,
+"what": "sum by (severity_range) (increase(leasyd.logs{service_name=~\".*\"}[300s]))"
+},
+{
+"kind": "promql",
+"ms": 1113,
+"error": "",
+"files": null,
+"bytes": 22815933,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[21600s]))"
+},
+{
+"kind": "promql",
+"ms": 3008,
+"error": "",
+"files": null,
+"bytes": 64484117,
+"workers": null,
+"rows": null,
+"what": "100 * (sum(rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[21600s])) or 0 * sum(rate(leasyd.spans{service_name=~\".*\"}[21600s]))) "
+},
+{
+"kind": "promql",
+"ms": 1143,
+"error": "",
+"files": null,
+"bytes": 22135354,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[21600s])))"
+},
+{
+"kind": "promql",
+"ms": 912,
+"error": "",
+"files": null,
+"bytes": 9278326,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.logs{service_name=~\".*\", severity_range=\"ERROR_FATAL\"}[21600s]))"
+}
+]
+},
+{
+"ms": 5274,
+"queries": [
+{
+"kind": "traces",
+"ms": 891,
+"error": "",
+"files": 1053,
+"bytes": 21264151,
+"workers": 17,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 816,
+"error": "",
+"files": 916,
+"bytes": 9012479,
+"workers": 15,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 870,
+"error": "",
+"files": 1377,
+"bytes": 13794095,
+"workers": 22,
+"rows": 17,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "promql",
+"ms": 1002,
+"error": "",
+"files": null,
+"bytes": 21813728,
+"workers": null,
+"rows": null,
+"what": "sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[300s]))"
+},
+{
+"kind": "promql",
+"ms": 3188,
+"error": "",
+"files": null,
+"bytes": 61561476,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[300s])) or 0 * sum by (service_name) (rate(leasyd.s"
+},
+{
+"kind": "promql",
+"ms": 1233,
+"error": "",
+"files": null,
+"bytes": 21853795,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum by (service_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 1169,
+"error": "",
+"files": null,
+"bytes": 21532147,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.5, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 1155,
+"error": "",
+"files": null,
+"bytes": 21559206,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 873,
+"error": "",
+"files": null,
+"bytes": 21562811,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.99, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s])))"
+},
+{
+"kind": "promql",
+"ms": 1291,
+"error": "",
+"files": null,
+"bytes": 24424233,
+"workers": null,
+"rows": null,
+"what": "topk(5, histogram_quantile(0.95, sum by (span_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[300s]))))"
+},
+{
+"kind": "promql",
+"ms": 963,
+"error": "",
+"files": null,
+"bytes": 11681028,
+"workers": null,
+"rows": null,
+"what": "sum by (severity_range) (increase(leasyd.logs{service_name=~\".*\"}[300s]))"
+},
+{
+"kind": "promql",
+"ms": 1154,
+"error": "",
+"files": null,
+"bytes": 25175224,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[21600s]))"
+},
+{
+"kind": "promql",
+"ms": 3285,
+"error": "",
+"files": null,
+"bytes": 78682796,
+"workers": null,
+"rows": null,
+"what": "100 * (sum(rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[21600s])) or 0 * sum(rate(leasyd.spans{service_name=~\".*\"}[21600s]))) "
+},
+{
+"kind": "promql",
+"ms": 1378,
+"error": "",
+"files": null,
+"bytes": 30628314,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[21600s])))"
+},
+{
+"kind": "promql",
+"ms": 923,
+"error": "",
+"files": null,
+"bytes": 10119746,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.logs{service_name=~\".*\", severity_range=\"ERROR_FATAL\"}[21600s]))"
+}
+]
+}
+]
+},
+{
+"route": "/alerts",
+"range": "6h",
+"n": 0,
+"first_ms": 0,
+"best_ms": 0,
+"slowest": null,
+"errors": [],
+"runs": [
+{
+"ms": 0,
+"queries": []
+},
+{
+"ms": 0,
+"queries": []
+}
+]
+},
+{
+"route": "/synthetics",
+"range": "6h",
+"n": 3,
+"first_ms": 90,
+"best_ms": 83,
+"slowest": {
+"kind": "traces",
+"ms": 86,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 500}}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 90,
+"queries": [
+{
+"kind": "metrics",
+"ms": 83,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\""
+},
+{
+"kind": "metrics",
+"ms": 72,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+{
+"kind": "traces",
+"ms": 86,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 500}}"
+}
+]
+},
+{
+"ms": 83,
+"queries": [
+{
+"kind": "metrics",
+"ms": 81,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\""
+},
+{
+"kind": "metrics",
+"ms": 81,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+{
+"kind": "traces",
+"ms": 70,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 500}}"
+}
+]
+}
+]
+},
+{
+"route": "/slos",
+"range": "6h",
+"n": 6,
+"first_ms": 112,
+"best_ms": 108,
+"slowest": {
+"kind": "metrics",
+"ms": 106,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+"errors": [],
+"runs": [
+{
+"ms": 112,
+"queries": [
+{
+"kind": "metrics",
+"ms": 71,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 91,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 72,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 106,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 78,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 92,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+}
+]
+},
+{
+"ms": 108,
+"queries": [
+{
+"kind": "metrics",
+"ms": 107,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 78,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 77,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 65,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 73,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 66,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+}
+]
+}
+]
+},
+{
+"route": "/",
+"range": "24h",
+"n": 20,
+"first_ms": 3909,
+"best_ms": 3909,
+"slowest": {
+"kind": "traces",
+"ms": 2946,
+"error": "",
+"files": 1365,
+"bytes": 49648039,
+"workers": 22,
+"rows": 87,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:900\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 3909,
+"queries": [
+{
+"kind": "traces",
+"ms": 2929,
+"error": "",
+"files": 1365,
+"bytes": 49648590,
+"workers": 22,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1224,
+"error": "",
+"files": 1365,
+"bytes": 49659854,
+"workers": 22,
+"rows": 3490,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:900\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1305,
+"error": "",
+"files": 1365,
+"bytes": 49986897,
+"workers": 22,
+"rows": 1131,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:900\", \"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 999,
+"error": "",
+"files": 1365,
+"bytes": 39023642,
+"workers": 22,
+"rows": 87,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": [\"ts:900\"]}"
+},
+{
+"kind": "traces",
+"ms": 2946,
+"error": "",
+"files": 1365,
+"bytes": 49648039,
+"workers": 22,
+"rows": 87,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:900\"]}"
+},
+{
+"kind": "logs",
+"ms": 1002,
+"error": "",
+"files": 1194,
+"bytes": 22693957,
+"workers": 19,
+"rows": 348,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"ts:900\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 921,
+"error": "",
+"files": 1194,
+"bytes": 22691638,
+"workers": 19,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 975,
+"error": "",
+"files": 1194,
+"bytes": 22949603,
+"workers": 19,
+"rows": 4,
+"what": "{\"signal\": \"logs\", \"where\": [{\"field\": \"severity_number\", \"op\": \">=\", \"value\": 17}], \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1039,
+"error": "",
+"files": 1755,
+"bytes": 23601705,
+"workers": 28,
+"rows": 20,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\"]}"
+},
+{
+"kind": "metrics",
+"ms": 971,
+"error": "",
+"files": 1755,
+"bytes": 23601705,
+"workers": 28,
+"rows": 1377,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"ts:900\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 69,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+},
+{
+"kind": "metrics",
+"ms": 73,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"value\", \"op\": \"=\", \"val"
+},
+{
+"kind": "traces",
+"ms": 1065,
+"error": "",
+"files": 1365,
+"bytes": 49986897,
+"workers": 22,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1168,
+"error": "",
+"files": 1365,
+"bytes": 49997241,
+"workers": 22,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\", \"name\"]}"
+},
+{
+"kind": "traces",
+"ms": 999,
+"error": "",
+"files": 1365,
+"bytes": 42575936,
+"workers": 22,
+"rows": 1,
+"what": "{\"signal\": \"traces\"}"
+},
+{
+"kind": "traces",
+"ms": 953,
+"error": "",
+"files": 1365,
+"bytes": 39023642,
+"workers": 22,
+"rows": 1,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}]}"
+},
+{
+"kind": "logs",
+"ms": 874,
+"error": "",
+"files": 1194,
+"bytes": 21323070,
+"workers": 19,
+"rows": 1,
+"what": "{\"signal\": \"logs\"}"
+},
+{
+"kind": "metrics",
+"ms": 956,
+"error": "",
+"files": 1755,
+"bytes": 23601705,
+"workers": 28,
+"rows": 1,
+"what": "{\"signal\": \"metrics\"}"
+},
+{
+"kind": "traces",
+"ms": 68,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 1000}}"
+},
+{
+"kind": "metrics",
+"ms": 62,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+}
+]
+},
+{
+"ms": 3913,
+"queries": [
+{
+"kind": "traces",
+"ms": 1216,
+"error": "",
+"files": 1365,
+"bytes": 52214387,
+"workers": 22,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1235,
+"error": "",
+"files": 1365,
+"bytes": 53380915,
+"workers": 22,
+"rows": 3490,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:900\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 1172,
+"error": "",
+"files": 1365,
+"bytes": 55946286,
+"workers": 22,
+"rows": 1131,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:900\", \"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 1179,
+"error": "",
+"files": 1365,
+"bytes": 39023642,
+"workers": 22,
+"rows": 87,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": [\"ts:900\"]}"
+},
+{
+"kind": "traces",
+"ms": 1039,
+"error": "",
+"files": 1365,
+"bytes": 51539063,
+"workers": 22,
+"rows": 87,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"ts:900\"]}"
+},
+{
+"kind": "logs",
+"ms": 811,
+"error": "",
+"files": 1194,
+"bytes": 22693957,
+"workers": 19,
+"rows": 348,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"ts:900\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 1043,
+"error": "",
+"files": 1194,
+"bytes": 22691638,
+"workers": 19,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 888,
+"error": "",
+"files": 1194,
+"bytes": 22949603,
+"workers": 19,
+"rows": 4,
+"what": "{\"signal\": \"logs\", \"where\": [{\"field\": \"severity_number\", \"op\": \">=\", \"value\": 17}], \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1018,
+"error": "",
+"files": 1755,
+"bytes": 25273166,
+"workers": 28,
+"rows": 20,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1212,
+"error": "",
+"files": 1755,
+"bytes": 23601705,
+"workers": 28,
+"rows": 1377,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"ts:900\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 73,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+},
+{
+"kind": "metrics",
+"ms": 81,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"value\", \"op\": \"=\", \"val"
+},
+{
+"kind": "traces",
+"ms": 951,
+"error": "",
+"files": 1365,
+"bytes": 55443970,
+"workers": 22,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "traces",
+"ms": 2590,
+"error": "",
+"files": 1365,
+"bytes": 49997241,
+"workers": 22,
+"rows": 30,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\", \"name\"]}"
+},
+{
+"kind": "traces",
+"ms": 1141,
+"error": "",
+"files": 1365,
+"bytes": 52769451,
+"workers": 22,
+"rows": 1,
+"what": "{\"signal\": \"traces\"}"
+},
+{
+"kind": "traces",
+"ms": 1045,
+"error": "",
+"files": 1365,
+"bytes": 54847620,
+"workers": 22,
+"rows": 1,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}]}"
+},
+{
+"kind": "logs",
+"ms": 997,
+"error": "",
+"files": 1194,
+"bytes": 22468366,
+"workers": 19,
+"rows": 1,
+"what": "{\"signal\": \"logs\"}"
+},
+{
+"kind": "metrics",
+"ms": 921,
+"error": "",
+"files": 1755,
+"bytes": 23601705,
+"workers": 28,
+"rows": 1,
+"what": "{\"signal\": \"metrics\"}"
+},
+{
+"kind": "traces",
+"ms": 70,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 1000}}"
+},
+{
+"kind": "metrics",
+"ms": 77,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.exclud"
+}
+]
+}
+]
+},
+{
+"route": "/logs",
+"range": "24h",
+"n": 3,
+"first_ms": 1039,
+"best_ms": 1039,
+"slowest": {
+"kind": "logs",
+"ms": 1038,
+"error": "",
+"files": 1194,
+"bytes": 24935566,
+"workers": 19,
+"rows": 348,
+"what": "{\"signal\": \"logs\", \"where\": [], \"group_by\": [\"ts:900\", \"severity_number\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1039,
+"queries": [
+{
+"kind": "logs",
+"ms": 1038,
+"error": "",
+"files": 1194,
+"bytes": 24935566,
+"workers": 19,
+"rows": 348,
+"what": "{\"signal\": \"logs\", \"where\": [], \"group_by\": [\"ts:900\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 900,
+"error": "",
+"files": 1194,
+"bytes": 9205012,
+"workers": 19,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "logs",
+"ms": 785,
+"error": "",
+"files": 1194,
+"bytes": 22691638,
+"workers": 19,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+}
+]
+},
+{
+"ms": 1132,
+"queries": [
+{
+"kind": "logs",
+"ms": 1131,
+"error": "",
+"files": 1194,
+"bytes": 23839242,
+"workers": 19,
+"rows": 348,
+"what": "{\"signal\": \"logs\", \"where\": [], \"group_by\": [\"ts:900\", \"severity_number\"]}"
+},
+{
+"kind": "logs",
+"ms": 866,
+"error": "",
+"files": 1194,
+"bytes": 10444053,
+"workers": 19,
+"rows": 200,
+"what": "{\"signal\": \"logs\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "logs",
+"ms": 975,
+"error": "",
+"files": 1194,
+"bytes": 24027748,
+"workers": 19,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/traces",
+"range": "24h",
+"n": 3,
+"first_ms": 1173,
+"best_ms": 1019,
+"slowest": {
+"kind": "traces",
+"ms": 1171,
+"error": "",
+"files": 1365,
+"bytes": 51512824,
+"workers": 22,
+"rows": 3488,
+"what": "{\"signal\": \"traces\", \"where\": [], \"group_by\": [\"ts:900\", \"log:duration_ns\", \"status_code\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1173,
+"queries": [
+{
+"kind": "traces",
+"ms": 1171,
+"error": "",
+"files": 1365,
+"bytes": 51512824,
+"workers": 22,
+"rows": 3488,
+"what": "{\"signal\": \"traces\", \"where\": [], \"group_by\": [\"ts:900\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 964,
+"error": "",
+"files": 1365,
+"bytes": 18370851,
+"workers": 22,
+"rows": 200,
+"what": "{\"signal\": \"traces\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "traces",
+"ms": 1103,
+"error": "",
+"files": 1365,
+"bytes": 56184674,
+"workers": 22,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+}
+]
+},
+{
+"ms": 1019,
+"queries": [
+{
+"kind": "traces",
+"ms": 1018,
+"error": "",
+"files": 1365,
+"bytes": 61388429,
+"workers": 22,
+"rows": 3488,
+"what": "{\"signal\": \"traces\", \"where\": [], \"group_by\": [\"ts:900\", \"log:duration_ns\", \"status_code\"]}"
+},
+{
+"kind": "traces",
+"ms": 976,
+"error": "",
+"files": 1365,
+"bytes": 23435263,
+"workers": 22,
+"rows": 200,
+"what": "{\"signal\": \"traces\", \"where\": [], \"search\": {\"limit\": 200}}"
+},
+{
+"kind": "traces",
+"ms": 860,
+"error": "",
+"files": 1365,
+"bytes": 57378531,
+"workers": 22,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/metrics",
+"range": "24h",
+"n": 3,
+"first_ms": 1391,
+"best_ms": 1367,
+"slowest": {
+"kind": "metrics",
+"ms": 1388,
+"error": "",
+"files": 1755,
+"bytes": 25273030,
+"workers": 28,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1391,
+"queries": [
+{
+"kind": "metrics",
+"ms": 943,
+"error": "",
+"files": 1755,
+"bytes": 24436958,
+"workers": 28,
+"rows": 65,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"metric_type\", \"temporality\", \"is_monotonic\", \"unit\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1388,
+"error": "",
+"files": 1755,
+"bytes": 25273030,
+"workers": 28,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1311,
+"error": "",
+"files": 1755,
+"bytes": 26965092,
+"workers": 28,
+"rows": 64,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\", \"hash:attributes\"]}"
+}
+]
+},
+{
+"ms": 1367,
+"queries": [
+{
+"kind": "metrics",
+"ms": 1366,
+"error": "",
+"files": 1755,
+"bytes": 26144535,
+"workers": 28,
+"rows": 65,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"metric_type\", \"temporality\", \"is_monotonic\", \"unit\"]}"
+},
+{
+"kind": "metrics",
+"ms": 949,
+"error": "",
+"files": 1755,
+"bytes": 23601705,
+"workers": 28,
+"rows": 105,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 1239,
+"error": "",
+"files": 1755,
+"bytes": 28681515,
+"workers": 28,
+"rows": 64,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"metric_name\", \"service\", \"hash:attributes\"]}"
+}
+]
+}
+]
+},
+{
+"route": "/services",
+"range": "24h",
+"n": 3,
+"first_ms": 11242,
+"best_ms": 11242,
+"slowest": {
+"kind": "sql",
+"ms": 11239,
+"error": "",
+"files": 1365,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+"errors": [],
+"runs": [
+{
+"ms": 11242,
+"queries": [
+{
+"kind": "sql",
+"ms": 10977,
+"error": "",
+"files": 1365,
+"bytes": null,
+"workers": null,
+"rows": 13,
+"what": "SELECT service, count(*) FILTER (WHERE (kind IN (2, 5) OR parent_span_id IS NULL)) AS requests,\n  count(*) FILTER (WHERE (kind IN (2, 5) OR "
+},
+{
+"kind": "sql",
+"ms": 11239,
+"error": "",
+"files": 1365,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+{
+"kind": "metrics",
+"ms": 1087,
+"error": "",
+"files": 1755,
+"bytes": 14103032,
+"workers": 28,
+"rows": 14,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"in\", \"value\": [\"traces_service_graph_request_total\", \"traces_service_graph_r"
+}
+]
+},
+{
+"ms": 14048,
+"queries": [
+{
+"kind": "sql",
+"ms": 8345,
+"error": "",
+"files": 1365,
+"bytes": null,
+"workers": null,
+"rows": 13,
+"what": "SELECT service, count(*) FILTER (WHERE (kind IN (2, 5) OR parent_span_id IS NULL)) AS requests,\n  count(*) FILTER (WHERE (kind IN (2, 5) OR "
+},
+{
+"kind": "sql",
+"ms": 14046,
+"error": "",
+"files": 1365,
+"bytes": null,
+"workers": null,
+"rows": 15,
+"what": "SELECT p.service AS source, c.service AS target, count(*) AS calls,\n  count(*) FILTER (WHERE c.status_code = 2) AS errors\nFROM spans c JOIN "
+},
+{
+"kind": "metrics",
+"ms": 1017,
+"error": "",
+"files": 1755,
+"bytes": 14103032,
+"workers": 28,
+"rows": 14,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"in\", \"value\": [\"traces_service_graph_request_total\", \"traces_service_graph_r"
+}
+]
+}
+]
+},
+{
+"route": "/web",
+"range": "24h",
+"n": 8,
+"first_ms": 20913,
+"best_ms": 20772,
+"slowest": {
+"kind": "sql",
+"ms": 11544,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 87,
+"what": "SELECT time_bucket(INTERVAL '900 seconds', ts) AS t,\n      count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views, count(*) F"
+},
+"errors": [],
+"runs": [
+{
+"ms": 20913,
+"queries": [
+{
+"kind": "sql",
+"ms": 11254,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views\n    FROM logs WHERE resource_attributes['telemetry.sdk"
+},
+{
+"kind": "sql",
+"ms": 10637,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      count(DISTINCT attributes['rum.session_id']) AS visits,\n"
+},
+{
+"kind": "sql",
+"ms": 10931,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['rum.vital.name'] AS name, quantile_cont(TRY_CAST(attributes['rum.vital.value'] AS DOUBLE), 0.75) AS p75, count(*) AS n,\n "
+},
+{
+"kind": "sql",
+"ms": 11544,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 87,
+"what": "SELECT time_bucket(INTERVAL '900 seconds', ts) AS t,\n      count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views, count(*) F"
+},
+{
+"kind": "sql",
+"ms": 6779,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      quantile_cont(TRY_CAST(a"
+},
+{
+"kind": "sql",
+"ms": 11083,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['error.message'] AS message, count(*) AS n, count(DISTINCT attributes['rum.session_id']) AS visits,\n      max(ts) AS last,"
+},
+{
+"kind": "sql",
+"ms": 6475,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['http.request.method'] AS method, attributes['url.full'] AS url, attributes['http.response.status_code'] AS status,\n      "
+},
+{
+"kind": "sql",
+"ms": 10273,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 7,
+"what": "SELECT resource_attributes['browser.name'] AS browser, resource_attributes['device.type'] AS device,\n      count(DISTINCT attributes['rum.se"
+}
+]
+},
+{
+"ms": 20772,
+"queries": [
+{
+"kind": "sql",
+"ms": 12210,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT service, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views\n    FROM logs WHERE resource_attributes['telemetry.sdk"
+},
+{
+"kind": "sql",
+"ms": 6378,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 1,
+"what": "SELECT count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      count(DISTINCT attributes['rum.session_id']) AS visits,\n"
+},
+{
+"kind": "sql",
+"ms": 10555,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['rum.vital.name'] AS name, quantile_cont(TRY_CAST(attributes['rum.vital.value'] AS DOUBLE), 0.75) AS p75, count(*) AS n,\n "
+},
+{
+"kind": "sql",
+"ms": 11328,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 87,
+"what": "SELECT time_bucket(INTERVAL '900 seconds', ts) AS t,\n      count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views, count(*) F"
+},
+{
+"kind": "sql",
+"ms": 11471,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 5,
+"what": "SELECT attributes['url.path'] AS page, count(*) FILTER (WHERE attributes['rum.type'] = 'page_view') AS views,\n      quantile_cont(TRY_CAST(a"
+},
+{
+"kind": "sql",
+"ms": 12677,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['error.message'] AS message, count(*) AS n, count(DISTINCT attributes['rum.session_id']) AS visits,\n      max(ts) AS last,"
+},
+{
+"kind": "sql",
+"ms": 6292,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 2,
+"what": "SELECT attributes['http.request.method'] AS method, attributes['url.full'] AS url, attributes['http.response.status_code'] AS status,\n      "
+},
+{
+"kind": "sql",
+"ms": 10213,
+"error": "",
+"files": 1205,
+"bytes": null,
+"workers": null,
+"rows": 7,
+"what": "SELECT resource_attributes['browser.name'] AS browser, resource_attributes['device.type'] AS device,\n      count(DISTINCT attributes['rum.se"
+}
+]
+}
+]
+},
+{
+"route": "/agents",
+"range": "24h",
+"n": 4,
+"first_ms": 1672,
+"best_ms": 1199,
+"slowest": {
+"kind": "traces",
+"ms": 1670,
+"error": "",
+"files": 1378,
+"bytes": 28807018,
+"workers": 23,
+"rows": 5000,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+"errors": [],
+"runs": [
+{
+"ms": 1672,
+"queries": [
+{
+"kind": "traces",
+"ms": 1670,
+"error": "",
+"files": 1378,
+"bytes": 28807018,
+"workers": 23,
+"rows": 5000,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+{
+"kind": "traces",
+"ms": 1050,
+"error": "",
+"files": 1378,
+"bytes": 38648273,
+"workers": 23,
+"rows": 459,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}, {\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": "
+},
+{
+"kind": "traces",
+"ms": 1030,
+"error": "",
+"files": 1378,
+"bytes": 15904592,
+"workers": 23,
+"rows": 115,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"in\", \"value\": [\"chat\", \"text_completion\", \"generate_content\"]}, {\"field\""
+},
+{
+"kind": "traces",
+"ms": 1522,
+"error": "",
+"files": 1378,
+"bytes": 15352254,
+"workers": 23,
+"rows": 500,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"=\", \"value\": \"execute_tool\"}], \"group_by\": [\"trace_id\", \"session_id\", \"g"
+}
+]
+},
+{
+"ms": 1199,
+"queries": [
+{
+"kind": "traces",
+"ms": 1198,
+"error": "",
+"files": 1378,
+"bytes": 28807018,
+"workers": 23,
+"rows": 5000,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}], \"group_by\": [\"trace_id\", \"session_id\", \"gen_ai_operation\", \"g"
+},
+{
+"kind": "traces",
+"ms": 955,
+"error": "",
+"files": 1378,
+"bytes": 41881420,
+"workers": 23,
+"rows": 459,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"exists\"}, {\"field\": \"status_code\", \"op\": \"=\", \"value\": 2}], \"group_by\": "
+},
+{
+"kind": "traces",
+"ms": 1126,
+"error": "",
+"files": 1378,
+"bytes": 15904592,
+"workers": 23,
+"rows": 115,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"in\", \"value\": [\"chat\", \"text_completion\", \"generate_content\"]}, {\"field\""
+},
+{
+"kind": "traces",
+"ms": 874,
+"error": "",
+"files": 1378,
+"bytes": 15352254,
+"workers": 23,
+"rows": 500,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"gen_ai_operation\", \"op\": \"=\", \"value\": \"execute_tool\"}], \"group_by\": [\"trace_id\", \"session_id\", \"g"
+}
+]
+}
+]
+},
+{
+"route": "/lambda",
+"range": "24h",
+"n": 2,
+"first_ms": 14074,
+"best_ms": 14074,
+"slowest": {
+"kind": "sql",
+"ms": 14071,
+"error": "",
+"files": 1772,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+},
+"errors": [],
+"runs": [
+{
+"ms": 14074,
+"queries": [
+{
+"kind": "sql",
+"ms": 13045,
+"error": "",
+"files": 1378,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,\n      any_value(resource_attribut"
+},
+{
+"kind": "sql",
+"ms": 14071,
+"error": "",
+"files": 1772,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+}
+]
+},
+{
+"ms": 15904,
+"queries": [
+{
+"kind": "sql",
+"ms": 11712,
+"error": "",
+"files": 1391,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms,\n      any_value(resource_attribut"
+},
+{
+"kind": "sql",
+"ms": 15901,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 0,
+"what": "SELECT service, sum(sum) FILTER (WHERE metric_name = 'aws.lambda.invocations') AS n,\n  sum(sum) FILTER (WHERE metric_name = 'aws.lambda.erro"
+}
+]
+}
+]
+},
+{
+"route": "/kubernetes",
+"range": "24h",
+"n": 6,
+"first_ms": 20068,
+"best_ms": 20068,
+"slowest": {
+"kind": "sql",
+"ms": 20058,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 57,
+"what": "WITH k AS (\n  SELECT resource_attributes['k8s.namespace.name'] AS ns, resource_attributes['k8s.pod.name'] AS pod, any_value(coalesce(resourc"
+},
+"errors": [],
+"runs": [
+{
+"ms": 20068,
+"queries": [
+{
+"kind": "sql",
+"ms": 3747,
+"error": "",
+"files": 396,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 15246,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 601,
+"what": "WITH p AS (\n  SELECT time_bucket(INTERVAL '900 seconds', ts) AS t, resource_attributes['k8s.namespace.name'] AS key, resource_attributes['k8"
+},
+{
+"kind": "sql",
+"ms": 16508,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 24,
+"what": "SELECT resource_attributes['k8s.namespace.name'] AS namespace,\n  coalesce(resource_attributes['k8s.deployment.name'], resource_attributes['k"
+},
+{
+"kind": "sql",
+"ms": 10802,
+"error": "",
+"files": 1216,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "SELECT coalesce(attributes['k8s.namespace.name'], '') AS namespace, coalesce(resource_attributes['k8s.object.kind'], '') AS kind,\n  coalesce"
+},
+{
+"kind": "sql",
+"ms": 15950,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+{
+"kind": "sql",
+"ms": 20058,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 57,
+"what": "WITH k AS (\n  SELECT resource_attributes['k8s.namespace.name'] AS ns, resource_attributes['k8s.pod.name'] AS pod, any_value(coalesce(resourc"
+}
+]
+},
+{
+"ms": 20260,
+"queries": [
+{
+"kind": "sql",
+"ms": 3728,
+"error": "",
+"files": 395,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 13413,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 601,
+"what": "WITH p AS (\n  SELECT time_bucket(INTERVAL '900 seconds', ts) AS t, resource_attributes['k8s.namespace.name'] AS key, resource_attributes['k8"
+},
+{
+"kind": "sql",
+"ms": 16103,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 24,
+"what": "SELECT resource_attributes['k8s.namespace.name'] AS namespace,\n  coalesce(resource_attributes['k8s.deployment.name'], resource_attributes['k"
+},
+{
+"kind": "sql",
+"ms": 10689,
+"error": "",
+"files": 1216,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "SELECT coalesce(attributes['k8s.namespace.name'], '') AS namespace, coalesce(resource_attributes['k8s.object.kind'], '') AS kind,\n  coalesce"
+},
+{
+"kind": "sql",
+"ms": 18123,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 6,
+"what": "WITH n AS (\n  SELECT resource_attributes['k8s.node.name'] AS node, any_value(coalesce(resource_attributes['k8s.cluster.name'], '')) AS clust"
+},
+{
+"kind": "sql",
+"ms": 20250,
+"error": "",
+"files": 1789,
+"bytes": null,
+"workers": null,
+"rows": 57,
+"what": "WITH k AS (\n  SELECT resource_attributes['k8s.namespace.name'] AS ns, resource_attributes['k8s.pod.name'] AS pod, any_value(coalesce(resourc"
+}
+]
+}
+]
+},
+{
+"route": "/gpus",
+"range": "24h",
+"n": 4,
+"first_ms": 15833,
+"best_ms": 15833,
+"slowest": {
+"kind": "sql",
+"ms": 15826,
+"error": "",
+"files": 1806,
+"bytes": null,
+"workers": null,
+"rows": 16,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+},
+"errors": [],
+"runs": [
+{
+"ms": 15833,
+"queries": [
+{
+"kind": "sql",
+"ms": 3870,
+"error": "",
+"files": 394,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 13176,
+"error": "",
+"files": 1806,
+"bytes": null,
+"workers": null,
+"rows": 254,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+},
+{
+"kind": "sql",
+"ms": 15226,
+"error": "",
+"files": 1806,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+{
+"kind": "sql",
+"ms": 15826,
+"error": "",
+"files": 1806,
+"bytes": null,
+"workers": null,
+"rows": 16,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+}
+]
+},
+{
+"ms": 16619,
+"queries": [
+{
+"kind": "sql",
+"ms": 3549,
+"error": "",
+"files": 394,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT 'gpu' AS kind, service, count(*) AS n FROM metrics WHERE metric_name = 'DCGM_FI_DEV_GPU_UTIL' GROUP BY 2\nUNION ALL SELECT 'k8s', serv"
+},
+{
+"kind": "sql",
+"ms": 12994,
+"error": "",
+"files": 1806,
+"bytes": null,
+"workers": null,
+"rows": 254,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+},
+{
+"kind": "sql",
+"ms": 15184,
+"error": "",
+"files": 1806,
+"bytes": null,
+"workers": null,
+"rows": 3,
+"what": "SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu, any_value("
+},
+{
+"kind": "sql",
+"ms": 16613,
+"error": "",
+"files": 1806,
+"bytes": null,
+"workers": null,
+"rows": 16,
+"what": "WITH b AS (SELECT coalesce(attributes['UUID'], coalesce(attributes['hostname'], attributes['Hostname']) || '/' || attributes['gpu']) AS gpu,"
+}
+]
+}
+]
+},
+{
+"route": "/dashboards/builtin-services",
+"range": "24h",
+"n": 15,
+"first_ms": 6139,
+"best_ms": 5182,
+"slowest": {
+"kind": "promql",
+"ms": 4149,
+"error": "",
+"files": null,
+"bytes": 174536962,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[900s])) or 0 * sum by (service_name) (rate(leasyd.s"
+},
+"errors": [],
+"runs": [
+{
+"ms": 6139,
+"queries": [
+{
+"kind": "traces",
+"ms": 999,
+"error": "",
+"files": 1404,
+"bytes": 48565946,
+"workers": 23,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 2951,
+"error": "",
+"files": 1227,
+"bytes": 23359340,
+"workers": 20,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 2655,
+"error": "",
+"files": 1806,
+"bytes": 23999527,
+"workers": 29,
+"rows": 17,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "promql",
+"ms": 1112,
+"error": "",
+"files": null,
+"bytes": 60697391,
+"workers": null,
+"rows": null,
+"what": "sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[900s]))"
+},
+{
+"kind": "promql",
+"ms": 4149,
+"error": "",
+"files": null,
+"bytes": 174536962,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[900s])) or 0 * sum by (service_name) (rate(leasyd.s"
+},
+{
+"kind": "promql",
+"ms": 1315,
+"error": "",
+"files": null,
+"bytes": 60697391,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum by (service_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1146,
+"error": "",
+"files": null,
+"bytes": 63436314,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.5, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1036,
+"error": "",
+"files": null,
+"bytes": 63257890,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1181,
+"error": "",
+"files": null,
+"bytes": 63270025,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.99, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1293,
+"error": "",
+"files": null,
+"bytes": 63399583,
+"workers": null,
+"rows": null,
+"what": "topk(5, histogram_quantile(0.95, sum by (span_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s]))))"
+},
+{
+"kind": "promql",
+"ms": 1319,
+"error": "",
+"files": null,
+"bytes": 32704685,
+"workers": null,
+"rows": null,
+"what": "sum by (severity_range) (increase(leasyd.logs{service_name=~\".*\"}[900s]))"
+},
+{
+"kind": "promql",
+"ms": 1210,
+"error": "",
+"files": null,
+"bytes": 55735162,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[86400s]))"
+},
+{
+"kind": "promql",
+"ms": 3479,
+"error": "",
+"files": null,
+"bytes": 154235968,
+"workers": null,
+"rows": null,
+"what": "100 * (sum(rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[86400s])) or 0 * sum(rate(leasyd.spans{service_name=~\".*\"}[86400s]))) "
+},
+{
+"kind": "promql",
+"ms": 2193,
+"error": "",
+"files": null,
+"bytes": 55689603,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[86400s])))"
+},
+{
+"kind": "promql",
+"ms": 862,
+"error": "",
+"files": null,
+"bytes": 26213894,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.logs{service_name=~\".*\", severity_range=\"ERROR_FATAL\"}[86400s]))"
+}
+]
+},
+{
+"ms": 5182,
+"queries": [
+{
+"kind": "traces",
+"ms": 1008,
+"error": "",
+"files": 1404,
+"bytes": 65228022,
+"workers": 23,
+"rows": 13,
+"what": "{\"signal\": \"traces\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "logs",
+"ms": 1029,
+"error": "",
+"files": 1227,
+"bytes": 24401808,
+"workers": 20,
+"rows": 12,
+"what": "{\"signal\": \"logs\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "metrics",
+"ms": 959,
+"error": "",
+"files": 1806,
+"bytes": 23999527,
+"workers": 29,
+"rows": 17,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"service\"]}"
+},
+{
+"kind": "promql",
+"ms": 1060,
+"error": "",
+"files": null,
+"bytes": 64239848,
+"workers": null,
+"rows": null,
+"what": "sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[900s]))"
+},
+{
+"kind": "promql",
+"ms": 3185,
+"error": "",
+"files": null,
+"bytes": 179068642,
+"workers": null,
+"rows": null,
+"what": "100 * (sum by (service_name) (rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[900s])) or 0 * sum by (service_name) (rate(leasyd.s"
+},
+{
+"kind": "promql",
+"ms": 1031,
+"error": "",
+"files": null,
+"bytes": 65061405,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum by (service_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1133,
+"error": "",
+"files": null,
+"bytes": 67753958,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.5, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1275,
+"error": "",
+"files": null,
+"bytes": 69351933,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1248,
+"error": "",
+"files": null,
+"bytes": 66886525,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.99, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s])))"
+},
+{
+"kind": "promql",
+"ms": 1169,
+"error": "",
+"files": null,
+"bytes": 68602286,
+"workers": null,
+"rows": null,
+"what": "topk(5, histogram_quantile(0.95, sum by (span_name) (rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[900s]))))"
+},
+{
+"kind": "promql",
+"ms": 975,
+"error": "",
+"files": null,
+"bytes": 34917646,
+"workers": null,
+"rows": null,
+"what": "sum by (severity_range) (increase(leasyd.logs{service_name=~\".*\"}[900s]))"
+},
+{
+"kind": "promql",
+"ms": 1151,
+"error": "",
+"files": null,
+"bytes": 67496980,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.spans{service_name=~\".*\", span_kind=\"SERVER\"}[86400s]))"
+},
+{
+"kind": "promql",
+"ms": 3083,
+"error": "",
+"files": null,
+"bytes": 169460476,
+"workers": null,
+"rows": null,
+"what": "100 * (sum(rate(leasyd.spans{service_name=~\".*\", status_code=\"ERROR\"}[86400s])) or 0 * sum(rate(leasyd.spans{service_name=~\".*\"}[86400s]))) "
+},
+{
+"kind": "promql",
+"ms": 1320,
+"error": "",
+"files": null,
+"bytes": 60855699,
+"workers": null,
+"rows": null,
+"what": "histogram_quantile(0.95, sum(rate(leasyd.span.duration{service_name=~\".*\", span_kind=\"SERVER\"}[86400s])))"
+},
+{
+"kind": "promql",
+"ms": 976,
+"error": "",
+"files": null,
+"bytes": 24192515,
+"workers": null,
+"rows": null,
+"what": "sum(rate(leasyd.logs{service_name=~\".*\", severity_range=\"ERROR_FATAL\"}[86400s]))"
+}
+]
+}
+]
+},
+{
+"route": "/alerts",
+"range": "24h",
+"n": 0,
+"first_ms": 0,
+"best_ms": 0,
+"slowest": null,
+"errors": [],
+"runs": [
+{
+"ms": 0,
+"queries": []
+},
+{
+"ms": 0,
+"queries": []
+}
+]
+},
+{
+"route": "/synthetics",
+"range": "24h",
+"n": 3,
+"first_ms": 89,
+"best_ms": 75,
+"slowest": {
+"kind": "metrics",
+"ms": 86,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+"errors": [],
+"runs": [
+{
+"ms": 89,
+"queries": [
+{
+"kind": "metrics",
+"ms": 69,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\""
+},
+{
+"kind": "metrics",
+"ms": 86,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+{
+"kind": "traces",
+"ms": 63,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 500}}"
+}
+]
+},
+{
+"ms": 75,
+"queries": [
+{
+"kind": "metrics",
+"ms": 74,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\""
+},
+{
+"kind": "metrics",
+"ms": 67,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"group_by\": [\"attributes.check.id\"], \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration"
+},
+{
+"kind": "traces",
+"ms": 70,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"traces\", \"where\": [{\"field\": \"attributes.check.result\", \"op\": \"exists\"}], \"search\": {\"limit\": 500}}"
+}
+]
+}
+]
+},
+{
+"route": "/slos",
+"range": "24h",
+"n": 6,
+"first_ms": 103,
+"best_ms": 93,
+"slowest": {
+"kind": "metrics",
+"ms": 96,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+"errors": [],
+"runs": [
+{
+"ms": 103,
+"queries": [
+{
+"kind": "metrics",
+"ms": 86,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 59,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 67,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 71,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 96,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 93,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+}
+]
+},
+{
+"ms": 93,
+"queries": [
+{
+"kind": "metrics",
+"ms": 92,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 76,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.success\"}, {\"field\": \"attributes.check.id\", \""
+},
+{
+"kind": "metrics",
+"ms": 88,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 68,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 76,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+},
+{
+"kind": "metrics",
+"ms": 60,
+"error": "",
+"files": 0,
+"bytes": 0,
+"workers": 1,
+"rows": 0,
+"what": "{\"signal\": \"metrics\", \"where\": [{\"field\": \"metric_name\", \"op\": \"=\", \"value\": \"synthetics.check.duration\"}, {\"field\": \"attributes.check.id\", "
+}
+]
+}
+]
+}
+]
+}

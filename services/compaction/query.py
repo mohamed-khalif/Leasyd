@@ -407,9 +407,71 @@ def _naive(ts):
     return lookup._parse(ts).strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
+# ------------------------------------------------------------- timing
+
+# Per-question timing (docs/perf-plan.md, Phase 0): every worker reports how long it ran, its memory
+# and whether its container was new; the coordinator logs one {"question": ...} line per question
+# (infra/bench/questions.insights aggregates them) and hands it back to direct calls asking "timing".
+MEMORY_MB = int(os.environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048"))
+_warm = set()                                                  # roles this container has run as
+_question = contextvars.ContextVar("question", default=None)   # the engine runs of the current question
+
+
+def _path_of(q):
+    return "promql" if "promql" in q else "sql" if "sql" in q else "json"
+
+
+def _was_cold(role):
+    """True the first time this container runs as role (its Lambda init happened for this call)."""
+    cold = role not in _warm
+    _warm.add(role)
+    return cold
+
+
+def _noted(stats, partials):
+    """Record one engine run (run / run_sql) of the current question, with its workers' timings."""
+    runs = _question.get()
+    if runs is not None:
+        runs.append({**stats, "workers_run": [p["stats"]["lambda"] for p in partials
+                                              if isinstance(p.get("stats", {}).get("lambda"), dict)]})
+
+
+def _observed(path, tenant, fn):
+    """fn() -> (its answer, the timing of the question it answered), and the timing logged."""
+    t0, cold, runs = time.perf_counter(), _was_cold("coordinator"), []
+    token = _question.set(runs)
+    try:
+        out = fn()
+    finally:
+        _question.reset(token)
+        ms = round((time.perf_counter() - t0) * 1000)
+        ws = [w for r in runs for w in r["workers_run"]]
+        timing = {"path": path, "tenant": tenant, "ms": ms, "engine_runs": len(runs), "coordinator_cold": cold,
+                  "files": sum(r.get("files", 0) for r in runs), "bytes": sum(r.get("bytes", 0) for r in runs),
+                  "workers": len(ws), "workers_cold": sum(1 for w in ws if w["cold"]),
+                  "worker_max_ms": max((w["ms"] for w in ws), default=0),
+                  "worker_avg_ms": round(sum(w["ms"] for w in ws) / len(ws)) if ws else 0,
+                  "lookup_ms": sum(r.get("lookup_ms", 0) for r in runs),
+                  "scan_ms": sum(r.get("scan_ms", 0) for r in runs), "merge_ms": sum(r.get("merge_ms", 0) for r in runs),
+                  # Lambda GB-seconds: the workers' plus this coordinator's own
+                  "gb_s": round((sum(w["ms"] * w["mb"] for w in ws) + ms * MEMORY_MB) / 1024 / 1000, 3),
+                  "cache": "none"}
+        print(json.dumps({"question": timing}), flush=True)
+    return out, timing
+
+
 # -------------------------------------------------------------- worker
 
 def worker(event, context):
+    t0, cold = time.perf_counter(), _was_cold("worker")
+    out = _worker(event)
+    if isinstance(out, dict) and "job" not in event:
+        out.setdefault("stats", {})["lambda"] = {"ms": round((time.perf_counter() - t0) * 1000), "cold": cold,
+                                                 "mb": MEMORY_MB}
+    return out
+
+
+def _worker(event):
     try:
         if "job" in event:
             return run_job(event)
@@ -582,7 +644,9 @@ def run_sql(tenant, sql, start, end, invoke_worker=None, services=None):
     out = (invoke_worker or _invoke_worker)(event)
     if out.get("cancelled"):
         raise Cancelled()
-    out["stats"] = {**out.get("stats", {}), "files": sum(len(v) for v in files.values()), "total_ms": round((time.perf_counter() - t0) * 1000)}
+    out["stats"] = {**out.get("stats", {}), "files": sum(len(v) for v in files.values()), "bytes": size,
+                    "total_ms": round((time.perf_counter() - t0) * 1000)}
+    _noted(out["stats"], [out])
     return out
 
 
@@ -822,11 +886,15 @@ def handler(event, context):
     without it (alert evaluation) the query is neither charged nor refused."""
     if "answer_job" in event:
         return answer_job(event["answer_job"])
-    bill = event.get("bill")
+    bill, want_timing = event.get("bill"), event.get("timing")
     if bill and (refused := over_daily(layout.check_tenant(event["tenant"]))):
         return {"error": refused, **({"retryable": True} if refused == limits.UNAVAILABLE else {})}
     try:
-        return _direct({k: v for k, v in event.items() if k != "bill"})
+        q = {k: v for k, v in event.items() if k not in ("bill", "timing")}
+        out, timing = _observed(_path_of(q), event.get("tenant"), lambda: _direct(q))
+        if want_timing and isinstance(out, dict):   # the benchmark (infra/bench/bench.py)
+            out["timing"] = timing
+        return out
     finally:
         if bill:
             charge_units(event["tenant"])
@@ -991,7 +1059,7 @@ def answer_job(job):
     in_time = (lambda: not started or time.time() < started + JOB_TIMEOUT_S)
     context = _job.set((_cancel_key(tenant, job["id"]), job.get("store_after", 0)))   # reset below: Lambda reuses the thread
     try:
-        out = answer(tenant, job["query"])
+        out, _ = _observed(_path_of(job["query"]), tenant, lambda: answer(tenant, job["query"]))
     except Cancelled:
         out = CANCELLED_ANSWER
     except Unavailable as e:
@@ -1510,6 +1578,7 @@ def run(q, invoke_worker=None):
         "slowest_worker_query_ms": max((p.get("stats", {}).get("query_ms", 0) for p in partials), default=0),
         "lookup": found["stats"],
     }
+    _noted(result["stats"], partials)
     return result
 
 

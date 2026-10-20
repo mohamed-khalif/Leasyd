@@ -1,0 +1,22 @@
+# CloudWatch Logs Insights queries over the coordinator's per-question timing lines
+# ({"question": {...}}, services/compaction/query.py _observed). Log group: /aws/lambda/obs-query.
+
+# 1. Per path: questions, time, files, workers, cold starts, Lambda GB-seconds
+filter ispresent(question.path)
+| stats count(*) as questions, avg(question.ms) as avg_ms, pct(question.ms, 95) as p95_ms,
+        avg(question.files) as avg_files, max(question.workers) as max_workers,
+        sum(question.coordinator_cold) as coordinator_cold, sum(question.workers_cold) as workers_cold,
+        sum(question.gb_s) as gb_s
+  by question.path
+
+# 2. One account's slowest questions
+filter question.tenant = "leasyd-demo"
+| sort question.ms desc
+| fields @timestamp, question.path, question.ms, question.files, question.workers, question.worker_max_ms,
+         question.lookup_ms, question.coordinator_cold, question.workers_cold, question.cache
+| limit 50
+
+# 3. Where a first load's time goes: questions with any cold container vs none
+filter ispresent(question.path)
+| fields (question.coordinator_cold or question.workers_cold > 0) as any_cold
+| stats count(*) as questions, avg(question.ms) as avg_ms, avg(question.worker_max_ms) as avg_worker_max_ms by any_cold, question.path
