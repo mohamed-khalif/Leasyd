@@ -30,6 +30,7 @@ const GetStarted = splitPage(() => import("./pages/GetStarted").then((m) => m.Ge
 const DropRules = splitPage(() => import("./pages/DropRules").then((m) => m.DropRules));
 const Logs = splitPage(() => import("./pages/Logs").then((m) => m.Logs));
 const Traces = splitPage(() => import("./pages/Traces").then((m) => m.Traces));
+const Apm = splitPage(() => import("./pages/Apm").then((m) => m.Apm));
 const ServiceMap = splitPage(() => import("./pages/ServiceMap").then((m) => m.ServiceMap));
 const Lambda = splitPage(() => import("./pages/Lambda").then((m) => m.Lambda));
 const Agents = splitPage(() => import("./pages/Agents").then((m) => m.Agents));
@@ -45,7 +46,7 @@ const Sql = splitPage(() => import("./pages/Sql").then((m) => m.Sql));
 const Dashboards = splitPage(() => import("./pages/Dashboards").then((m) => m.Dashboards));
 
 /** The page each path opens, in the same order as App's routes (the last is Home). */
-const ROUTE_PAGES: [string, Page<never>][] = [["/traces", Traces], ["/services", ServiceMap], ["/web", Web], ["/gpus", Gpus],
+const ROUTE_PAGES: [string, Page<never>][] = [["/traces", Traces], ["/apm", Apm], ["/services", ServiceMap], ["/web", Web], ["/gpus", Gpus],
   ["/kubernetes", Kubernetes], ["/lambda", Lambda], ["/agents", Agents], ["/synthetics", Synthetics], ["/slos", Slos], ["/alerts", Alerts],
   ["/dashboards", Dashboards], ["/query", QueryBuilder], ["/sql", Sql], ["/metrics", Metrics], ["/logs", Logs], ["/ai", Ai],
   ["/start", GetStarted], ["/drop-rules", DropRules], ["/settings", Settings], ["/usage", Settings]];
@@ -136,6 +137,11 @@ export function App() {
     const id = path.split("/")[2];
     page = <Traces ctx={ctx} traceId={id} />;
     crumb = ["Traces", id ? `${id.slice(0, 16)}…` : "Explorer"];
+  } else if (path.startsWith("/apm")) {
+    const svc = path.split("/")[2];
+    const name = svc ? decoded(svc) : undefined;
+    page = <Apm key={svc ?? ""} ctx={ctx} service={name} />;
+    crumb = ["APM", name ?? "Services"];
   } else if (path.startsWith("/services")) {
     page = <ServiceMap ctx={ctx} />;
     crumb = ["Services", "Service map"];

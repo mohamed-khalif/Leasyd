@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { fmtDay } from "./lib/format";
-import { IconClock, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu, IconAgent } from "./icons";
+import { IconClock, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut, IconPulse, IconRefresh, IconSun, IconTarget, IconTraces, IconBell, IconFlask, IconDb, IconGear, IconSpark, IconMap, IconLambda, IconGlobe, IconStart, IconFilter, IconK8s, IconGpu, IconAgent, IconServer } from "./icons";
 import { customRange, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { busyCount, onBusy } from "./limiter";
 import { useAccount } from "./useAccount";
@@ -69,6 +69,7 @@ export function Shell(p: Props) {
         {link("/traces", "Traces", <IconTraces />, p.path.startsWith("/traces"))}
         {link("/metrics", "Metrics", <IconMetrics />, p.path.startsWith("/metrics"))}
         <div className="nav-section">Applications</div>
+        {link("/apm", "APM", <IconServer />, p.path.startsWith("/apm"))}
         {link("/services", "Service Map", <IconMap />, p.path.startsWith("/services"))}
         {link("/web", "Web (real users)", <IconGlobe />, p.path.startsWith("/web"))}
         {link("/agents", "AI agents", <IconAgent />, p.path.startsWith("/agents"))}

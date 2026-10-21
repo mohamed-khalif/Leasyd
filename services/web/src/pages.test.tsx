@@ -9,7 +9,7 @@ import { App } from "./App";
 import { installMockBackend, inFlight, requests } from "./test/mockBackend";
 import { render, settle } from "./test/dom";
 
-const ROUTES = ["/", "/logs", "/traces", "/metrics", "/services", "/web", "/lambda", "/kubernetes", "/gpus",
+const ROUTES = ["/", "/logs", "/traces", "/metrics", "/services", "/apm", "/apm/checkout", "/apm/checkout?tab=dependencies", "/apm/checkout?tab=errors", "/web", "/lambda", "/kubernetes", "/gpus",
   "/dashboards", "/dashboards/builtin-services", "/query", "/sql", "/alerts", "/alerts/rules/new", "/synthetics",
   "/slos", "/ai", "/start", "/drop-rules", "/settings", "/usage", "/agents", "/agents?tab=issues",
   ...["profile", "security", "organization", "team", "usage", "billing", "api-keys", "gpu-prices", "ai-tools"].map((p) => `/settings/${p}`)];

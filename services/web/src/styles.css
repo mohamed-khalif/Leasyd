@@ -877,3 +877,19 @@ td.warn { color: var(--sev-warn); }
 .btn.busy svg { animation: spin 0.9s linear 0.2s infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .btn.busy svg { animation: none; opacity: .5; } }
+
+/* APM (pages/Apm.tsx) */
+.apm { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; }
+.apm .panel { grid-column: auto; min-width: 0; }
+.apm-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.apm-summary > div { display: grid; gap: 2px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.apm-summary b { font-size: 20px; font-weight: 500; }
+.apm-head { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;
+            padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.apm-head > div:first-child { display: grid; gap: 6px; min-width: 0; }
+.apm-title { margin: 0; font-size: 18px; font-weight: 500; display: flex; gap: 10px; align-items: center; overflow-wrap: anywhere; }
+.apm-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; }
+.apm-links { display: flex; gap: 8px; flex-wrap: wrap; }
+.apm-deps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.apm .dtable th .linkbtn { color: inherit; font: inherit; }
+@media (max-width: 800px) { .apm-summary, .apm-deps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

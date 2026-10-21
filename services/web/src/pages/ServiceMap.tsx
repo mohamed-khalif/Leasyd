@@ -6,38 +6,14 @@
 // service-graph metrics, one aggregate query (lib/serviceGraph.ts), merged with the trace view.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtMs, fmtNum, fmtPercent } from "../lib/format";
-import { sqlString as q } from "../lib/sql";
-import { records } from "../api";
 import type { Ctx } from "../App";
 import { Tabs } from "../components/Charts";
 import { Loads } from "../components/Panel";
-import { type Loaded, useQuery, useSql } from "../useQuery";
-import { ebpfGraph, graphQuery, mergeGraphs, operations, operationsQuery, OUTSIDE, serviceSeries, serviceSeriesQuery, WHERE_FIELDS, whereQuery } from "../lib/serviceGraph";
-import { bucketSeconds } from "../time";
-import { useRangeWindow } from "../useNow";
+import { OUTSIDE } from "../lib/serviceGraph";
+import { type Edge, errPct, health, perMin, RUNTIME_DASHBOARDS, type Svc, useServiceDetail, useServices } from "../lib/services";
+import { Tile } from "../components/Tile";
 
-type Node = { service: string; requests: number; errors: number; avg_ms: number; attrs: Record<string, string>; kind: string; ebpf: boolean; sdk: boolean; x: number; y: number };
-type Edge = { source: string; target: string; calls: number; errors: number };
-
-// A span that starts work in its service: a server or consumer span, or a root.
-const ENTRY = "(kind IN (2, 5) OR parent_span_id IS NULL)";
-const ATTRS: [string, string][] = [
-  ["namespace", "service.namespace"], ["version", "service.version"], ["language", "telemetry.sdk.language"],
-  ["runtime", "process.runtime.name"], ["runtime_version", "process.runtime.version"],
-  ["k8s_namespace", "k8s.namespace.name"], ["k8s_deployment", "k8s.deployment.name"], ["k8s_pod", "k8s.pod.name"],
-  ["cloud", "cloud.provider"], ["platform", "cloud.platform"], ["account", "cloud.account.id"], ["region", "cloud.region"], ["zone", "cloud.availability_zone"],
-  ["host", "host.name"],
-];
-// From the per-minute summaries (compact.SUMMARIES svc_1m / edge_1m), not every span.
-const NODES_SQL = `SELECT service, sum(requests) AS requests, sum(errors) AS errors,
-  sum(duration_ns_sum) / nullif(sum(requests), 0) / 1e6 AS avg_ms,
-  ${ATTRS.map(([k]) => `any_value(${k}) AS ${k}`).join(", ")}
-FROM svc_1m GROUP BY service`;
-const EDGES_SQL = `SELECT source, target, sum(calls) AS calls, sum(errors) AS errors FROM edge_1m GROUP BY 1, 2`;
-
-const errPct = (n: { requests: number; errors: number }) => (n.requests ? (n.errors / n.requests) * 100 : 0);
-const health = (pct: number) => (pct >= 5 ? "critical" : pct >= 1 ? "warning" : "ok");
-const perMin = (n: number, minutes: number) => `${fmtNum(n / Math.max(minutes, 1))}/m`;
+type Node = Svc & { x: number; y: number };
 
 /** Columns by call depth (longest path from a service nobody calls), rows ordered by their callers. */
 function layout(nodes: Omit<Node, "x" | "y">[], edges: Edge[]): Node[] {
@@ -71,26 +47,12 @@ const curve = (x1: number, y1: number, x2: number, y2: number) => {
 };
 
 export function ServiceMap({ ctx }: { ctx: Ctx }) {
-  const w = useRangeWindow(ctx);
-  const key = ctx.range.key + ctx.tick;
-  const nq = useSql(NODES_SQL, w, "n" + key), eq = useSql(EDGES_SQL, w, "e" + key), gq = useQuery(graphQuery(w), "g" + key);
+  const svcs = useServices(ctx);
   const [sel, setSel] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const minutes = ctx.range.minutes;
-
-  const { nodes, edges } = useMemo(() => {
-    if (!nq.data || !eq.data) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const sdkEdges = records(eq.data).map((r) => ({ source: String(r.source), target: String(r.target), calls: Number(r.calls) || 0, errors: Number(r.errors) || 0 }));
-    const sdkNodes = records(nq.data).map((r) => ({
-      service: String(r.service), requests: Number(r.requests) || 0, errors: Number(r.errors) || 0, avg_ms: Number(r.avg_ms) || 0,
-      attrs: Object.fromEntries(ATTRS.map(([k]) => [k, r[k] == null ? "" : String(r[k])])),
-    }));
-    // the eBPF view adds what the traces don't show; its query failing leaves the trace view as it was
-    const ebpf = ebpfGraph(gq.data ? records(gq.data) : []);
-    const merged = mergeGraphs({ nodes: sdkNodes, edges: sdkEdges }, ebpf,
-      (service) => ({ service, requests: 0, errors: 0, avg_ms: 0, attrs: Object.fromEntries(ATTRS.map(([k]) => [k, ""])) }));
-    return { nodes: layout(merged.nodes, merged.edges), edges: merged.edges };
-  }, [nq.data, eq.data, gq.data]);
+  const nodes = useMemo(() => layout(svcs.nodes, svcs.edges), [svcs.nodes, svcs.edges]);
+  const edges = svcs.edges;
   const selected = nodes.find((n) => n.service === sel) ?? null;
 
   return (
@@ -100,7 +62,7 @@ export function ServiceMap({ ctx }: { ctx: Ctx }) {
           <input className="input grow" placeholder="Search services…" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Search services" />
           <span className="faint">{nodes.length ? `${nodes.length} services · ${edges.length} connections · requests a minute` : ""}</span>
         </div>
-        <Loads q={both(both(nq, eq), { ...gq, error: null })} empty={!nodes.length} height={520}>
+        <Loads q={svcs.loaded} empty={!nodes.length} height={520}>
           {() => <Graph nodes={nodes} edges={edges} minutes={minutes} selected={sel} filter={filter.trim().toLowerCase()} onPick={setSel} />}
         </Loads>
       </div>
@@ -187,33 +149,9 @@ function Dots({ d, n, err }: { d: string; n: number; err: number }) {
   );
 }
 
-// telemetry.sdk.language -> its runtime dashboard
-const RUNTIME_DASHBOARDS: Record<string, [string, string]> = { java: ["builtin-jvm", "JVM dashboard"], nodejs: ["builtin-nodejs", "Node.js dashboard"],
-                                                              python: ["builtin-python", "Python dashboard"], ruby: ["builtin-ruby", "Ruby dashboard"] };
-
 function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: Node; minutes: number; edges: Edge[]; onClose: () => void }) {
   const [tab, setTab] = useState<"overview" | "operations">("overview");
-  const w = useRangeWindow(ctx);
-  const b = bucketSeconds(ctx.range);
-  const key = node.service + ctx.range.key + ctx.tick;
-  // A service the eBPF agent sees: its exact counts from the agent's metrics (its spans are sampled);
-  // else from the SDK's spans.
-  const ebpf = node.ebpf && !node.sdk;   // both: the SDK's spans are complete
-  const series = useSql(ebpf ? null : `SELECT time_bucket(INTERVAL '${b} seconds', ts) AS t, count(*) AS n,
-      count(*) FILTER (WHERE status_code = 2) AS e, avg(duration_ns) / 1e6 AS ms
-    FROM spans WHERE service = ${q(node.service)} AND ${ENTRY} GROUP BY 1 ORDER BY 1`, w, "s" + key);
-  const mseries = useQuery(ebpf ? serviceSeriesQuery(w, node.service, b) : null, "m" + key);
-  const ops = useSql(tab === "operations" && !ebpf ? `SELECT name, count(*) AS n, count(*) FILTER (WHERE status_code = 2) AS e,
-      avg(duration_ns) / 1e6 AS avg_ms, quantile_cont(duration_ns, 0.95) / 1e6 AS p95_ms
-    FROM spans WHERE service = ${q(node.service)} AND ${ENTRY} GROUP BY 1 ORDER BY 2 DESC LIMIT 50` : null, w, "o" + key + tab);
-  const mops = useQuery(tab === "operations" && ebpf ? operationsQuery(w, node.service) : null, "mo" + key + tab);
-  const where = useQuery(ebpf && !node.attrs.k8s_namespace && !node.attrs.host ? whereQuery(w, node.service) : null, "w" + key);
-  const rows = ebpf ? serviceSeries(mseries.data ? records(mseries.data) : [], node.service) : series.data ? records(series.data) : [];
-  const opRows = ebpf ? operations(mops.data ? records(mops.data) : [])
-    : ops.data ? records(ops.data).map((r) => ({ name: String(r.name), n: Number(r.n), e: Number(r.e), avg_ms: Number(r.avg_ms), p95_ms: Number(r.p95_ms) })) : [];
-  const found = where.data ? records(where.data)[0] ?? {} : {};
-  const a: Record<string, string> = { ...node.attrs };
-  for (const [k, f] of WHERE_FIELDS) if (!a[k] && found[f] != null) a[k] = String(found[f]);
+  const { ebpf, points: rows, opRows, opsQ, attrs: a } = useServiceDetail(ctx, node, tab === "operations");
   const pct = errPct(node), h = health(pct);
   const calls = edges.filter((e) => e.source === node.service).map((e) => e.target);
   const callers = edges.filter((e) => e.target === node.service).map((e) => e.source);
@@ -270,7 +208,7 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
         </div>
       ) : (
         <div className="svc-panel-body">
-          <Loads q={ebpf ? mops : ops} empty={!opRows.length} height={160}>
+          <Loads q={opsQ} empty={!opRows.length} height={160}>
             {() => (
               <table className="dtable">
                 <thead><tr><th>Operation</th><th className="num">Requests</th><th className="num">Errors</th><th className="num">Avg</th>{!ebpf && <th className="num">p95</th>}</tr></thead>
@@ -280,7 +218,7 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
                     <td className="num">{fmtNum(r.n)}</td>
                     <td className={`num${r.e ? " bad" : ""}`}>{fmtNum(r.e)}</td>
                     <td className="num">{fmtMs(r.avg_ms * 1e6)}</td>
-                    {!ebpf && <td className="num">{fmtMs(("p95_ms" in r ? Number(r.p95_ms) : 0) * 1e6)}</td>}
+                    {!ebpf && <td className="num">{fmtMs((r.p95_ms ?? 0) * 1e6)}</td>}
                   </tr>
                 ))}</tbody>
               </table>
@@ -290,28 +228,4 @@ function ServicePanel({ ctx, node, minutes, edges, onClose }: { ctx: Ctx; node: 
       )}
     </aside>
   );
-}
-
-function Tile({ label, value, sub, pts, bars, bad }: { label: string; value: string; sub: string; pts: number[]; bars?: boolean; bad?: boolean }) {
-  const max = Math.max(1e-9, ...pts), W = 120, H = 34;
-  const x = (i: number) => (pts.length > 1 ? (i / (pts.length - 1)) * W : W / 2);
-  const y = (v: number) => H - (v / max) * (H - 2);
-  return (
-    <div className="svc-tile">
-      <span className="faint">{label}</span>
-      <b className={bad ? "bad" : undefined}>{value}</b>
-      <span className="faint">{sub}</span>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
-        {pts.length > 0 && (bars
-          ? pts.map((v, i) => <rect key={i} className="spark-bar" x={(i * W) / pts.length} width={Math.max(1, W / pts.length - 1.5)} y={y(v)} height={H - y(v)} />)
-          : <polyline className={`spark-line${bad ? " bad" : ""}`} points={pts.map((v, i) => `${x(i)},${y(v)}`).join(" ")} />)}
-      </svg>
-    </div>
-  );
-}
-
-/** Two results as one for <Loads>: the first error, data once both have come (cut if either was). */
-function both(a: Loaded, b: Loaded): Loaded {
-  return { error: a.error || b.error, loading: a.loading || b.loading,
-           data: a.data && b.data ? { ...b.data, truncated: a.data.truncated || b.data.truncated } : null };
 }
