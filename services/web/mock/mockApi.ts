@@ -628,6 +628,8 @@ function traceSpans(trace: string, r: () => number, t: number) {
   return out;
 }
 
+const REPORTS = new Map<string, unknown>();   // shared reports, by id
+
 export function mockApi(): Plugin {
   return {
     name: "leasyd-mock-api",
@@ -637,6 +639,13 @@ export function mockApi(): Plugin {
           res.setHeader("Content-Type", "application/json");
           res.statusCode = 202;
           return setTimeout(() => res.end(JSON.stringify({ status: "accepted", message: "Check your inbox" })), 400);
+        }
+        if (req.url?.startsWith("/v1/reports/") && req.method === "GET") {   // a shared report, no sign-in
+          res.setHeader("Content-Type", "application/json");
+          const got = REPORTS.get(decodeURIComponent(req.url.split("/")[3]));
+          res.statusCode = got ? 200 : 404;
+          return res.end(JSON.stringify(got ? { report: got, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString() }
+                                            : { error: "this report link doesn't exist or has expired" }));
         }
         if (req.url === "/v1/demo/session" && req.method === "POST") {   // the live demo: a read-only session
           res.setHeader("Content-Type", "application/json");
@@ -709,6 +718,10 @@ export function mockApi(): Plugin {
               const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
               out = { days: [0, 1].map((n) => ({ day: day(n), records: 1_310_000 - n * 90_000, bytes: 642e6 - n * 4e7,
                 in_logs: 610_000, dropped_logs: 84_000, in_traces: 640_000, dropped_traces: 0, in_metrics: 60_000, dropped_metrics: 0 })) };
+            }
+            else if (what === "reports" && req.method === "POST") {   // a shared report: kept here for #/r/<id>
+              const rid = hex(Math.random, 24); REPORTS.set(rid, body.report); status = 201;
+              out = { id: rid, expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString() };
             }
             else if (what === "billing") {   // no Stripe here: pretend the checkout was completed
               Object.assign(ACCOUNT, { plan: "standard", trial_ends_at: null, daily_cap_bytes: null });

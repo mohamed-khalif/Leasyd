@@ -287,3 +287,28 @@ def test_keys_can_have_names(acc, adm):  # noqa: F811
     for bad in ["x" * 61, "line\nbreak", 5]:
         status, out = app(acc, "bo@acme.com", "acme", "POST", "keys", {"scope": "ingest", "name": bad})
         assert status == 400 and "name" in out["error"], (bad, status, out)
+
+
+def test_shared_report_is_a_snapshot_behind_an_expiring_link(acc, adm, monkeypatch):  # noqa: F811
+    """A member shares a report: the public link returns exactly that snapshot (no sign-in), nothing
+    for a made-up id, and nothing once it expires. A read-only viewer can't share."""
+    call(adm, "create", tenant="acme")
+    call(adm, "invite-user", tenant="acme", email="ana@acme.com", role="member", send_email=False)
+    call(adm, "invite-user", tenant="acme", email="view@acme.com", role="viewer", send_email=False)
+
+    def public(rid):
+        out = acc.handler({"resource": "/v1/reports/{id}", "httpMethod": "GET", "pathParameters": {"id": rid}}, None)
+        return out["statusCode"], json.loads(out["body"])
+    report = {"version": 1, "company": "Acme", "fixes": ["checkout: 3% of requests failing"]}
+    status, made = app(acc, "ana@acme.com", "acme", "POST", "reports", {"report": report})
+    assert status == 201 and len(made["id"]) >= 20
+    status, got = public(made["id"])
+    assert status == 200 and got["report"] == report and got["expires_at"] == made["expires_at"]
+    assert public("x" * 24)[0] == 404 and public("../tenant#acme")[0] == 404
+    assert app(acc, "view@acme.com", "acme", "POST", "reports", {"report": report})[0] == 403
+    assert app(acc, "ana@acme.com", "acme", "POST", "reports", {"report": "no"})[0] == 400
+    big = {"x": "y" * (acc.REPORT_MAX_BYTES + 1)}
+    assert app(acc, "ana@acme.com", "acme", "POST", "reports", {"report": big})[0] == 400
+    later = acc._now() + acc.timedelta(days=acc.REPORT_DAYS + 1)
+    monkeypatch.setattr(acc, "_now", lambda: later)
+    assert public(made["id"])[0] == 404

@@ -606,6 +606,28 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
         TimeoutInMillis: 29000
+  # GET /v1/reports/{id} is public too: a shared report's snapshot (obs-account-api); the id is the secret.
+  ReportsResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: reports }
+  ReportResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref ReportsResource, PathPart: "{id}" }
+  ReportMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ReportResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-account-api/invocations"
+        TimeoutInMillis: 29000
   # POST /v1/stripe/webhook is public too: Stripe's billing events, each signed (billing.py verifies it).
   StripeResource:
     Type: AWS::ApiGateway::Resource
@@ -1119,7 +1141,7 @@ Resources:
       ResponseTemplates:
         application/json: '{"message": "Leasyd is temporarily unavailable; retry shortly"}'
 
-  DeploymentV23:
+  DeploymentV24:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, CloudWatchLogsMethod, QueryMethod, QueryJobMethod, QueryJobCancelMethod, McpMethod, RumMethod, InvalidApiKeyResponse,
                 Default5xxResponse, IntegrationFailureResponse]
@@ -1127,13 +1149,13 @@ Resources:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppQueryJobCancelMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod}, ${DemoSessionMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppQueryJobCancelMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod}, ${DemoSessionMethod}, ${ReportMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV23
+      DeploymentId: !Ref DeploymentV24
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"
@@ -1153,6 +1175,11 @@ Resources:
           MetricsEnabled: true
           ThrottlingRateLimit: 500
           ThrottlingBurstLimit: 1000
+        - ResourcePath: "/~1v1~1reports~1{id}"
+          HttpMethod: GET
+          MetricsEnabled: true
+          ThrottlingRateLimit: 20
+          ThrottlingBurstLimit: 50
         - ResourcePath: "/~1v1~1demo~1session"
           HttpMethod: POST
           MetricsEnabled: true

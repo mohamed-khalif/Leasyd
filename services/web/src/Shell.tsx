@@ -94,6 +94,7 @@ export function Shell(p: Props) {
         {link("/gpus", "GPUs", <IconGpu />, p.path.startsWith("/gpus"))}
         <div className="nav-section">Analyze</div>
         {link("/dashboards", "Dashboards", <IconDash />, p.path.startsWith("/dashboards"))}
+        {link("/report", "Report", <IconDash />, p.path.startsWith("/report"))}
         {link("/query", "Query Builder", <IconFlask />, p.path.startsWith("/query"))}
         {link("/sql", "SQL", <IconDb />, p.path.startsWith("/sql"))}
         <div className="nav-section">Alerting & uptime</div>

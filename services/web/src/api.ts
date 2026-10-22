@@ -4,6 +4,7 @@ import { idToken } from "./auth";
 import { limited } from "./limiter";
 import { getConfig } from "./config";
 import type { GpuPrice } from "./infra/model";
+import type { Report } from "./lib/report";
 
 export type Signal = "logs" | "traces" | "metrics";
 export type Where = { field: string; op: string; value?: unknown };
@@ -123,6 +124,18 @@ export async function demoSession(): Promise<{ id_token: string; expires_in: num
   const res = await fetch(getConfig().apiBase + "/v1/demo/session", { method: "POST" });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body.id_token) throw new Error(body.error || "The Playground isn't available right now. Please try again later.");
+  return body;
+}
+
+/** Shares a report snapshot behind a link that works 30 days (members and owners). */
+export const shareReport = (report: Report) =>
+  call<{ id: string; expires_at: string }>("/v1/app/account/reports", { method: "POST", body: JSON.stringify({ report }) });
+
+/** A shared report (public: no sign-in), by its link's id. */
+export async function sharedReport(id: string): Promise<{ report: Report; created_at: string; expires_at: string }> {
+  const res = await fetch(getConfig().apiBase + "/v1/reports/" + encodeURIComponent(id));
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.report) throw new Error(body.error || "This report couldn't be loaded. Please try again later.");
   return body;
 }
 

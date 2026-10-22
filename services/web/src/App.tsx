@@ -30,6 +30,8 @@ const GetStarted = splitPage(() => import("./pages/GetStarted").then((m) => m.Ge
 const DropRules = splitPage(() => import("./pages/DropRules").then((m) => m.DropRules));
 const Logs = splitPage(() => import("./pages/Logs").then((m) => m.Logs));
 const Traces = splitPage(() => import("./pages/Traces").then((m) => m.Traces));
+const Report = splitPage(() => import("./pages/Report").then((m) => m.Report));
+const SharedReport = splitPage(() => import("./pages/Report").then((m) => m.SharedReport));
 const Apm = splitPage(() => import("./pages/Apm").then((m) => m.Apm));
 const ServiceMap = splitPage(() => import("./pages/ServiceMap").then((m) => m.ServiceMap));
 const Lambda = splitPage(() => import("./pages/Lambda").then((m) => m.Lambda));
@@ -46,7 +48,7 @@ const Sql = splitPage(() => import("./pages/Sql").then((m) => m.Sql));
 const Dashboards = splitPage(() => import("./pages/Dashboards").then((m) => m.Dashboards));
 
 /** The page each path opens, in the same order as App's routes (the last is Home). */
-const ROUTE_PAGES: [string, Page<never>][] = [["/traces", Traces], ["/apm", Apm], ["/services", ServiceMap], ["/web", Web], ["/gpus", Gpus],
+const ROUTE_PAGES: [string, Page<never>][] = [["/traces", Traces], ["/apm", Apm], ["/report", Report], ["/r/", SharedReport], ["/services", ServiceMap], ["/web", Web], ["/gpus", Gpus],
   ["/kubernetes", Kubernetes], ["/lambda", Lambda], ["/agents", Agents], ["/synthetics", Synthetics], ["/slos", Slos], ["/alerts", Alerts],
   ["/dashboards", Dashboards], ["/query", QueryBuilder], ["/sql", Sql], ["/metrics", Metrics], ["/logs", Logs], ["/ai", Ai],
   ["/start", GetStarted], ["/drop-rules", DropRules], ["/settings", Settings], ["/usage", Settings]];
@@ -133,6 +135,8 @@ export function App() {
 
   const ctx: Ctx = useMemo(() => ({ range, tick, now, go }), [range, tick, now, go]);   // the same object until one changes
 
+  // #/r/<id>: a shared report, for anyone with the link (no sign-in)
+  if (hash.startsWith("/r/")) return <SharedReport id={hash.split("?")[0].slice(3)} />;
   if (meError) return (
     <div className="state error" style={{ height: "100%" }}>
       Couldn't reach Leasyd: {meError} <button className="btn small" onClick={() => { setUser(undefined); loadUser(); }}>Retry</button>
@@ -147,6 +151,9 @@ export function App() {
     const id = path.split("/")[2];
     page = <Traces ctx={ctx} traceId={id} />;
     crumb = ["Traces", id ? `${id.slice(0, 16)}…` : "Explorer"];
+  } else if (path.startsWith("/report")) {
+    page = <Report ctx={ctx} />;
+    crumb = ["Analyze", "Report"];
   } else if (path.startsWith("/apm")) {
     const svc = path.split("/")[2];
     const name = svc ? decoded(svc) : undefined;

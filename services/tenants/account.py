@@ -55,6 +55,9 @@ DEMO_SESSIONS_PER_ADDRESS = int(os.environ.get("DEMO_SESSIONS_PER_ADDRESS", "30"
 DEMO_SESSIONS_PER_DAY = int(os.environ.get("DEMO_SESSIONS_PER_DAY", "3000"))
 VIEWER_REFUSED = "you have read-only access to this account"
 MAX_KEYS, MAX_USERS = 20, 50
+REPORT_MAX_BYTES = 200_000          # one shared report's JSON
+REPORT_DAYS = 30                    # a shared report's link works this long
+REPORTS_PER_DAY = 200               # per account
 RESERVED = {"admin", "api", "app", "www", "leasyd", "canary", "ingest", "status", "support", "test"}
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
 _KEY_ID = re.compile(r"^[A-Za-z0-9]{1,32}$")
@@ -83,6 +86,10 @@ def handler(event, context):
             if method != "POST":
                 raise Refused(405, "method not allowed")
             return _http(202, signup(body, _source_address(event)))
+        if resource == "/v1/reports/{id}":
+            if method != "GET":
+                raise Refused(405, "method not allowed")
+            return _http(200, shared_report((event.get("pathParameters") or {}).get("id")))
         if resource == "/v1/demo/session":
             if method != "POST":
                 raise Refused(405, "method not allowed")
@@ -243,6 +250,8 @@ def account(tenant, email, method, parts, body, params=None):
                      "updated_by": item.get("updated_by"), "limits": {"prices": MAX_GPU_PRICES}}
     if role == "viewer":
         raise Refused(403, VIEWER_REFUSED)
+    if parts == ["reports"] and method == "POST":       # members too: anyone who can see the data may share it
+        return 201, share_report(tenant, email, body.get("report"))
     if role != "owner":
         raise Refused(403, "only the account's owners can change its users, keys, drop rules and GPU prices")
     if parts == ["drop-rules"] and method == "PUT":
@@ -292,6 +301,39 @@ def account(tenant, email, method, parts, body, params=None):
         print(json.dumps({"key_revoked": ident, "tenant": tenant, "by": email}))
         return 200, out
     raise Refused(404, "not found")
+
+
+# ------------------------------------------------------------------ shared reports
+
+_REPORT_ID = re.compile(r"^[A-Za-z0-9_-]{20,40}$")
+
+
+def share_report(tenant, email, report):
+    """A snapshot of a report (built in the app from the account's own data) behind an unguessable
+    link that works REPORT_DAYS: whoever has the link sees that snapshot and nothing else (no live
+    query, no other data). Kept as report#<id>; DynamoDB's TTL removes it after."""
+    if not isinstance(report, dict):
+        raise Refused(400, "report: an object")
+    raw = json.dumps(report, separators=(",", ":"))
+    if len(raw) > REPORT_MAX_BYTES:
+        raise Refused(400, f"report: at most {REPORT_MAX_BYTES // 1000} KB")
+    now = _now()
+    _count(f"rate#report#{tenant}#{now:%Y-%m-%d}", REPORTS_PER_DAY, "too many shared reports today; please try again tomorrow")
+    rid, until = secrets.token_urlsafe(18), now + timedelta(days=REPORT_DAYS)
+    table.put_item(Item={"pk": f"report#{rid}", "tenant": tenant, "created_by": email, "created_at": _iso(now),
+                         "expires_at": _iso(until), "expires": int(until.timestamp()), "report_json": raw})
+    print(json.dumps({"report_shared": rid, "tenant": tenant, "by": email, "bytes": len(raw)}))
+    return {"id": rid, "expires_at": _iso(until)}
+
+
+def shared_report(rid):
+    """GET /v1/reports/{id} (public): the snapshot, while its link works."""
+    if not rid or not _REPORT_ID.match(rid):
+        raise Refused(404, "this report link doesn't exist or has expired")
+    item = table.get_item(Key={"pk": f"report#{rid}"}).get("Item")
+    if not item or item["expires_at"] <= _iso(_now()):
+        raise Refused(404, "this report link doesn't exist or has expired")
+    return {"report": json.loads(item["report_json"]), "created_at": item["created_at"], "expires_at": item["expires_at"]}
 
 
 # ------------------------------------------------------------------ Stripe's events

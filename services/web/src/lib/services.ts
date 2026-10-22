@@ -62,7 +62,8 @@ export function useServices(ctx: Ctx) {
       (service) => ({ service, requests: 0, errors: 0, avg_ms: 0, attrs: Object.fromEntries(ATTRS.map(([k]) => [k, ""])) }));
     return { nodes: merged.nodes as Svc[], edges: merged.edges };
   }, [nq.data, eq.data, gq.data]);
-  return { ...graph, loaded: both(both(nq, eq), { ...gq, error: null }) };
+  // the eBPF query failing leaves the trace view: counted as answered (with nothing) rather than pending
+  return { ...graph, loaded: both(both(nq, eq), gq.error ? { data: nq.data, error: null, loading: false } : gq) };
 }
 
 export type SeriesPoint = { t: number; n: number; e: number; ms: number; p95: number | null };
