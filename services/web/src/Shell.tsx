@@ -8,12 +8,12 @@ import { isDemo, signOut } from "./auth";
 
 export const CONTACT_EMAIL = "support@leasyd.com";
 
-/** The live demo (a read-only account with a sample business's live data): what it is and the way to a trial. */
+/** The Playground (a read-only account with a sample business's live data): what it is and the way to a trial. */
 function DemoBanner() {
   const trial = () => { signOut(); location.hash = "/signup"; location.reload(); };
   return (
     <div className="trial-banner demo-banner" role="status">
-      <span>You're exploring a <b>live demo</b>: a sample business's real-time data, read-only. Open a conversation that failed,
+      <span>You're in the <b>Playground</b>: a sample business's live data, read-only. Open a conversation that failed,
       or ask Leasyd AI what's broken right now (5 questions).</span>
       <a className="btn small" href={`mailto:${CONTACT_EMAIL}?subject=Leasyd%20demo%20call`}>Book a call</a>
       <button type="button" className="btn primary small" onClick={trial}>Start free</button>

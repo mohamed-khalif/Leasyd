@@ -118,12 +118,11 @@ export async function signup(email: string, company: string, website = ""): Prom
   if (!res.ok) throw apiError(res.status, await res.json().catch(() => ({})));
 }
 
-/** The live demo (public): the visitor's email in, a read-only ID token for the demo account out. */
-export async function demoSession(email: string): Promise<{ id_token: string; expires_in: number }> {
-  const res = await fetch(getConfig().apiBase + "/v1/demo/session", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+/** The Playground (public live demo): a read-only ID token for the demo account, no sign-up. */
+export async function demoSession(): Promise<{ id_token: string; expires_in: number }> {
+  const res = await fetch(getConfig().apiBase + "/v1/demo/session", { method: "POST" });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.id_token) throw new Error(body.error || "The live demo isn't available right now. Please try again later.");
+  if (!res.ok || !body.id_token) throw new Error(body.error || "The Playground isn't available right now. Please try again later.");
   return body;
 }
 

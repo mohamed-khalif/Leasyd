@@ -508,9 +508,9 @@ no sign-in) at http://localhost:5173. Placeholder prices for Usage & Cost: `serv
 
 ## Phase D1: demo tenant
 
-The public live demo (`app.leasyd.com/#/demo`, linked from the website): a visitor gives a work
-email (kept as a lead: `infra/demo-leads.sh` exports them as CSV), then opens the demo tenant
-read-only on the AI agents page, 5 Ask Leasyd AI questions per visit. To turn it on:
+The public Playground (`app.leasyd.com/#/playground`, "Try Playground" on the website and sign-in
+page): no sign-up, the demo tenant read-only, starting on the AI agents page, 5 Ask Leasyd AI
+questions per visit. To turn it on:
 `infra/demo-viewer.sh` (the read-only login), then `infra/deploy-phaseT5.sh` (reads it) and
 `infra/deploy-phaseT2.sh` (the public route). Keep `obs-demo-schedule` enabled.
 

@@ -82,11 +82,11 @@ export function signOut(): void {
   userPool().getCurrentUser()?.signOut();
 }
 
-// The live demo: POST /v1/demo/session takes the visitor's email and signs them in as the demo
-// account's read-only viewer, returning only an ID token (15 minutes), kept for this tab; a new one
-// is asked for (with the same email) when it runs out. Nothing about the demo login is known here.
+// The Playground (public live demo): POST /v1/demo/session signs the visitor in as the demo account's
+// read-only viewer and returns only an ID token (15 minutes), kept for this tab; a new one is asked
+// for when it runs out. Nothing about the demo login is known here.
 const DEMO_KEY = "leasyd.demo";
-type DemoToken = { token: string; until: number; email: string };
+type DemoToken = { token: string; until: number };
 
 function demoToken(): DemoToken | null {
   try { return JSON.parse(sessionStorage.getItem(DEMO_KEY) || "null"); } catch { return null; }
@@ -94,10 +94,10 @@ function demoToken(): DemoToken | null {
 
 export function isDemo(): boolean { return demoToken() !== null; }
 
-export async function startDemo(email: string): Promise<void> {
-  const body = await demoSession(email.trim());
+export async function startDemo(): Promise<void> {
+  const body = await demoSession();
   const until = Date.now() + (Number(body.expires_in) || 900) * 1000 - 60_000;
-  sessionStorage.setItem(DEMO_KEY, JSON.stringify({ token: body.id_token, until, email: email.trim() }));
+  sessionStorage.setItem(DEMO_KEY, JSON.stringify({ token: body.id_token, until }));
 }
 
 function endDemo(): void {
@@ -109,7 +109,7 @@ export async function idToken(): Promise<string | null> {
   const demo = demoToken();
   if (demo) {
     if (Date.now() < demo.until) return demo.token;
-    try { await startDemo(demo.email); return demoToken()?.token ?? null; } catch { endDemo(); return null; }
+    try { await startDemo(); return demoToken()?.token ?? null; } catch { endDemo(); return null; }
   }
   return accountToken();
 }
