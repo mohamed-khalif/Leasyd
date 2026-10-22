@@ -22,3 +22,18 @@ test("#/playground opens the AI agents page read-only, with no sign-up", async (
   await view.unmount();
   sessionStorage.clear();
 });
+
+test("#/playground isn't signed out by an old session's idle time in this browser", async () => {
+  // Found live: a browser whose last Leasyd activity was over 15 minutes ago opened the
+  // Playground and was sent straight to the sign-in page ("signed out after 15 minutes").
+  sessionStorage.clear();
+  localStorage.setItem("leasyd.lastActive", String(Date.now() - 60 * 60 * 1000));
+  location.hash = "/playground";
+  const view = await render(<App />);
+  const text = () => view.container.textContent ?? "";
+  for (let i = 0; i < 30 && !text().includes("Playground:"); i++) await settle(100);
+  assert.match(text(), /You're in the Playground/);
+  assert.doesNotMatch(text(), /signed out/);
+  await view.unmount();
+  sessionStorage.clear();
+});

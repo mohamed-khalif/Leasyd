@@ -128,7 +128,7 @@ export function SignIn(props: { onSignedIn: () => void; notice?: string | null }
           {step === "signin" && <button type="button" className="linkbtn" onClick={() => go("forgot")}>Forgot password?</button>}
           {step === "signin" && <span className="faint signin-alt">New to Leasyd? <button type="button" className="linkbtn" onClick={() => go("signup")}>Create an account</button></span>}
           {(step === "signin" || step === "signup") && <span className="faint signin-alt">Just looking?{" "}
-            <a href="#/playground">Try Playground</a></span>}
+            <a href="#/playground" onClick={(e) => { e.preventDefault(); window.location.hash = "/playground"; props.onSignedIn(); }}>Try Playground</a></span>}
           {step === "signup" && <span className="faint signin-alt">By creating an account you agree to the{" "}
             <a href="https://www.leasyd.com/terms" target="_blank" rel="noreferrer">Terms of Service</a> and{" "}
             <a href="https://www.leasyd.com/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.</span>}

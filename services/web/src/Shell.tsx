@@ -7,6 +7,7 @@ import { useAccount } from "./useAccount";
 import { isDemo, signOut } from "./auth";
 
 export const CONTACT_EMAIL = "support@leasyd.com";
+export const BOOKING_URL = "https://calendly.com/mkhalif-leasyd/30min";   // a 30-minute demo call
 
 /** The Playground (a read-only account with a sample business's live data): what it is and the way to a trial. */
 function DemoBanner() {
@@ -15,7 +16,7 @@ function DemoBanner() {
     <div className="trial-banner demo-banner" role="status">
       <span>You're in the <b>Playground</b>: a sample business's live data, read-only. Open a conversation that failed,
       or ask Leasyd AI what's broken right now (5 questions).</span>
-      <a className="btn small" href={`mailto:${CONTACT_EMAIL}?subject=Leasyd%20demo%20call`}>Book a call</a>
+      <a className="btn small" href={BOOKING_URL} target="_blank" rel="noreferrer">Book a call</a>
       <button type="button" className="btn primary small" onClick={trial}>Start free</button>
     </div>
   );

@@ -98,6 +98,7 @@ export async function startDemo(): Promise<void> {
   const body = await demoSession();
   const until = Date.now() + (Number(body.expires_in) || 900) * 1000 - 60_000;
   sessionStorage.setItem(DEMO_KEY, JSON.stringify({ token: body.id_token, until }));
+  markActive();   // a fresh visit: an old session's last activity in this browser must not sign it out as idle
 }
 
 function endDemo(): void {
