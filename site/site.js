@@ -49,10 +49,4 @@
     tick();
   });
 
-  // E-mail boxes: open the app's sign-up with the e-mail filled in
-  document.querySelectorAll("form.signup").forEach((f) => f.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const email = (f.querySelector("input").value || "").trim();
-    window.location.assign("https://app.leasyd.com/#/signup" + (email ? "?email=" + encodeURIComponent(email) : ""));
-  }));
 })();

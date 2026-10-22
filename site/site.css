@@ -204,15 +204,9 @@ html:has(body.lp) { overflow-x: clip; }
 .hero2 { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 40px; align-items: center; padding: 72px 0 24px; }
 .hero2 h1 { font-size: clamp(40px, 5.2vw, 64px); line-height: 1.02; max-width: 13ch; }
 .hero2 .lede { font-size: 18px; margin-top: 18px; max-width: 40ch; color: #c9c9da; }
-.signup { display: flex; gap: 10px; margin-top: 28px; max-width: 440px; }
-.signup input { flex: 1; min-width: 0; height: 46px; border-radius: 8px; border: 1px solid #2f2f4a; background: rgba(255,255,255,.04);
-  color: var(--fg); padding: 0 16px; font: 400 15px var(--body); }
-.signup input::placeholder { color: #7d7d98; }
-.signup input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.signup .btn { height: 46px; }
 .hero-note { font-size: 13px; color: var(--faint); margin-top: 18px; max-width: 46ch; }
 .hero-note a { color: #c9c9da; }
-.demo-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.demo-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
 .btn.ghost { background: transparent; }
 
 /* the product carousel in the hero: a tilted window */
