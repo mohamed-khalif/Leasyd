@@ -118,6 +118,15 @@ export async function signup(email: string, company: string, website = ""): Prom
   if (!res.ok) throw apiError(res.status, await res.json().catch(() => ({})));
 }
 
+/** The live demo (public): the visitor's email in, a read-only ID token for the demo account out. */
+export async function demoSession(email: string): Promise<{ id_token: string; expires_in: number }> {
+  const res = await fetch(getConfig().apiBase + "/v1/demo/session", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.id_token) throw new Error(body.error || "The live demo isn't available right now. Please try again later.");
+  return body;
+}
+
 // The tenant's own account (Settings): plan and today's data, users, API keys.
 export type AccountUser = { email: string; role: "owner" | "member"; created_at?: string; invited_by?: string };
 export type KeyScope = "ingest" | "read" | "browser";

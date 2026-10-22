@@ -535,6 +535,8 @@ tr:hover .link { text-decoration: underline; }
 .trial-banner { padding: 8px 20px; font-size: 13px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .trial-banner a { color: inherit; text-decoration: underline; }
 .trial-banner.ended { background: color-mix(in srgb, var(--sev-error) 16%, transparent); }
+.demo-banner { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.demo-banner > span { flex: 1; min-width: 240px; }
 
 /* ---- Service map */
 .svcmap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }

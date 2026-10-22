@@ -4,8 +4,22 @@ import { IconClock, IconDash, IconLogo, IconLogs, IconMetrics, IconMoon, IconOut
 import { customRange, keptFrom, MAX_CUSTOM_DAYS, RANGES, Range, rangeWindow, RETENTION_DAYS } from "./time";
 import { busyCount, onBusy } from "./limiter";
 import { useAccount } from "./useAccount";
+import { isDemo, signOut } from "./auth";
 
 export const CONTACT_EMAIL = "support@leasyd.com";
+
+/** The live demo (a read-only account with a sample business's live data): what it is and the way to a trial. */
+function DemoBanner() {
+  const trial = () => { signOut(); location.hash = "/signup"; location.reload(); };
+  return (
+    <div className="trial-banner demo-banner" role="status">
+      <span>You're exploring a <b>live demo</b>: a sample business's real-time data, read-only. Open a conversation that failed,
+      or ask Leasyd AI what's broken right now (5 questions).</span>
+      <a className="btn small" href={`mailto:${CONTACT_EMAIL}?subject=Leasyd%20demo%20call`}>Book a call</a>
+      <button type="button" className="btn primary small" onClick={trial}>Start free</button>
+    </div>
+  );
+}
 
 /** A free trial's days left, or that it (or the subscription) ended: shown above every page. Once
  * billing is set up the way out is adding payment details in Settings; before that, an email. */
@@ -104,7 +118,7 @@ export function Shell(p: Props) {
           <button className={busy ? "btn busy" : "btn"} onClick={p.onRefresh} title={busy ? "Loading…" : "Refresh"}
                   aria-label={busy ? "Loading, refresh" : "Refresh"} aria-busy={busy}><IconRefresh /></button>
         </header>
-        <TrialBanner />
+        {isDemo() ? <DemoBanner /> : <TrialBanner />}
         <div className="content">{p.children}</div>
       </div>
     </div>

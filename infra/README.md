@@ -28,7 +28,7 @@ workgroup, for dev accounts). On a first run, confirm the alarm subscription ema
 | `obs-phaseS1-build` | the browser-check image (ECR, CodeBuild) | deleted | deleted |
 | `obs-phaseW1` | web app (S3 + CloudFront) | deleted | deleted |
 | `obs-phase1`, `obs-phaseT6` | test tools (`TEST_TOOLS=1`) | deleted | deleted |
-| `obs-phaseD1` | demo tenant data, only built when a customer asks (`DEMO=1`) | deleted | deleted |
+| `obs-phaseD1` | live demo data for the `leasyd-demo` tenant (`DEMO=1`) | deleted | deleted |
 
 Outside CloudFormation, by design: each tenant's Firehose streams and API keys (made by the tenant
 admin Lambda when a tenant is created) and the canary's key (SSM `/obs/canary/api-key`). `down.sh`
@@ -508,9 +508,11 @@ no sign-in) at http://localhost:5173. Placeholder prices for Usage & Cost: `serv
 
 ## Phase D1: demo tenant
 
-Not deployed: there is no public demo (the site offers "Book a demo"). Build it only when a
-customer asks for a demo account, and delete the stack afterwards. The same generator feeds the
-tests and the local preview.
+The public live demo (`app.leasyd.com/#/demo`, linked from the website): a visitor gives a work
+email (kept as a lead: `infra/demo-leads.sh` exports them as CSV), then opens the demo tenant
+read-only on the AI agents page, 5 Ask Leasyd AI questions per visit. To turn it on:
+`infra/demo-viewer.sh` (the read-only login), then `infra/deploy-phaseT5.sh` (reads it) and
+`infra/deploy-phaseT2.sh` (the public route). Keep `obs-demo-schedule` enabled.
 
 `obs-demo` (`services/demo/demo.py`) sends a realistic online shop's telemetry for the `leasyd-demo`
 tenant through the real ingest endpoint every minute: a dozen services calling each other (one

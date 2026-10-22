@@ -638,6 +638,10 @@ export function mockApi(): Plugin {
           res.statusCode = 202;
           return setTimeout(() => res.end(JSON.stringify({ status: "accepted", message: "Check your inbox" })), 400);
         }
+        if (req.url === "/v1/demo/session" && req.method === "POST") {   // the live demo: a read-only session
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify({ id_token: "mock-demo-token", expires_in: 900 }));
+        }
         if (!req.url?.startsWith("/v1/app/")) return next();
         res.setHeader("Content-Type", "application/json");
         if (req.url === "/v1/app/me") return res.end(JSON.stringify({ tenant: "acme", email: "ana@acme.io" }));

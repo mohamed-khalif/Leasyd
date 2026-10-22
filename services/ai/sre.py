@@ -47,7 +47,7 @@ SELF = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "obs-ai")
 TURNS_PER_DAY = {"free": 20, "standard": 200}
 # The public live demo (role viewer, one shared login): each visitor's session asks a few
 # questions, and all visitors together a capped number a day (each costs about $0.10).
-VIEWER_TURNS_PER_SESSION = int(os.environ.get("VIEWER_TURNS_PER_SESSION", "3"))
+VIEWER_TURNS_PER_SESSION = int(os.environ.get("VIEWER_TURNS_PER_SESSION", "5"))
 VIEWER_TURNS_PER_DAY = int(os.environ.get("VIEWER_TURNS_PER_DAY", "100"))
 MAX_STEPS = 25                 # tool rounds in one turn
 TURN_SECONDS = 600             # then it answers with what it has

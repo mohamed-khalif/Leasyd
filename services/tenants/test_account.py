@@ -231,12 +231,43 @@ def test_meters_per_day(acc, adm, mail):  # noqa: F811
     assert app(acc, "ana@acme.com", "acme")[1]["today"]["dropped_logs"] == 4
 
 
-def test_read_only_viewer(acc, adm):  # noqa: F811
-    """A viewer can look but not change anything, and sees no one's email or keys."""
+def test_live_demo_session_keeps_the_lead_and_is_read_only(acc, adm, monkeypatch):  # noqa: F811
+    """The public live demo: a visitor gives a work email (kept as a lead), then gets only an ID
+    token for the demo tenant's viewer, who can look but not change anything, and sees no one's
+    email or keys."""
     call(adm, "create", tenant="demo-shop")
     call(adm, "invite-user", tenant="demo-shop", email="owner@shop.com", role="owner", send_email=False)
     call(adm, "invite-user", tenant="demo-shop", email="demo@leasyd.com", role="viewer", send_email=False)
-    assert acc.handler({"resource": "/v1/demo/session", "httpMethod": "POST", "headers": {}}, None)["statusCode"] == 401
+    asked = []
+
+    class Ssm:
+        def get_parameter(self, Name, WithDecryption):
+            return {"Parameter": {"Value": "the-pw"}}
+
+    class Cognito:
+        def initiate_auth(self, **kw):
+            asked.append(kw)
+            return {"AuthenticationResult": {"IdToken": "id.tok", "AccessToken": "acc.tok", "RefreshToken": "ref.tok",
+                                             "ExpiresIn": 900}}
+    monkeypatch.setattr(acc, "ssm", Ssm())
+    monkeypatch.setattr(acc, "cognito", Cognito())
+
+    def session(email="Cto@Shop.io", ip="203.0.113.9"):
+        out = acc.handler({"resource": "/v1/demo/session", "httpMethod": "POST", "headers": {"X-Forwarded-For": ip},
+                           "body": json.dumps({"email": email})}, None)
+        return out["statusCode"], json.loads(out["body"])
+    assert session()[0] == 404                                          # no demo configured
+    monkeypatch.setattr(acc, "DEMO_USER", "demo@leasyd.com")
+    monkeypatch.setattr(acc, "APP_CLIENT_ID", "client-1")
+    assert session("not an email")[0] == 400 and not asked             # no email, no demo
+    assert session() == (200, {"id_token": "id.tok", "expires_in": 900})   # never the access or refresh token
+    assert asked[0]["AuthParameters"] == {"USERNAME": "demo@leasyd.com", "PASSWORD": "the-pw"}
+    session()
+    lead = acc.table.get_item(Key={"pk": "demo-lead#cto@shop.io"})["Item"]
+    assert lead["email"] == "cto@shop.io" and lead["visits"] == 2 and lead["first_visit"] <= lead["last_visit"]
+    monkeypatch.setattr(acc, "DEMO_SESSIONS_PER_ADDRESS", 3)
+    assert session("a@b.io")[0] == 200 and session("c@d.io")[0] == 429    # per address an hour
+    assert session("c@d.io", "198.51.100.4")[0] == 200
 
     status, me = app(acc, "demo@leasyd.com", "demo-shop")
     assert status == 200 and me["you"]["role"] == "viewer" and me["users"] == [] and me["keys"] == []

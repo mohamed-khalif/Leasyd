@@ -127,8 +127,8 @@ export function SignIn(props: { onSignedIn: () => void; notice?: string | null }
             : <button className="btn primary" disabled={busy}>{busy ? button[1] : button[0]}</button>}
           {step === "signin" && <button type="button" className="linkbtn" onClick={() => go("forgot")}>Forgot password?</button>}
           {step === "signin" && <span className="faint signin-alt">New to Leasyd? <button type="button" className="linkbtn" onClick={() => go("signup")}>Create an account</button></span>}
-          {(step === "signin" || step === "signup") && <span className="faint signin-alt">Want a walkthrough first?{" "}
-            <a href="mailto:support@leasyd.com?subject=Leasyd%20demo">Book a demo</a></span>}
+          {(step === "signin" || step === "signup") && <span className="faint signin-alt">Just looking?{" "}
+            <a href="#/demo">Explore the live demo</a></span>}
           {step === "signup" && <span className="faint signin-alt">By creating an account you agree to the{" "}
             <a href="https://www.leasyd.com/terms" target="_blank" rel="noreferrer">Terms of Service</a> and{" "}
             <a href="https://www.leasyd.com/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.</span>}

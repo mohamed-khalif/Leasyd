@@ -47,6 +47,14 @@ TABLE = os.environ["TENANTS_TABLE"]
 ADMIN_FUNCTION = os.environ.get("ADMIN_FUNCTION", "obs-tenant-admin")
 SIGNUPS_PER_DAY = int(os.environ.get("SIGNUPS_PER_DAY", "100"))
 SIGNUPS_PER_ADDRESS = int(os.environ.get("SIGNUPS_PER_ADDRESS", "5"))   # per source address a day
+# The public live demo: visitors give a work email (kept as a lead) and are signed in as one
+# read-only "viewer" of the demo tenant.
+DEMO_USER = os.environ.get("DEMO_USER", "")                     # empty: no demo
+DEMO_PASSWORD_PARAM = os.environ.get("DEMO_PASSWORD_PARAM", "/obs/demo/viewer-password")
+APP_CLIENT_ID = os.environ.get("APP_CLIENT_ID", "")
+DEMO_SESSIONS_PER_ADDRESS = int(os.environ.get("DEMO_SESSIONS_PER_ADDRESS", "30"))   # per hour
+DEMO_SESSIONS_PER_EMAIL = int(os.environ.get("DEMO_SESSIONS_PER_EMAIL", "10"))       # per day
+DEMO_SESSIONS_PER_DAY = int(os.environ.get("DEMO_SESSIONS_PER_DAY", "3000"))
 VIEWER_REFUSED = "you have read-only access to this account"
 MAX_KEYS, MAX_USERS = 20, 50
 RESERVED = {"admin", "api", "app", "www", "leasyd", "canary", "ingest", "status", "support", "test"}
@@ -56,6 +64,8 @@ _KEY_ID = re.compile(r"^[A-Za-z0-9]{1,32}$")
 ddb = boto3.resource("dynamodb")
 table = ddb.Table(TABLE)
 lam = boto3.client("lambda")
+ssm = boto3.client("ssm")
+cognito = boto3.client("cognito-idp")
 
 
 class Refused(Exception):
@@ -75,6 +85,10 @@ def handler(event, context):
             if method != "POST":
                 raise Refused(405, "method not allowed")
             return _http(202, signup(body, _source_address(event)))
+        if resource == "/v1/demo/session":
+            if method != "POST":
+                raise Refused(405, "method not allowed")
+            return _http(200, demo_session(body, _source_address(event)))
         claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
         tenant, email = claims.get("custom:tenant"), (claims.get("email") or "").lower()
         if not tenant or not email:
@@ -155,6 +169,34 @@ def _count(pk, limit, refused="too many sign-ups right now; please try again lat
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             raise Refused(429, refused)
         raise
+
+
+# ------------------------------------------------------------------ the live demo
+
+def demo_session(body, address):
+    """POST /v1/demo/session (public), body {"email"}: keep the visitor's email as a lead
+    (demo-lead#<email>: first and last visit, visits) and sign them in as the demo tenant's
+    read-only viewer. Only the ID token (15 minutes; what the API's authorizer reads) is returned:
+    no refresh or access token, so a visitor can't change the shared login. The app asks again
+    when the token runs out. Every backend refuses a viewer's changes."""
+    if not DEMO_USER or not APP_CLIENT_ID:
+        raise Refused(404, "no live demo here")
+    email = _email(body.get("email"))
+    now = _now()
+    _count(f"rate#demo#{now:%Y-%m-%d}", DEMO_SESSIONS_PER_DAY, "the live demo is busy; please try again later")
+    _count(f"rate#demo#{address}#{now:%Y-%m-%dT%H}", DEMO_SESSIONS_PER_ADDRESS,
+           "too many demo sessions from your address; please try again later")
+    _count(f"rate#demo#{email}#{now:%Y-%m-%d}", DEMO_SESSIONS_PER_EMAIL,
+           "too many demo sessions for this email today; please try again tomorrow")
+    table.update_item(Key={"pk": f"demo-lead#{email}"},
+                      UpdateExpression="SET email = :e, last_visit = :t, last_address = :a, "
+                                       "first_visit = if_not_exists(first_visit, :t) ADD visits :one",
+                      ExpressionAttributeValues={":e": email, ":t": _iso(now), ":a": address, ":one": 1})
+    password = ssm.get_parameter(Name=DEMO_PASSWORD_PARAM, WithDecryption=True)["Parameter"]["Value"]
+    auth = cognito.initiate_auth(ClientId=APP_CLIENT_ID, AuthFlow="USER_PASSWORD_AUTH",
+                                 AuthParameters={"USERNAME": DEMO_USER, "PASSWORD": password})["AuthenticationResult"]
+    print(json.dumps({"demo_session": email}))
+    return {"id_token": auth["IdToken"], "expires_in": auth.get("ExpiresIn", 900)}
 
 
 def _source_address(event):

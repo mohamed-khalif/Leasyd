@@ -1,12 +1,13 @@
 import type React from "react";
 import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, me } from "./api";
-import { idToken, signOut } from "./auth";
+import { idToken, isDemo, signOut } from "./auth";
 import { isIdle, useIdleSignOut } from "./idle";
 import { getConfig } from "./config";
-import { CONTACT_EMAIL, Shell } from "./Shell";
+import { Shell } from "./Shell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SignIn } from "./pages/SignIn";
+import { DemoGate } from "./pages/DemoGate";
 import { settingsPage } from "./pages/settings/menu";
 import { RANGES, Range, rangeFromKey } from "./time";
 import { hashParams, replaceHashParams } from "./hashParams";
@@ -99,10 +100,11 @@ export function App() {
   const [meError, setMeError] = useState<string | null>(null);
   const loadUser = useCallback(async () => {
     setMeError(null);
-    // #/demo: the old live demo's link (closed); point to booking one
+    // #/demo (the website's and emails' "Explore the live demo"): the email form, then the demo
+    // account read-only. A visitor already in the demo goes straight to it.
     if (location.hash.startsWith("#/demo")) {
-      setNotice(`Our self-serve demo has closed. Book a demo and we'll walk you through Leasyd: ${CONTACT_EMAIL}`);
-      location.hash = "/";
+      if (isDemo()) location.hash = "/agents";
+      else { signOut(); return setUser(null); }
     }
     if (isIdle()) {   // back after a break: signed out before anything loads
       signOut();
@@ -128,6 +130,7 @@ export function App() {
       Couldn't reach Leasyd: {meError} <button className="btn small" onClick={() => { setUser(undefined); loadUser(); }}>Retry</button>
     </div>);
   if (user === undefined) return <div className="state" style={{ height: "100%" }}>Loading…</div>;
+  if (user === null && hash.startsWith("/demo")) return <DemoGate onStarted={loadUser} />;
   if (user === null || (getConfig().mock && location.search.includes("signin"))) return <SignIn onSignedIn={loadUser} notice={notice} />;
 
   const [path, query] = hash.split("?");

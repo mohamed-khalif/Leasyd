@@ -264,10 +264,11 @@ def test_live_demo_visitors_ask_a_few_questions_each_and_see_only_their_own(sre,
     assert [c["id"] for c in api(sre, "GET", visit="v1", **demo)[1]["conversations"]] == [conv["id"]]
     assert api(sre, "POST", {"message": "x", "conversation_id": conv["id"]}, visit="v2", **demo)[0] == 404
     assert api(sre, "POST", {"message": "two"}, visit="v1", **demo)[0] == 202
-    assert api(sre, "POST", {"message": "three"}, visit="v1", **demo)[0] == 202
-    s, e = api(sre, "POST", {"message": "four"}, visit="v1", **demo)
-    assert s == 429 and "3 questions per visit" in e["error"]
-    monkeypatch.setattr(sre, "VIEWER_TURNS_PER_DAY", 4)
+    for m in ("three", "four", "five"):
+        assert api(sre, "POST", {"message": m}, visit="v1", **demo)[0] == 202
+    s, e = api(sre, "POST", {"message": "six"}, visit="v1", **demo)
+    assert s == 429 and "5 questions per visit" in e["error"]
+    monkeypatch.setattr(sre, "VIEWER_TURNS_PER_DAY", 6)
     assert api(sre, "POST", {"message": "a"}, visit="v3", **demo)[0] == 202
     s, e = api(sre, "POST", {"message": "b"}, visit="v4", **demo)
     assert s == 429 and "for today" in e["error"]

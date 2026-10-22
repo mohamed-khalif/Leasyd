@@ -6,6 +6,7 @@
 import {
   AuthenticationDetails, CognitoUser, CognitoUserPool, CognitoUserSession,
 } from "amazon-cognito-identity-js";
+import { demoSession } from "./api";
 import { getConfig } from "./config";
 import { markActive } from "./idle";
 
@@ -19,6 +20,7 @@ function userPool(): CognitoUserPool {
 export type SignInResult = { kind: "ok" } | { kind: "new-password"; complete: (pw: string) => Promise<void> };
 
 export function signIn(email: string, password: string): Promise<SignInResult> {
+  endDemo();
   const user = new CognitoUser({ Username: email.trim().toLowerCase(), Pool: userPool() });
   const details = new AuthenticationDetails({ Username: email.trim().toLowerCase(), Password: password });
   return new Promise((resolve, reject) => {
@@ -75,13 +77,40 @@ export function changePassword(current: string, next: string): Promise<void> {
 }
 
 export function signOut(): void {
+  endDemo();
   if (getConfig().mock) return;
   userPool().getCurrentUser()?.signOut();
 }
 
+// The live demo: POST /v1/demo/session takes the visitor's email and signs them in as the demo
+// account's read-only viewer, returning only an ID token (15 minutes), kept for this tab; a new one
+// is asked for (with the same email) when it runs out. Nothing about the demo login is known here.
+const DEMO_KEY = "leasyd.demo";
+type DemoToken = { token: string; until: number; email: string };
+
+function demoToken(): DemoToken | null {
+  try { return JSON.parse(sessionStorage.getItem(DEMO_KEY) || "null"); } catch { return null; }
+}
+
+export function isDemo(): boolean { return demoToken() !== null; }
+
+export async function startDemo(email: string): Promise<void> {
+  const body = await demoSession(email.trim());
+  const until = Date.now() + (Number(body.expires_in) || 900) * 1000 - 60_000;
+  sessionStorage.setItem(DEMO_KEY, JSON.stringify({ token: body.id_token, until, email: email.trim() }));
+}
+
+function endDemo(): void {
+  try { sessionStorage.removeItem(DEMO_KEY); } catch { /* storage unavailable */ }
+}
+
 /** A valid ID token, refreshed if needed; null when not signed in. */
 export async function idToken(): Promise<string | null> {
-  try { sessionStorage.removeItem("leasyd.demo"); } catch { /* the old live demo's token, if a tab still has one */ }
+  const demo = demoToken();
+  if (demo) {
+    if (Date.now() < demo.until) return demo.token;
+    try { await startDemo(demo.email); return demoToken()?.token ?? null; } catch { endDemo(); return null; }
+  }
   return accountToken();
 }
 
