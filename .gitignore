@@ -14,3 +14,4 @@ services/web/*.tsbuildinfo
 services/synthetics/build/
 services/alerts/build/
 services/ai/build/
+services/investigator/build/

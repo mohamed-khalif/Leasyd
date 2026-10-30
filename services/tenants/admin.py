@@ -860,7 +860,8 @@ def purge(tenant, deleted=0, context=None):
     done = True
     for prefix in (f"_incoming/tenant={tenant}/", f"_incoming/_errors/tenant={tenant}/", f"data/tenant={tenant}/",
                    f"synthetics/tenant={tenant}/",     # browser checks' screenshots
-                   f"_ai/tenant={tenant}/"):           # AI SRE conversations
+                   f"_ai/tenant={tenant}/",            # AI SRE conversations
+                   f"_investigations/tenant={tenant}/"):   # automatic investigations
         n, finished = _purge_prefix(prefix, deadline)
         deleted += n
         done = done and finished

@@ -267,6 +267,7 @@ export const slos = settingsApi<Slo>("/v1/app/slos");
 export type AlertChannel = { id: string; name: string; type: "email" | "slack" | "webhook"; email?: string; url_hint?: string;
                              status?: string; signing_secret?: string; created_at?: string };
 export type AlertRule = { id: string; name: string; type: "check_failing" | "slo_burn" | "query"; channels: string[]; enabled: boolean;
+                          investigate?: boolean;   // when it fires, Leasyd investigates it automatically (default on)
                           checks?: string[]; failures?: number; slo?: string; burn_rate?: number; budget_below?: number;
                           // check rules (type "query"): a PromQL query and thresholds on each series it returns
                           promql?: string; op?: string; critical?: number; degraded?: number | null; for_minutes?: number;

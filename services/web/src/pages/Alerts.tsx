@@ -105,7 +105,7 @@ function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearc
   const { s, error: loadError } = useSettings(0);
   const tpl = ALERT_TEMPLATES.find((t) => t.name === params.get("template"));   // ?template=: a ready-made query rule
   const [r, setR] = useState<Omit<AlertRule, "id">>({
-    name: params.get("name") ?? tpl?.name ?? "", type: params.get("promql") || tpl ? "query" : params.get("slo") ? "slo_burn" : "check_failing", channels: [], enabled: true,
+    name: params.get("name") ?? tpl?.name ?? "", type: params.get("promql") || tpl ? "query" : params.get("slo") ? "slo_burn" : "check_failing", channels: [], enabled: true, investigate: true,
     checks: params.get("check") ? [params.get("check")!] : ["*"], failures: 2, slo: params.get("slo") ?? undefined, burn_rate: 10, budget_below: 25,
     promql: params.get("promql") ?? tpl?.promql ?? "", op: tpl?.op ?? ">", critical: tpl?.critical, degraded: tpl?.degraded ?? null,
     for_minutes: tpl?.for_minutes ?? 2, every_minutes: 1,
@@ -206,6 +206,13 @@ function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearc
           <h3>Send to</h3>
           <div className="checks">
             {s.channels.map((c) => <label key={c.id} className="check"><input type="checkbox" checked={r.channels.includes(c.id)} onChange={() => set({ channels: toggle(r.channels, c.id) })} /> {c.name} <span className="faint">({c.type})</span></label>)}
+          </div>
+        </section>
+        <section className="form-section">
+          <h3>Investigate</h3>
+          <div className="checks">
+            <label className="check"><input type="checkbox" checked={r.investigate !== false} onChange={(e) => set({ investigate: e.target.checked })} />
+              {" "}When it fires, investigate automatically <span className="faint">(root cause, evidence and next step, without anyone asking)</span></label>
           </div>
         </section>
         {error && <div className="form-error" role="alert" style={{ marginTop: 10 }}>{error}</div>}

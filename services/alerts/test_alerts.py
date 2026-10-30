@@ -550,3 +550,27 @@ def test_a_viewer_can_look_but_not_change_or_send(aws):
     assert (r["statusCode"], json.loads(r["body"])) == refused
     assert alerts.api({**dash, "httpMethod": "GET", "body": None})["statusCode"] == 200
     assert call("acme", "POST", "channels", {"name": "x", "type": "email", "target": "ana@acme.io"})[0] != 403
+
+
+def test_a_firing_starts_an_investigation_unless_the_rule_turns_it_off(aws, hook, monkeypatch):
+    started = []
+    monkeypatch.setattr(alerts, "INVESTIGATOR_FUNCTION", "obs-investigator")
+    monkeypatch.setitem(alerts._clients, "lambda", type("L", (), {"invoke": lambda self, **kw: started.append(kw)})())
+    ch = webhook_channel("acme", hook)
+    s, on = call("acme", "POST", "rules", {"name": "Checkout down", "type": "check_failing", "checks": ["*"], "failures": 1, "channels": [ch["id"]]})
+    assert on["investigate"] is True                                           # on by default
+    run = lambda ok: alerts.on_result({"tenant": "acme", "check_id": "aaaabbbbcccc", "check_name": "Checkout API", "ok": ok,  # noqa: E731
+                                       "failure": None if ok else "status 503"})
+    run(False)
+    run(True)                                                                  # resolving starts nothing
+    assert len(started) == 1 and started[0]["FunctionName"] == "obs-investigator" and started[0]["InvocationType"] == "Event"
+    sent = json.loads(started[0]["Payload"])
+    assert sent["tenant"] == "acme" and sent["alert"]["state"] == "firing" and sent["alert"]["rule"]["id"] == on["id"]
+    call("acme", "PUT", f"rules/{on['id']}", {**{k: on[k] for k in ("name", "type", "checks", "failures", "channels")}, "investigate": False})
+    run(False)
+    assert len(started) == 1                                                   # switched off: still alerted, not investigated
+
+    def broken(**kw):
+        raise ConnectionError("lambda down")
+    monkeypatch.setitem(alerts._clients, "lambda", type("L", (), {"invoke": lambda self, **kw: broken(**kw)})())
+    alerts.investigate("acme", {"state": "firing"})                            # never raises: the alert already went out

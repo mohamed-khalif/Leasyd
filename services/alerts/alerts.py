@@ -63,6 +63,7 @@ from safety import Refused
 TABLE = os.environ.get("TENANTS_TABLE", "obs-tenants")
 KMS_KEY = os.environ.get("KMS_KEY", "alias/obs-checks")
 QUERY_FUNCTION = os.environ.get("QUERY_FUNCTION", "obs-query")
+INVESTIGATOR_FUNCTION = os.environ.get("INVESTIGATOR_FUNCTION", "")   # obs-investigator; empty: no automatic investigations
 APP_URL = os.environ.get("APP_URL", "https://app.leasyd.com")
 MAX_RULES, MAX_CHANNELS = 50, 20
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
@@ -126,7 +127,7 @@ def validate_rule(body, checks, slos, channels):
     if not chans or any(c not in channels for c in chans):
         raise Refused("channels: choose one or more of your alert channels")
     out = {"name": _text(body.get("name"), "name", 1, 80), "type": kind, "channels": sorted(set(chans)),
-           "enabled": bool(body.get("enabled", True))}
+           "enabled": bool(body.get("enabled", True)), "investigate": bool(body.get("investigate", True))}
     if kind == "check_failing":
         ids = list(body.get("checks") or [])
         if ids != ["*"] and (not ids or any(i not in checks for i in ids)):
@@ -343,14 +344,28 @@ def message(tenant, rule, state, subject, detail, link):
 
 
 def fire(tenant, rule, state, subject, detail, link):
-    """Notify every channel of the rule and record the event as the tenant's log."""
+    """Notify every channel of the rule, record the event as the tenant's log, and (firing) start an
+    automatic investigation unless the rule turns it off."""
     msg = message(tenant, rule, state, subject, detail, link)
     results = {}
     for cid in rule["channels"]:
         channel = _get(f"channel#{tenant}#{cid}", tenant)
         results[cid] = notify(tenant, channel, msg) if channel else "channel deleted"
     record(tenant, rule, state, subject, detail, link, results)
+    if state == "firing" and rule.get("investigate", True):
+        investigate(tenant, msg["payload"])
     return results
+
+
+def investigate(tenant, payload):
+    """Hands a firing to obs-investigator (async). Never stops or delays the alert itself."""
+    if not INVESTIGATOR_FUNCTION:
+        return
+    try:
+        client("lambda").invoke(FunctionName=INVESTIGATOR_FUNCTION, InvocationType="Event",
+                                Payload=json.dumps({"alert": payload, "tenant": tenant}).encode())
+    except Exception as e:  # noqa: BLE001  the alert has been sent; the investigation is a bonus
+        print(json.dumps({"investigation_not_started": tenant, "error": f"{type(e).__name__}: {str(e)[:200]}"}))
 
 
 def record(tenant, rule, state, subject, detail, link, results):

@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Phase I1: automatic investigations (services/investigator). An alert firing (obs-alerts) or a webhook
+  (CloudWatch via SNS, PagerDuty, any tool) opens an investigation (obs-investigator) and queues it; the
+  worker (obs-investigator-worker) runs the agent from the queue and queues its delivery. Slice 1: the
+  agent is a stub and delivery is logged. Routes in obs-phaseT2. Needs obs-phase0 (boundary:
+  InvestigationQueue), obs-phaseT2. Deploy with infra/deploy-phaseI1.sh.
+
+Parameters:
+  ApiId:
+    Type: String
+    Description: obs-phaseT2 output ApiId.
+  HourlyCap:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    Description: Investigations one tenant may start an hour; over it they are recorded as skipped (and still delivered as a notice).
+  Agent:
+    Type: String
+    Default: stub
+    AllowedValues: [stub]
+    Description: The agent that investigates (stub until slice 2).
+
+Resources:
+  DeadLetters:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: obs-investigations-dlq
+      MessageRetentionPeriod: 1209600       # 14 days to look at what failed
+      SqsManagedSseEnabled: true
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
+
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: obs-investigations
+      VisibilityTimeout: 960                # more than the worker's 900 s
+      MessageRetentionPeriod: 86400
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetters.Arn
+        maxReceiveCount: 3                  # = domain.workflow.MAX_ATTEMPTS: the third attempt marks it failed
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
+
+  # Both functions: the investigations (S3 _investigations/, index rows in obs-tenants) and the queue.
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: obs-investigator
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/obs-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: investigator
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Investigations
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_investigations/*"
+              - Sid: Index           # index rows, dedupe claims, hourly quota, webhook tokens; users' roles (read)
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/obs-tenants/index/by-tenant"
+              - Sid: Queue
+                Effect: Allow
+                Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes, sqs:ChangeMessageVisibility]
+                Resource: !GetAtt Queue.Arn
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
+
+  IngestLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/obs-investigator, RetentionInDays: 30 }
+  WorkerLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: /aws/lambda/obs-investigator-worker, RetentionInDays: 30 }
+
+  Ingest:
+    Type: AWS::Lambda::Function
+    DependsOn: IngestLogs
+    Properties:
+      FunctionName: obs-investigator
+      Description: Opens investigations (alerts, webhooks) and serves them to the app
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handlers.ingest.handler
+      Code: ../services/investigator/build
+      Role: !GetAtt Role.Arn
+      MemorySize: 256
+      Timeout: 30
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          TENANTS_TABLE: obs-tenants
+          QUEUE_URL: !Ref Queue
+          HOURLY_CAP: !Ref HourlyCap
+          AGENT: !Ref Agent
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
+
+  Worker:
+    Type: AWS::Lambda::Function
+    DependsOn: WorkerLogs
+    Properties:
+      FunctionName: obs-investigator-worker
+      Description: Runs queued investigations (the agent) and queues their delivery
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handlers.worker.handler
+      Code: ../services/investigator/build
+      Role: !GetAtt Role.Arn
+      MemorySize: 512
+      Timeout: 900
+      Environment:
+        Variables:
+          BUCKET: !Sub "obs-data-${AWS::AccountId}-${AWS::Region}"
+          TENANTS_TABLE: obs-tenants
+          QUEUE_URL: !Ref Queue
+          HOURLY_CAP: !Ref HourlyCap
+          AGENT: !Ref Agent
+      Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
+
+  WorkerTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      FunctionName: !Ref Worker
+      EventSourceArn: !GetAtt Queue.Arn
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig: { MaximumConcurrency: 10 }   # investigations at once, all tenants (a ceiling on model spend)
+
+  # obs-alerts invokes it when a rule fires (the permission is obs-alerts' own role, phaseA1).
+  ApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Ingest
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/v1/*"
+
+  DeadLettersAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-investigations-dead-letters
+      AlarmDescription: "Investigation messages that failed every attempt (obs-investigations-dlq). Their investigations are marked failed; look at /aws/lambda/obs-investigator-worker."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt DeadLetters.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+  ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: obs-investigator-errors
+      AlarmDescription: "obs-investigator (alerts and webhooks opening investigations): 3 or more errors in 5 minutes."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref Ingest }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alerts"]
+
+Outputs:
+  QueueUrl:
+    Value: !Ref Queue
+  Function:
+    Value: !Ref Ingest

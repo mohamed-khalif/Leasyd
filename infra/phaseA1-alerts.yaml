@@ -9,6 +9,10 @@ Description: >
   Deploy with infra/deploy-phaseA1.sh.
 
 Parameters:
+  InvestigatorFunction:
+    Type: String
+    Default: ""
+    Description: obs-investigator (obs-phaseI1), which firing rules hand to for an automatic investigation. Empty = none.
   AppUrl:
     Type: String
     Default: https://app.leasyd.com
@@ -75,6 +79,10 @@ Resources:
                 Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
+              - Sid: Investigate     # a firing rule starts an automatic investigation (obs-phaseI1)
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-investigator"
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: A1 }]
 
   LogGroup:
@@ -99,6 +107,7 @@ Resources:
           TENANTS_TABLE: obs-tenants
           KMS_KEY: alias/obs-checks
           QUERY_FUNCTION: obs-query
+          INVESTIGATOR_FUNCTION: !Ref InvestigatorFunction
           APP_URL: !Ref AppUrl
           EMAIL_FROM: !Ref EmailFrom
           RECORD_COMPRESSION: gzip

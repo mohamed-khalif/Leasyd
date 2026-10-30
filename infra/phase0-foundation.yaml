@@ -158,6 +158,10 @@ Resources:
             Effect: Allow
             Action: sqs:SendMessage
             Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:obs-*"
+          - Sid: InvestigationQueue    # automatic investigations (I1): the worker reads its queue
+            Effect: Allow
+            Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes, sqs:ChangeMessageVisibility]
+            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:obs-investigations"
           - Sid: CheckSecrets          # synthetic checks' secrets (S1), by the key's alias
             Effect: Allow
             Action: [kms:Encrypt, kms:Decrypt]

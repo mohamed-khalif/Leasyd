@@ -15,6 +15,8 @@ APP_ARGS=()
 EMAIL_FROM="$(aws cloudformation describe-stacks --stack-name obs-phaseE1 \
   --query "Stacks[0].Outputs[?OutputKey=='EmailFrom'].OutputValue" --output text 2>/dev/null || true)"
 [[ -n "$EMAIL_FROM" && "$EMAIL_FROM" != None ]] && APP_ARGS+=("EmailFrom=${EMAIL_FROM}")
+# Automatic investigations (obs-phaseI1), when deployed: firing rules hand over to obs-investigator.
+aws cloudformation describe-stacks --stack-name obs-phaseI1 >/dev/null 2>&1 && APP_ARGS+=("InvestigatorFunction=obs-investigator")
 
 rm -rf services/alerts/build && mkdir -p services/alerts/build
 pip install -q --target services/alerts/build --only-binary=:all: --implementation cp --python-version 3.12 \
