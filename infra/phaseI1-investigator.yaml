@@ -2,8 +2,8 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Phase I1: automatic investigations (services/investigator). An alert firing (obs-alerts) or a webhook
   (CloudWatch via SNS, PagerDuty, any tool) opens an investigation (obs-investigator) and queues it; the
-  worker (obs-investigator-worker) runs the agent from the queue and queues its delivery. Slice 1: the
-  agent is a stub and delivery is logged. Routes in obs-phaseT2. Needs obs-phase0 (boundary:
+  worker (obs-investigator-worker) runs the agent (Claude with read-only tools over the tenant's
+  telemetry, through obs-query) and queues its delivery (logged until slice 4). Routes in obs-phaseT2. Needs obs-phase0 (boundary:
   InvestigationQueue), obs-phaseT2. Deploy with infra/deploy-phaseI1.sh.
 
 Parameters:
@@ -17,9 +17,27 @@ Parameters:
     Description: Investigations one tenant may start an hour; over it they are recorded as skipped (and still delivered as a notice).
   Agent:
     Type: String
-    Default: stub
-    AllowedValues: [stub]
-    Description: The agent that investigates (stub until slice 2).
+    Default: claude
+    AllowedValues: [claude, stub]
+    Description: The agent that investigates. stub answers "not sure" without a model (testing).
+  ClaudeModel:
+    Type: String
+    Default: anthropic.claude-opus-5-5
+    Description: The Bedrock model ID (or the Claude API's, without "anthropic.", when /obs/anthropic/api_key is set).
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
+  PromptParam:
+    Type: String
+    Default: ""
+    Description: An SSM parameter under /obs/investigator/ holding {"version", "system"} to replace the built-in prompt; empty = built in.
+  PriceInputPerMTok:
+    Type: String
+    Default: "5"
+    Description: USD per million input tokens, for the cost logged on each investigation.
+  PriceOutputPerMTok:
+    Type: String
+    Default: "25"
 
 Resources:
   DeadLetters:
@@ -78,6 +96,20 @@ Resources:
                 Effect: Allow
                 Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes, sqs:ChangeMessageVisibility]
                 Resource: !GetAtt Queue.Arn
+              - Sid: Query           # the tenant's telemetry only through obs-query (the tenant is in the request, from the investigation)
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-query"
+              - Sid: Parameters      # optional: an Anthropic API key (as the AI SRE), the prompt
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/anthropic/*"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/investigator/*"
+              - Sid: Claude          # Bedrock's Messages API endpoint (Mantle), this account's projects
+                Effect: Allow
+                Action: bedrock-mantle:CreateInference
+                Resource: !Sub "arn:aws:bedrock-mantle:${BedrockRegion}:${AWS::AccountId}:project/*"
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
 
   IngestLogs:
@@ -129,6 +161,14 @@ Resources:
           QUEUE_URL: !Ref Queue
           HOURLY_CAP: !Ref HourlyCap
           AGENT: !Ref Agent
+          QUERY_FUNCTION: obs-query
+          CLAUDE_MODEL: !Ref ClaudeModel
+          BEDROCK_REGION: !Ref BedrockRegion
+          ANTHROPIC_KEY_PARAM: /obs/anthropic/api_key
+          PROMPT_PARAM: !Ref PromptParam
+          PRICE_INPUT_PER_MTOK: !Ref PriceInputPerMTok
+          PRICE_OUTPUT_PER_MTOK: !Ref PriceOutputPerMTok
+          APP_URL: https://app.leasyd.com
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
 
   WorkerTrigger:

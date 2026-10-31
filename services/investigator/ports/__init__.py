@@ -44,3 +44,24 @@ class Agent(Protocol):
 class Clock(Protocol):
     def now(self) -> float:
         """Epoch seconds."""
+
+
+class Telemetry(Protocol):
+    """One tenant's data, read-only, bound to that tenant when made (the model never picks a tenant).
+    Runs the query tools the AI SRE has (services/ai/sre.py: list_services, query_promql, search_logs,
+    search_spans, get_trace, top_values) and returns their JSON-able answers."""
+
+    def run(self, name: str, args: dict) -> dict: ...
+
+
+class LLMClient(Protocol):
+    """One model call: -> {"content": [blocks], "stop_reason": str, "usage": {"input_tokens", "output_tokens"}}."""
+    model: str
+
+    def create(self, *, system: str, messages: list, tools: list, max_tokens: int, tool_choice: dict | None = None) -> dict: ...
+
+
+class Prompts(Protocol):
+    """The investigation prompt (configurable without a code change): -> {"version", "system"}."""
+
+    def load(self) -> dict: ...

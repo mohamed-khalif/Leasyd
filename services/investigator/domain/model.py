@@ -61,6 +61,7 @@ class Evidence:
     query: dict = field(default_factory=dict)
     start: str | None = None
     end: str | None = None
+    claim: str = ""                # what the agent says this evidence shows (filled when it cites it)
 
 
 @dataclass
@@ -86,7 +87,10 @@ class Result:
         ids = [e.id for e in self.evidence]
         if len(ids) != len(set(ids)):
             raise InvalidResult("evidence ids must be unique")
-        if self.confidence > 0 and not self.evidence:
+        not_sure = self.root_cause.strip().lower().startswith("not sure")
+        if not_sure and self.confidence > 0.3:
+            raise InvalidResult("\"not sure\" can't have confidence above 0.3")
+        if not not_sure and self.confidence > 0 and not self.evidence:
             raise InvalidResult("a root cause with confidence above 0 must cite evidence")
         return self
 
@@ -105,6 +109,7 @@ class Investigation:
     attempts: int = 0
     versions: dict = field(default_factory=dict)         # agent, model, prompt, tools: what produced the result
     cost: dict = field(default_factory=dict)             # input_tokens, output_tokens, usd
+    tool_calls: list[dict] = field(default_factory=list) # every tool call: name, input, ms, evidence id or error
     version: int = 0                                     # saves so far (optimistic locking)
 
     def log(self, at, kind, detail=""):
