@@ -63,6 +63,11 @@ Resources:
                 Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_investigations/*"
+              - Sid: InvestigationsMissing   # so a missing investigation reads as "not found" (404), not "access denied"
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}"
+                Condition: { StringLike: { "s3:prefix": "_investigations/*" } }
               - Sid: Index           # index rows, dedupe claims, hourly quota, webhook tokens; users' roles (read)
                 Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
