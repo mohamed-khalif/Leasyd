@@ -24,7 +24,9 @@ CERT="$(dns CertificateArn)"
 if [[ -n "$CERT" && "$CERT" != None ]]; then
   DOMAIN_ARGS=("ApiHostName=ingest.$(dns DomainName)" "CertificateArn=${CERT}" "HostedZoneId=$(dns IngestZoneId)")
 fi
+# The template is over CloudFormation's 51,200-byte limit for a local file: it goes through S3.
 aws cloudformation deploy --stack-name obs-phaseT2 \
   --template-file infra/phaseT2-ingest.packaged.yaml \
+  --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phaseT2 \
   --capabilities CAPABILITY_NAMED_IAM --tags project=obs phase=T2 \
   --parameter-overrides "UserPoolArn=${POOL_ARN}" "${DOMAIN_ARGS[@]}" "$@"
