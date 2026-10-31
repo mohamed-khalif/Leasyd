@@ -134,6 +134,11 @@ evidence hit 100%, evidence precision 93%, false confidence 0%, $2.07 for all 12
 On the traffic spike it said "not sure" at 0.3 with load as its best guess; on the blip, "no system
 failure, one declined card".
 
+Slice 3 (prompt `inv-2026-10-31.2`, tools `telemetry-2`, 14 cases, recorded now): accuracy 14/14,
+evidence hit 100%, precision 93%, false confidence 0%, $2.63. It found the bad release from the
+version seen in the telemetry alone, the recorded deploy with no version on the telemetry, and
+passed over the deploy of another service minutes before the orders outage.
+
 Replay plays a saved run back; it checks the code around the model, not a new prompt (a changed
 prompt needs `--live`).
 
@@ -203,7 +208,7 @@ the default; `--parameter-overrides Agent=stub` switches the model off).
 2. The same `curl` again → `"joined": true`, same id.
 3. An alert: a check rule firing creates one (`obs-investigator` log `{"investigation": ...,
    "source": "alert"}`); with the rule's Investigate switch off, none.
-4. Tests: `cd services/investigator && python -m pytest tests` (31), `services/alerts` (28).
+4. Tests: `cd services/investigator && python -m pytest tests` (47), `services/alerts` (28).
 5. Eval: `python -m eval.harness --replay`.
 
 ## Assumptions and left out

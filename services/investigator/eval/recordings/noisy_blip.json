@@ -1,0 +1,158 @@
+{
+ "model": "claude-opus-5-5",
+ "turns": [
+  {
+   "content": [
+    {
+     "id": "toolu_01R2ZiSN8tbsNejJsLSYDC21",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {},
+     "name": "list_services",
+     "type": "tool_use"
+    },
+    {
+     "id": "toolu_01JJKXRT8NN3n8A2rK9CxFgs",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {},
+     "name": "get_recent_changes",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 3662,
+    "output_tokens": 53,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  },
+  {
+   "content": [
+    {
+     "signature": "CAQSpwUKEAgTGAI4AUIIdGhpbmtpbmcSDNYOZFHe63XAeFu50RoMxnuiDYk4FKnfp3f5IjAXJydSLPL470iz+poccbSXcLgdRB1quDJcdABHIq26rG7cokOFe9izL5BB0EZGhiAqxAT1rfy7reeuzfG4sUSk1De/pm9/cIcJA2YwzeV7J1v5jKYH9tYLhDhd9hmKaHSBvjVB1ueF7TyqtoPejyFaMugSSpso1S9Tc35u8y6tAmXlYqx4U26RRrcb1nl4hTW6FFYW2rywu2VisbxGAdRw2hsGBhqvLUHAF/+ngLYla11ns3uDw4w1vnE6babK+n6mHcLQYQYSZm4aX/qAsGNxE4qNiQMDSQpPE1Qap7/LqKm9C0AwC7fZ3RE9nsiJLx7t1x4EyFpqeX/0mCvK+y1bSV2063PmBrUH1vvSjyU636Qk6d236taiYUt2N/jo/kVTJK6/fuYQsZNqD1VM47FeKAYCZfiPkEgYu4VgyMW31cctzsUJhk3fAcBdHwxM5LwJYaHwW7O+U27B8TReX5UVuKWiS/0DC91GSA772vbgnEVkzQJx23J9DGF+EVZtTxDsgP9OoSHnaz/Jksl5QndP2DgJZLa9YI2MJnbRw41WTRGKl1MputUQi2g/3YOC6O2LGv5iSh8wc8EloK+cXzpKygg/GWKrYLub5TrLT/eyCAPoBEpn297zXDQIeFl9Pmd2hgrDHhFoFYMqDcXmRGVqGNSwVh2twYrDdmrULuesbyfrNa0XboU/nWUXToF/oeJ/NAvqSqQKRMh2kWZDnX8G0xIc7JyPSSriKXHjC1wtFDxcuhLCRDWGpGlyADAqTTQZyi/o8w53dOFYYIKcP+U7rRZ1iEReuKaH7sJddsZoM7XH2Mz6sXRN31R7i8/DT2JX9nW2M1amGAE=",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_01N5FRvRVbrDMXPkoDfRMjGE",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "mode": "search",
+      "errors_only": true
+     },
+     "name": "query_traces",
+     "type": "tool_use"
+    },
+    {
+     "id": "toolu_011DhBwDUNDsFL46k2wEUF8K",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "mode": "search",
+      "min_severity": "WARN"
+     },
+     "name": "query_logs",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 4040,
+    "output_tokens": 174,
+    "output_tokens_details": {
+     "thinking_tokens": 28
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  },
+  {
+   "content": [
+    {
+     "signature": "CAQSlwYKEAgTGAI4AUIIdGhpbmtpbmcSDLkmx40gxdCUVO/nghoMizpxd12HXj4OjPT6IjB5+cjkQC17SIZm8UALyX/n7NAjnd2rcFOS6OcO431fLWdokSToffauX5QTFuiVzxcqtAXnjHwg6kRCuidquyyo2JavzkDwvCJ7HYHEgI5A6EDmRLjJudi6FGwKcvKxijVpxVcE4uScIk1Ju49ewMXPPaoU1jpZbrEj5rbPHI/d64ReGRndM8umTGvq5f1SDXOaHHPttFYDZIEjJHoefYq/MR7kmaRMW0dxAos2Q4oqVpn6Evy2/Ip4+d/DJtSw/6gptq2akfAcx/GSc/9iMMB4hr16gr6nj+TaKUMaGkef+eScKhwR/X3rdJSwlrdGuQ/pOnhrNNDR45JCtlEas5S2vr7blYgjPEr9JtDNEl2Narlwd4a3vWZXOmzZiNnSRODA2ZPBqlrsFCiC3J053szm0mHBzKJ9hcJ1c/Z+KmM24ytCsc77v3lqnTRumLcOqde+xPnwnBsCfXmntTtCdpzYAOQpntdqz2zry9QR0znq8UN1SKyhNym4gJcAQnm1G5vh6hnwOHhb/P43SrDTm79tpJXQT+K8g8+FdrNQe3zSdngx/r2trvXUSu2pBbHJa3nR+97ONR1lyp0ERRTsWVjpUcRScvhx8NVFYXLFgTizEVLKbjPR2HO8DiFxn7ccAyRrOYypHbRtt0US57ZPz/OqC/9N7W4fgm1v3hN2QGVvP0UHJpHrrWmZc0mO9ezTGsosjDlBlStACjGD7cIdoa+2lyaAaKktYxWXvHIbLyAZ93u2assDiHoaqmsaGvUAKFTTqUPzHbo71vBb14423WKYLU1d91mXkQLvPQLopdH/LCEBAuzXOr4nCng6vbpuzEF+oINqfRwEEsA52hqbRXkN7LVkBJDqiJ2RI1gIlFnT/aw/irXhoOfIND+hVqXQcRg0WF7/zQMzmQOrjjp31JjAWUiqjCreAkzJDq1QpVVkBo/+O+WXnzGdUAZnqnXhS7ZDV/4ECVtWVm9BKwzxQNmTpMuUYUFRVxgB",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_01AB7Cgdp3SKsXATwkaG9qsp",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "summary": "The 33% error rate behind this alert comes from 1 failed request out of 3. At 02:13:40Z one checkout request (POST /checkout) failed because payment's POST /charge returned HTTP 402 \"card declined\". Checkout received about 0.01 requests per second in the whole window, so a single customer's declined card was enough to push the rate over 5%. This does not look like a service incident.",
+      "root_cause": "No service fault. The whole error rate is one card decline (HTTP 402 from payment POST /charge, trace e6f708192a3b4c5d6e7f8091a2b3c4d5), which is normal business behaviour. It crossed the threshold only because traffic was so low: 1 error in 3 requests.",
+      "confidence": 0.75,
+      "evidence": [
+       {
+        "id": "ev1",
+        "claim": "In the 01:14\u201302:34Z window, checkout and payment each had only 3 spans (about 0.01 requests per second), with 33.3% errors: that is 1 error out of 3."
+       },
+       {
+        "id": "ev3",
+        "claim": "The only error is trace e6f708192a3b4c5d6e7f8091a2b3c4d5 at 02:13:40Z: payment POST /charge returned 402 'card declined', and checkout POST /checkout then failed with 'payment failed: card declined (402)'."
+       },
+       {
+        "id": "ev4",
+        "claim": "No log records at WARN or above in either service during the window, so there are no infrastructure or dependency errors."
+       },
+       {
+        "id": "ev2",
+        "claim": "No deploys were recorded and no new versions were seen in the 25 hours before the window ended."
+       }
+      ],
+      "ruled_out": [
+       "A deploy or regression: none was recorded and no new version was seen (ev2).",
+       "A payment service outage or timeout: the one failure is a 402 business decline that took 210 ms, there are no other errors, and no error logs (ev3, ev4).",
+       "Checkout's own code failing: the checkout error simply passes on payment's decline (ev3)."
+      ],
+      "next_step": "Check whether about 3 requests in 80 minutes is normal overnight traffic for checkout. If it is, change the alert so it needs a minimum request count and leaves out 4xx card declines. If checkout normally gets far more traffic, look for missing traffic or missing telemetry upstream of checkout.",
+      "safe_to_auto_act": false
+     },
+     "name": "submit_investigation",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 4625,
+    "output_tokens": 937,
+    "output_tokens_details": {
+     "thinking_tokens": 37
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  }
+ ]
+}
