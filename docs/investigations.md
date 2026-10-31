@@ -83,6 +83,11 @@ CLAUDE_MODEL=anthropic.claude-opus-5-5 ANTHROPIC_KEY_PARAM=/obs/anthropic/api_ke
   python -m eval.harness --live [--record] [--only dns_elsewhere]     # about $0.20 a case
 ```
 
+First live run (prompt `inv-2026-10-31.1`, recorded in `eval/recordings/`): accuracy 12/12,
+evidence hit 100%, evidence precision 93%, false confidence 0%, $2.07 for all 12 (about $0.17 each).
+On the traffic spike it said "not sure" at 0.3 with load as its best guess; on the blip, "no system
+failure, one declined card".
+
 Replay plays a saved run back; it checks the code around the model, not a new prompt (a changed
 prompt needs `--live`).
 
@@ -149,7 +154,7 @@ the default; `--parameter-overrides Agent=stub` switches the model off).
 2. The same `curl` again → `"joined": true`, same id.
 3. An alert: a check rule firing creates one (`obs-investigator` log `{"investigation": ...,
    "source": "alert"}`); with the rule's Investigate switch off, none.
-4. Tests: `cd services/investigator && python -m pytest tests` (30), `services/alerts` (28).
+4. Tests: `cd services/investigator && python -m pytest tests` (31), `services/alerts` (28).
 5. Eval: `python -m eval.harness --replay`.
 
 ## Assumptions and left out

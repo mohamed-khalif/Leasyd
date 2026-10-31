@@ -1,0 +1,290 @@
+{
+ "model": "claude-opus-5-5",
+ "turns": [
+  {
+   "content": [
+    {
+     "id": "toolu_016ze1duKLj6Xd443SWCdmfH",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {},
+     "name": "list_services",
+     "type": "tool_use"
+    },
+    {
+     "id": "toolu_01BpZd6hmxeKN4sX3PCTfWMe",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "mode": "top",
+      "group_by": [
+       "service",
+       "name",
+       "status_message"
+      ],
+      "where": [
+       {
+        "field": "status_code",
+        "op": "=",
+        "value": 2
+       }
+      ],
+      "limit": 20
+     },
+     "name": "query_traces",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 3047,
+    "output_tokens": 166,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  },
+  {
+   "content": [
+    {
+     "signature": "CAQSowUKEAgTGAI4AUIIdGhpbmtpbmcSDAooUdEEjMzFJIej0hoM+9+n825oHXMYDRhxIjBfSZk0QGGRdPEeQ9Go00bkvFr68j/x6KI9rEsaEg/X6iaC32IB6J5mnX4DGzmgwrcqwAQ5CMrw2EzuSGMMPo01SigAw+KfNmd/ZCiB+xwjeYZFMmRZ57XBbxzUN500yMzE9iNmQW+r6/ILfl1SUXJpmezd8tUN9BoqDAPq2vwFTIZDBhlnJpAN7nnRE9Nt6XBXDQ3uuJk7nHrrqBLmHFo3QBBz4bn02MPtXHd6tJrZPP/QtcUjv3eNFORZ9T6hoQLYAVlmM2Qr5zGaoaDjPRSvJaRLh817HE36cnhY79ePFyZol8Q1JYjWKScAz+lmfz47hQ7XcPWWiu5yu0VorOTaCJvsubnmjHaMD9u1AfV4pYx9h1pobT9avK6jc2d7r9F3y/a1xv7Luyr5x2HV1xl/iJpCNyPE8cTseV6xXrWWhM6JL3xfbnMuD2j2cTenJQpmMnJ16alHMWpgIsfGCzwQkNM+htEmyw5T+Vg5zU639V0EHmb5MuM7fPcHNDh2raMILfSJzvaOp+XMC2+2VZPpJHc3S3FKGc0mnffwmpjXnJlQuVWeJlZ+AYCMpeULq0YcdjxgyB5/5KB+l6qwIWcvgc/K+LJjsR8E3SZ8sj7Pye2R5KZumA4c8GqA3RloEWTUgSDhrSJTkoUSJJvv569oCvU/LV3AGKEBZYctjENS8FCmNfwXGg48ZgNiOEOrx/2iXvQf1aaqQ5IFx9fADxXQlqGJ6EeWPmtEJ5IDwmkV6EfmjM0AJacMxa2R5nmGiOjndyyW/ueVD+r5CIiV0K3IhEAfqSBRBYMJUvL1na+nwhtvtlw5/JxhR6guenIyHOpUESsYAQ==",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_01DsQHQnHKTbYQKpN8VZCPAq",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "mode": "top",
+      "service": "search",
+      "min_severity": "WARN",
+      "group_by": [
+       "body"
+      ],
+      "limit": 15
+     },
+     "name": "query_logs",
+     "type": "tool_use"
+    },
+    {
+     "id": "toolu_01AmDQpcrzWNrqrVd4VkkPBA",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "promql": "sum by (status_code) (rate(leasyd.spans{service_name=\"search\"}[2m]))",
+      "step_seconds": 300
+     },
+     "name": "query_metrics",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 3639,
+    "output_tokens": 276,
+    "output_tokens_details": {
+     "thinking_tokens": 28
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  },
+  {
+   "content": [
+    {
+     "signature": "CAQS8gUKEAgTGAI4AUIIdGhpbmtpbmcSDO1N6BEyE8dOsjyNoRoMamQQ/Vl6JZiHHIYmIjCDYvzpaTwuCRPMfE/2F4iYt7sSCW+HSm6RzlBpsZPLetTejOspVlT8hA4MZgLCNsoqjwUqYPrh4NtXaH44EzA14nTuqKJm0I2g0tksODfFh+cfnNOEzqxqIsrtwShxzNRbMhsbIkaPnWk9cDTs3FXCG0JCenNE/h0n7Fbw3sYYkmewJ/kKEH+X8s0rjGNP7oi4cnkQHYnCVrD4p1+2kQXX+hwLQub2e5Fm7XOCyLFQnLfwkZhL2uZD1OSLzuW31/BeiPoKXQamX44rfRLXcwt3EzrnlxdGcN9yqComrff51vGeYylRJ/bH2kwrvyB54cKZ5lGFw5WoCrExhJELkLBJOxvy8t8ZfrTJSkfMyJwdJ9ZbJjVx3BK16rVS1PhgGlo+seNcAOBvrgdNUxacRcgTlwK8NPEWmaxRxI7bRU/ATXP9qA9vHYWjh9CEge+zdTf4tiF/K05RcAxcKemTZiPEsoCH6+PfUwPvMkx5orbccp5ykK5vEw3cv4dm7MGtdk62//rns0ew8Y0radW/AH1c6xvI8CpuuVS358AmPRby1Ob9sVrxDptrVG6nb3h0gRBluO7qBDUEAza6o9F4YiXl8IkBV9Dt8BqzRi7Sxtl54Y+yTyh8BwkqgUWj5j01egZMsMYW8fRMKTsuAW3xTt4AorAeliA1E0ga+pQ0VWwaeY42ugmmUzaHIaoMfyLHsP7R2KlKfzA815k+sGnoWIfzEuqB6V6npAIcbJ0ZqdggiTCzO70hYgyHm/+sUyNq6tsnWUZz14OC1t1uLVX/NNTAXcAJsJvQ8ii7zmUUDbJd0UbBMUXzS+oe1CxZV1T+06QTrToFO3iQrWKtGaOZe5DJK81StAzlJXjqvCtyh/0b6htl36alQHorDggIaFlRSyN+dXkeJlwMwPCeWK8R31vBC+VmUfbF2VRHQ33O7bYE0gXwGAE=",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_01DxTzYwZjz9oVPebSC65VoV",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "promql": "jvm_memory_used_bytes{service_name=\"search\"}",
+      "step_seconds": 300
+     },
+     "name": "query_metrics",
+     "type": "tool_use"
+    },
+    {
+     "id": "toolu_014R8yi9HAWxob4CK54fpi1a",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "mode": "search",
+      "service": "search",
+      "min_severity": "WARN",
+      "limit": 10
+     },
+     "name": "query_logs",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 4165,
+    "output_tokens": 235,
+    "output_tokens_details": {
+     "thinking_tokens": 25
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  },
+  {
+   "content": [
+    {
+     "signature": "CAQS8wcKEAgTGAI4AUIIdGhpbmtpbmcSDJUWgeRgeUPqYh2t0hoMg3TAJnb1JJ6SNKL4IjABG1BI+DkWlBMo1XK3U5tUVhZ7NC1KUw7NqCkLyQ9UBmpkhDO7yyemy7ZssZx0gIgqkAed6Rk4YSO3sVAQhhK1hjuVPJOOjjXEuOmeVnlKhtOgZBVzctbSvn0O3lSjwZ1YB+jxJxtAW4ZIt767HQ8BzkUsB9jR4yFW60gdoH7DlICk2On2xOF9bJWeR7uD+V2A8r2CS9+1wrpgmeb2/mRmGrspHfUPXR1PqKhYNXEbsPFa6SAu4tB65GfVVR8tEKXfYzsEwAOH2f+hxS/0Tqh0+zPosgKYYHn23KiY4yb5Akl/FMQrBYfBr6iTd9k/8ZnOO3jaWZ3WLyBkvtNAGwCmw9s5I8294lxr5JFMA2iouH/Kz/FRmRRw2nnaDf0Jsf/5+p+zGIAFw7AWLX3b1B5IP2FXCK+oJ/Pc6KWPJoATkZU1q8jh53sao/xZ4PonVNknVJA1yk6pdARLPzRQhdQ1WK69mp51YXBphYNqtV4iUTWy+lQfh+4Jd0cdtU7QgootCgGP65wSd/83EtFGqt+OSYo/JervSVcGxg52D6GRqupfKVH21GDa1D6SzvuBGprJ9LkYB+uON9GQNL3zkRI0qxiuGgOVwZKAO+fqnsZhjdu0iWpKqU0EGAKl7PbvMmkXdPWLpRBqr9MlerBRsMnsIO0kPjA7wGNApKdiL2RObT9wiT4Kimmm3Rqnoa4ryvSvgJijK3NztOx19E3XsH1BoG0GgX1XsUJoFf3lOsm5c2KfmaQ/zVz9zp48ZzRtTRw9Rqf0Z8TpamuKw/7Op//EnM7yQyzNzYqorPbjLRDId42UcXdGJ0hBbGc1mFPkFxLlP+gUi4+T0+nyJtq80OZmrbmeVEWksCpxrioro5xKSqyX9sLjI+dyg+9z/GFj6fspieTy0YrMj+6oAbrxsJH1t4o+KJ/ZoGJizWHk1YIckzTtktuRBjGrko9B5/+Ih7I9zqWBsG0cj5IB56IDKWhLx9LxaDHLgaVWlqyTNoRZpyUvT1tnUyVstetc7TX9AtpJclRaLHRTx4XiiEZwQRJQNs+Lv/6qt+pK1FY59Gnp09cp7pvUPzGAN8/QuYHfLN+2dRW0Icl5HjOuVQ8Dmmt8CKGB0vuDH2iKcyP5tWtRzZBwQWCdQj7U0hng7LB8gOxIsvT+LZoz6SBV3y5pBJoqhJ1ZhSDqDXrcfqTx4j7rYnMFfsZOnFTW5+Kti9cLJBWa6PO2GdXrMm19bIwQoxOR7goj0G66y63GrqS8/vpTTH5lWtcFwL4xLUF+2UeqZ/kYF98YAQ==",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_011EReJ2uza4VWgYi6ALYhBL",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "promql": "sum(rate(leasyd.spans{service_name=\"search\", span_kind=\"SPAN_KIND_SERVER\"}[5m]))",
+      "step_seconds": 600
+     },
+     "name": "query_metrics",
+     "type": "tool_use"
+    },
+    {
+     "id": "toolu_017F1CeXVR4FuG5wkzHMMBL1",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "mode": "search",
+      "service": "search",
+      "errors_only": true,
+      "limit": 3
+     },
+     "name": "query_traces",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 4924,
+    "output_tokens": 337,
+    "output_tokens_details": {
+     "thinking_tokens": 104
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  },
+  {
+   "content": [
+    {
+     "signature": "CAQSrwYKEAgTGAI4AUIIdGhpbmtpbmcSDEpit0NaJRje3CKK+RoM8EybKbi5gzCk8ZNKIjCdHSkicxF7qR77/BrfMa3ieytAaDpUr+VgGOs/sjDDzvdqzQ2JVVbHaGLw2LBxYgEqzAVnXgVEoGd6hEKMytynKyQVKVdISNkoKcs5aJXLymRnPUB2sdzjt8TBU/1eArGX2koW0IoD50T5CHpf5IFE6nN4y7+NGuWHGbFy6yC132rqNjK05J6VaeD+mm1Blf38G2DD98wiMZSN7qti8mQ5Kq3ANK+g8m5jBD44n8fPXLMm7PYWkNvV0a1I9Wd1pJGX1ENGHY8zHg05pLJS0EOMMiMOrUzJ63k4RBbd/ejSsXMxT+4/W3zP7TTgCb89HWIdrNRjH8RdGQh3BnFrvbY94pfWBqEpqd8lecm/UwG0jJLTwrJ1OkKJy+C3U+j7+MJDcQ2PJ8XIYX0ei2HyJfmXnb00zdCWUyvEEIU1Xpk/zfILiXJCcF4xQMSKkBCDL0kqXUc7IyM0hw6GgsNPUQbyxu6dYshrhSH3Ng27D4PZUmUkRaC2y2R7PEk/awtekCMX2b/QxK6oISA5XwVOcS8FzE/JhT1W3Gdl1OEnONSIAETlWb54hDfdsbuQejfJ+92n1EJ4N/0TMC2LO/kTvEwP84Z29a/ut4vF+cOtL43wHKPTSPR8MDnJCjlGAJOFD8V5B6g/Tf18umA3fAS1Ohp/B7cj7MZBc6qQEnDzC6J59gOPcBmVyqDlkjCAWcXjz9mfHVbyR71fHvcm9GKcCOZddYQDxlwS9OZ81E7XW0tYk5WTQnIIYW/76QVxeBaht6OKRwnSuIN1mqzS/r0TlIe9SJ0piv8CjDrBsyWqqbNMp276TiG6PF8lkZ7A4bJ55S7pIxpmAIEPw1N6aVH5sQ8w2eU+RrPBX67ERrWtfchLmijBh5RVrmI1B3qBCk6G156KAdvMxKsfTTr4vxNl9xk6poOaTikGjPA37RuHzx591VBHNpldDUXMia+XlRWOVH12fiGLkBP0g/2SKImdpILT5ErWXfFA9HkGit4DJvJsGAf5hgBwSEIa3FbAQqz9wRgB",
+     "thinking": "",
+     "type": "thinking"
+    },
+    {
+     "id": "toolu_01EfUTemf5mUjxDxr6VnfzSK",
+     "caller": {
+      "type": "direct"
+     },
+     "input": {
+      "summary": "The search service ran out of JVM heap. Heap use climbed steadily from about 1.1 GB at 01:30 to a flat 2.0 GB by 02:14 UTC. After that, search requests fail with java.lang.OutOfMemoryError, the JVM spends 92% of its time in garbage collection, and api-gateway returns upstream connect/reset errors on GET /search. The result is a 3.4% error rate on search.",
+      "root_cause": "search ran out of JVM heap. Memory grew steadily for about 45 minutes, which looks like a leak or unbounded cache, until it reached a 2.0 GB ceiling (probably the max heap). The service then spent most of its time in garbage collection and GET /search threw java.lang.OutOfMemoryError. api-gateway shows that as 'upstream connect error or disconnect/reset before headers'. What caused the growth (a leak, a cache, or a change in workload) is not established.",
+      "confidence": 0.75,
+      "evidence": [
+       {
+        "id": "ev1",
+        "claim": "search has a 3.4% error rate and 880 ms p95, api-gateway 1.1%, catalog 0% at 20 ms p95."
+       },
+       {
+        "id": "ev2",
+        "claim": "Error spans are api-gateway GET /search 'upstream connect error or disconnect/reset before headers' (700) and search GET /search 'java.lang.OutOfMemoryError: Java heap space' (120)."
+       },
+       {
+        "id": "ev5",
+        "claim": "search heap went 1.1 GB (01:30) \u2192 1.5 GB (02:00) \u2192 1.9 GB (02:10) \u2192 2.0 GB at 02:14, the alert start, and stayed flat at 2.0 GB through 02:28."
+       },
+       {
+        "id": "ev3",
+        "claim": "search logs: 14x 'GC overhead: 92% of time in GC over the last 60s' and 9x OutOfMemoryError."
+       },
+       {
+        "id": "ev6",
+        "claim": "FATAL OutOfMemoryError at 02:28:50, GC-overhead warning at 02:20."
+       },
+       {
+        "id": "ev8",
+        "claim": "Sample failing trace: search GET /search took 1800 ms and failed with OutOfMemoryError."
+       }
+      ],
+      "ruled_out": [
+       "catalog dependency: 0% errors and 20 ms p95 (ev1).",
+       "api-gateway as origin: its errors are upstream resets on /search only, which follow from search failing (ev2).",
+       "Not ruled out: a traffic spike as the driver of heap growth. My request-rate query came back empty (ev7), so I couldn't tell load growth apart from a leak."
+      ],
+      "next_step": "Take a heap dump from a search instance, or check what was deployed or changed in search shortly before 01:30, and find what is growing (a cache, a collection, a query result buffer). As a stopgap, a person could restart the instances or raise the heap limit.",
+      "safe_to_auto_act": false
+     },
+     "name": "submit_investigation",
+     "type": "tool_use"
+    }
+   ],
+   "stop_reason": "tool_use",
+   "usage": {
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "global",
+    "input_tokens": 5571,
+    "output_tokens": 1144,
+    "output_tokens_details": {
+     "thinking_tokens": 37
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+   }
+  }
+ ]
+}

@@ -6,7 +6,8 @@ expect:
               (or one of `accept`, e.g. "too few requests to be an incident")
   cause       groups of words; the root cause must contain one word of every group
   accept      for not_sure: answers that are also right
-  forbid      words the root cause must not contain (the wrong turns this case sets up)
+  forbid      phrases the root cause must not contain (the wrong turns this case sets up); phrases, not
+              bare names, so a right answer that mentions them in passing still counts
   probes      model-level tool calls that reach the key evidence (tests check the fixtures answer them)
 
 Four cases have no change and the cause elsewhere, or no cause at all: dns_elsewhere,
@@ -222,7 +223,7 @@ CASES = [
         "traces": {"91a2b3c4d5e6f708192a3b4c5d6e7f80": trace([
             node(0, 0, "api-gateway", "GET /api/orders", 3080), node(1, 1, "api-gateway", "dns.lookup auth.idp.example", 3010),
             node(1, 3015, "orders", "GET /orders", 60)], key=True)},
-        "expect": {"kind": "cause", "cause": [["dns", "lookup", "resolver", "name resolution"]], "forbid": DEPLOY_WORDS + ["orders"]},
+        "expect": {"kind": "cause", "cause": [["dns", "lookup", "resolver", "name resolution"]], "forbid": DEPLOY_WORDS},
         "probes": [("query_traces", {"mode": "search", "service": "api-gateway", "min_duration_ms": 1000})],
     },
     {
@@ -282,7 +283,8 @@ CASES = [
         ],
         "metrics": [series(["redis"], {"service_name": "cart", "db_system": "redis"}, 0.002, 1.3, 1.3,
                            [("01:30", 0.002), ("02:10", 0.003), ("02:14", 0.9), ("02:30", 1.3)], key=True)],
-        "expect": {"kind": "cause", "cause": [["redis", "cache"]], "forbid": ["postgres"]},
+        "expect": {"kind": "cause", "cause": [["redis", "cache"]],
+                   "forbid": ["postgres database", "postgres is", "caused by postgres", "database is slow"]},
         "probes": [("query_logs", {"mode": "search", "service": "cart"})],
     },
 ]

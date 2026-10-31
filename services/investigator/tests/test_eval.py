@@ -86,3 +86,11 @@ def test_a_recorded_run_replays_to_the_same_result(tmp_path):
     rec.save(str(tmp_path / "r.json"))
     again = harness.run_case(case, harness.Replay(str(tmp_path / "r.json")))
     assert {k: again[k] for k in ("correct", "confidence", "cited", "root_cause")} == {k: first[k] for k in ("correct", "confidence", "cited", "root_cause")}
+
+
+def test_the_recorded_live_run_still_scores():
+    """The saved live run (eval/recordings/), played back through today's code: a change to the checks,
+    the tools or the scoring that would have turned right answers wrong shows up here."""
+    report = harness.run_all(lambda case: harness.Replay(f"{harness.RECORDINGS}/{case['id']}.json"))
+    s = report["summary"]
+    assert s["accuracy"] >= 0.9 and s["false_confidence_rate"] <= 0.1 and s["evidence_hit"] >= 0.9, report["summary"]
