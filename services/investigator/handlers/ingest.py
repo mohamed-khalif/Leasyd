@@ -6,9 +6,12 @@
   GET  /v1/app/investigations                       signed in: the tenant's investigations, newest first
   GET  /v1/app/investigations/{id}                  one, in full (trigger, events, result)
   POST /v1/app/investigations/webhook-token         owners: a new webhook URL (shown once; the old one stops)
+  POST /v1/deploys                                  CI records a deploy, with an ingest API key (the key's
+                                                    tenant, set by the API's key authorizer)
+  GET  /v1/app/deploys?service=&days=               signed in: the tenant's recorded deploys, newest first
 
-Every route takes the tenant from the alert's own record, the webhook token or the sign-in token,
-never from the request body.
+Every route takes the tenant from the alert's own record, the webhook token, the API key or the
+sign-in token, never from the request body.
 """
 
 import base64
@@ -17,8 +20,9 @@ import json
 import re
 import secrets
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
-from domain import triggers
+from domain import deploys, triggers
 from domain.workflow import iso, open_investigation
 from handlers import deps
 
@@ -40,10 +44,17 @@ def handler(event, context=None):
         resource = event.get("resource") or ""
         if resource == "/v1/investigations/webhook/{token}":
             return _http(*webhook((event.get("pathParameters") or {}).get("token") or "", _body(event)))
+        if resource == "/v1/deploys":
+            tenant = ((event.get("requestContext") or {}).get("authorizer") or {}).get("tenant")
+            if not tenant:
+                raise Refused(401, "send x-api-key")
+            return _http(*record_deploy(tenant, _body(event)))
         claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
         tenant, user = claims.get("custom:tenant"), (claims.get("email") or "").lower()
         if not tenant or not user:
             raise Refused(401, "sign in first")
+        if resource == "/v1/app/deploys":
+            return _http(*list_deploys(tenant, event.get("queryStringParameters") or {}))
         return _http(*app(tenant, user, event.get("httpMethod", "GET"),
                           ((event.get("pathParameters") or {}).get("proxy") or "").strip("/")))
     except Refused as e:
@@ -77,6 +88,27 @@ def webhook(token, body):
     inv, joined = open_investigation(deps.store(), deps.queue(), deps.clock(), tenant, x, secrets.token_hex(8), deps.CAP)
     print(json.dumps({"investigation": inv.id, "tenant": tenant, "source": x.source, "joined": joined, "status": inv.status}))
     return 202, {"investigation": inv.id, "joined": joined, "status": inv.status}
+
+
+def record_deploy(tenant, body):
+    now = deps.clock().now()
+    try:
+        d = deploys.parse(body, datetime.fromtimestamp(now, timezone.utc))
+    except ValueError as e:
+        raise Refused(400, str(e))
+    deps.store().put_deploy(tenant, d, now)
+    print(json.dumps({"deploy": d.id, "tenant": tenant, "service": d.service, "version": d.version, "status": d.status}))
+    return 201, {"deploy": d.id, "deployed_at": d.deployed_at}
+
+
+def list_deploys(tenant, q):
+    try:
+        days = min(max(int(q.get("days") or 7), 1), deploys.KEEP_DAYS)
+    except ValueError:
+        raise Refused(400, "days: a number")
+    end = datetime.fromtimestamp(deps.clock().now(), timezone.utc)
+    found = deps.store().deploys(tenant, iso((end - timedelta(days=days)).timestamp()), iso(end.timestamp() + 60), q.get("service") or None)
+    return 200, {"deploys": found[::-1]}
 
 
 def app(tenant, user, method, path):

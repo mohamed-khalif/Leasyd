@@ -172,3 +172,37 @@ def test_store_refuses_a_stale_save(env):
     with pytest.raises(StaleWrite):
         store.save(two)
     assert store.get("globex", "a" * 16) is None
+
+
+def deploy(env, body, tenant="acme"):
+    ctx = {"authorizer": {"tenant": tenant, "scope": "ingest"}} if tenant else {}
+    out = env.ingest.handler({"resource": "/v1/deploys", "httpMethod": "POST", "requestContext": ctx,
+                              "body": base64.b64encode(json.dumps(body).encode()).decode(), "isBase64Encoded": True})
+    return out["statusCode"], json.loads(out["body"])
+
+
+def deploys(env, tenant="acme", user="ana@acme.io", **q):
+    out = env.ingest.handler({"resource": "/v1/app/deploys", "httpMethod": "GET", "queryStringParameters": q or None,
+                              "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant, "email": user}}}})
+    return out["statusCode"], json.loads(out["body"])
+
+
+def test_ci_records_deploys_for_its_keys_tenant_only(env, monkeypatch):
+    from domain.workflow import SystemClock
+    monkeypatch.setattr(SystemClock, "now", lambda self: 1793327400.0)          # 2026-10-30T02:30:00Z
+    body = {"service": "payment", "version": "3.1.0", "deployed_at": "2026-10-30T02:11:30Z", "url": "https://ci.example/runs/1"}
+    status, out = deploy(env, body)
+    assert status == 201 and out["deployed_at"] == "2026-10-30T02:11:30Z"
+    assert deploy(env, body) == (201, out)                                           # posted twice: one deploy
+    assert deploy(env, {**body, "service": "cart", "deployed_at": "2026-10-30T01:00:00Z"})[0] == 201
+    assert deploy(env, {"service": "x"})[0] == 400 and deploy(env, body, tenant=None)[0] == 401
+    status, listed = deploys(env)
+    assert status == 200 and [(d["service"], d["version"]) for d in listed["deploys"]] == [("payment", "3.1.0"), ("cart", "3.1.0")]
+    assert [d["service"] for d in deploys(env, service="cart")[1]["deploys"]] == ["cart"]
+    assert deploys(env, tenant="globex", user="cy@globex.io")[1] == {"deploys": []}
+    from adapters.aws import TenantDeploys
+    seen = TenantDeploys(env.deps.store(), "acme").between("2026-10-30T02:00:00Z", "2026-10-30T02:30:00Z")
+    assert [(d["service"], d["url"]) for d in seen] == [("payment", "https://ci.example/runs/1")]
+    assert TenantDeploys(env.deps.store(), "globex").between("2026-10-29T00:00:00Z", "2026-10-31T00:00:00Z") == []
+    row = env.table.get_item(Key={"pk": f"deploy#acme#2026-10-30T02:11:30Z#{out['deploy']}"})["Item"]
+    assert row["tenant"] == "acme" and int(row["expires"]) == 1793327400 + 90 * 86400

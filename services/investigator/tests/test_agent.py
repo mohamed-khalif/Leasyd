@@ -81,10 +81,10 @@ def test_a_finding_cites_the_tools_evidence_with_links_and_costs_are_logged():
     assert tel.calls[1] == ("search_spans", {"service": "payment", "errors_only": True, "start": "2026-10-30T01:14:00Z", "end": "2026-10-30T02:34:00Z"})
     assert [c["name"] for c in i.tool_calls] == ["list_services", "query_traces"] and i.tool_calls[1]["evidence"] == "ev2"
     assert i.cost["calls"] == 3 and i.cost["input_tokens"] == 3000 and i.cost["usd"] == round(3000 / 1e6 * 5 + 300 / 1e6 * 25, 4)
-    assert a.versions == {"model": "claude-test", "prompt": BuiltIn().load()["version"], "tools": "telemetry-1"}
+    assert a.versions == {"model": "claude-test", "prompt": BuiltIn().load()["version"], "tools": "telemetry-2"}
     first = s.requests[0]
     assert "<alert>" in first["messages"][0]["content"] and {t["name"] for t in first["tools"]} == {
-        "list_services", "query_metrics", "query_logs", "query_traces", "submit_investigation"}
+        "list_services", "query_metrics", "query_logs", "query_traces", "get_recent_changes", "get_service_context", "submit_investigation"}
     assert '<evidence id="ev1">' in s.requests[1]["messages"][2]["content"][0]["content"]
 
 
@@ -158,3 +158,54 @@ def test_redact_patterns():
     assert "hunter2" not in text and "YWxhZGRpbjpvcGVuc2VzYW1l" not in text and "eyJzdWIiOiIxIn0" not in text and "pa55word" not in text
     assert "ghp_" not in text and "7946 0958" not in text and "postgres://" in text and "@db:5432" in text
     assert redact("trace 4bf92f3577b34da6a3ce929d0e0e4736 took 1234 ms")[0] == "trace 4bf92f3577b34da6a3ce929d0e0e4736 took 1234 ms"
+
+
+class Summaries(Telemetry):
+    """Answers the change tools' SQL over the per-minute summaries, and is the Deploys port."""
+
+    def __init__(self, versions=(), edges=(), deploys=()):
+        super().__init__()
+        self.versions, self.edges, self.recorded, self.asked = list(versions), list(edges), list(deploys), []
+
+    def run(self, name, args):
+        self.calls.append((name, args))
+        if "edge_1m" in args["sql"]:
+            return {"columns": ["source", "target", "calls", "errors"], "rows": self.edges}
+        return {"columns": ["service", "version", "first_seen", "last_seen", "requests", "errors"], "rows": self.versions}
+
+    def between(self, start, end, service=None):
+        self.asked.append((start, end, service))
+        return self.recorded
+
+
+def test_recent_changes_bring_recorded_deploys_and_new_versions_from_the_day_before():
+    tel = Summaries(versions=[["cart", "2.4.3", "2026-10-29T01:14:00Z", "2026-10-30T02:12:00Z", 900, 1],
+                              ["cart", "2.5.0", "2026-10-30T02:12:00Z", "2026-10-30T02:34:00Z", 300, 90]],
+                    deploys=[{"id": "d1", "service": "cart", "version": "2.5.0", "deployed_at": "2026-10-30T02:11:00Z"}])
+    s = Script([turn(use(1, "get_recent_changes")), turn(use(2, "submit_investigation", **{**GOOD, "evidence": [{"id": "ev1", "claim": "x"}]}))])
+    a = agent(s, tel, deploys_for=lambda tenant: (tenant == "acme" or pytest_fail()) and tel)
+    i = inv()
+    r = a.investigate(i)
+    sent = s.requests[1]["messages"][2]["content"][0]["content"]
+    assert '"recorded_deploys": [{"id": "d1"' in sent and '"previous": "2.4.3"' in sent and '"version": "2.5.0"' in sent
+    assert tel.asked == [("2026-10-29T01:14:00Z", "2026-10-30T02:34:00Z", None)]          # a day before the window
+    assert "FROM svc_1m" in tel.calls[0][1]["sql"] and tel.calls[0][1]["start"] == "2026-10-29T01:14:00Z"
+    assert r.evidence[0].kind == "changes" and r.evidence[0].summary == "1 recorded deploys, 1 version changes"
+
+
+def test_no_change_is_said_plainly_and_names_are_quoted_safely():
+    tel = Summaries(versions=[["cart", "2.4.3", "2026-10-29T01:14:00Z", "2026-10-30T02:34:00Z", 900, 1]])
+    s = Script([turn(use(1, "get_recent_changes", service="it's"), use(2, "get_service_context", service="cart")),
+                turn(use(3, "submit_investigation", **{**GOOD, "root_cause": "not sure", "evidence": []}))])
+    i = inv()
+    agent(s, tel).investigate(i)                                                     # no Deploys port: inferred only
+    results = s.requests[1]["messages"][2]["content"]
+    assert "No deploy recorded and no version change seen for it's" in results[0]["content"]
+    assert "service = 'it''s'" in tel.calls[0][1]["sql"]
+    assert '"versions": [{"version": "2.4.3"' in results[1]["content"] and "edge_1m" in tel.calls[2][1]["sql"]
+    assert [c["evidence"] for c in i.tool_calls] == ["ev1", "ev2"]
+    assert i.result is None and results[1]["content"].startswith('<evidence id="ev2">')
+
+
+def pytest_fail():
+    raise AssertionError("deploys asked for another tenant")

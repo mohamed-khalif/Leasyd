@@ -691,6 +691,45 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-investigator/invocations"
         TimeoutInMillis: 29000
+  # Deploys (obs-phaseI1): CI records each deploy with an ingest API key (the key authorizer sets the
+  # tenant; the key's usage plan applies), for investigations to line changes up; the app lists them.
+  DeploysResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref V1Resource, PathPart: deploys }
+  DeploysMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref DeploysResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref Authorizer
+      ApiKeyRequired: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-investigator/invocations"
+        TimeoutInMillis: 29000
+  AppDeploysResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: Logins
+    Properties: { RestApiId: !Ref Api, ParentId: !Ref AppResource, PathPart: deploys }
+  AppDeploysMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref AppDeploysResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref UserAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-investigator/invocations"
+        TimeoutInMillis: 29000
   # POST /v1/stripe/webhook is public too: Stripe's billing events, each signed (billing.py verifies it).
   StripeResource:
     Type: AWS::ApiGateway::Resource
@@ -1204,7 +1243,7 @@ Resources:
       ResponseTemplates:
         application/json: '{"message": "Leasyd is temporarily unavailable; retry shortly"}'
 
-  DeploymentV25:
+  DeploymentV26:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [LogsMethod, TracesMethod, MetricsMethod, CloudWatchMetricsMethod, CloudWatchLogsMethod, QueryMethod, QueryJobMethod, QueryJobCancelMethod, McpMethod, RumMethod, InvalidApiKeyResponse,
                 Default5xxResponse, IntegrationFailureResponse]
@@ -1212,13 +1251,13 @@ Resources:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppQueryJobCancelMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod}, ${DemoSessionMethod}, ${ReportMethod}, ${InvestigationsWebhookMethod}, ${AppInvestigationsMethod}, ${AppInvestigationMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppQueryJobCancelMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod}, ${DemoSessionMethod}, ${ReportMethod}, ${InvestigationsWebhookMethod}, ${AppInvestigationsMethod}, ${AppInvestigationMethod}, ${DeploysMethod}, ${AppDeploysMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref Api
-      DeploymentId: !Ref DeploymentV25
+      DeploymentId: !Ref DeploymentV26
       StageName: !Ref StageName
       MethodSettings:
         - ResourcePath: "/*"

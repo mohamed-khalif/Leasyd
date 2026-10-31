@@ -3,11 +3,15 @@ incident, answered through the same AI SRE tool names and arguments the real ada
 (adapters/claude.py SreTelemetry), so the agent's tools run unchanged on top of it.
 
 Pools are filtered the way obs-query would (service, severity, text, errors, attributes) and
-top_values groups them, each item counting `n` times. Items marked key=True are the ones that show
-the root cause: the scorer checks the finding cites evidence that contained one.
+top_values groups them, each item counting `n` times. The per-minute summaries the change tools read
+(svc_1m, edge_1m) come from the case's `versions` (default: each service on one version all along)
+and `edges`; recorded deploys from its `deploys` (this object is the agent's Deploys port too).
+Items marked key=True are the ones that show the root cause: the scorer checks the finding cites
+evidence that contained one.
 """
 
 import json
+import re
 
 SEVERITY = {"TRACE": 1, "DEBUG": 5, "INFO": 9, "WARN": 13, "ERROR": 17, "FATAL": 21}
 HIDDEN = ("key", "n")
@@ -60,12 +64,50 @@ class FixtureTelemetry:
     data and whether it held a key item (the n-th call is the agent's evidence ev<n>)."""
 
     def __init__(self, case):
-        self.case, self.log = case, []
+        self.case, self.log, self.by_evidence, self._marked = case, [], {}, 0
 
     def run(self, name, args):
         out, items = getattr(self, "_" + name)(args)
-        self.log.append({"tool": name, "args": args, "data": bool(items), "key": any(i.get("key") for i in items)})
+        self._note(name, items)
         return out
+
+    def _note(self, name, items):
+        self.log.append({"tool": name, "data": bool(items), "key": any(i.get("key") for i in items)})
+
+    def evidence_made(self, ev_id):
+        """The agent's tools made evidence ev_id from the calls since the last one."""
+        got = self.log[self._marked:]
+        self._marked = len(self.log)
+        self.by_evidence[ev_id] = {"data": any(c["data"] for c in got), "key": any(c["key"] for c in got)}
+
+    # -- the Deploys port
+
+    def between(self, start, end, service=None):
+        hits = [d for d in self.case.get("deploys") or [] if start <= d["deployed_at"] <= end
+                and (not service or d["service"].lower() == service.lower())]
+        self._note("deploys", hits)
+        return [_clean(d) for d in sorted(hits, key=lambda d: d["deployed_at"])]
+
+    # -- the summaries, as SQL answers
+
+    def _versions(self):
+        if "versions" in self.case:
+            return self.case["versions"]
+        return [{"service": s["service"], "version": "1.0.0", "first_seen": "2026-10-20T00:00:00Z", "last_seen": "2026-10-30T02:44:00Z",
+                 "requests": s.get("spans", 0), "errors": round(s.get("spans", 0) * (s.get("error_pct") or 0) / 100)}
+                for s in self.case.get("services") or [] if s.get("spans")]
+
+    def _run_sql(self, a):
+        sql, start, end = a["sql"], a.get("start", ""), a.get("end", "")
+        svc = re.search(r"service = '((?:[^']|'')*)'", sql)
+        svc = svc.group(1).replace("''", "'").lower() if svc else None
+        if "from edge_1m" in sql.lower():
+            hits = [e for e in self.case.get("edges") or [] if svc in (e["source"].lower(), e["target"].lower())]
+            return {"columns": ["source", "target", "calls", "errors"], "rows": [[e["source"], e["target"], e["calls"], e["errors"]] for e in hits]}, hits
+        hits = [v for v in self._versions() if v["first_seen"] < end and v["last_seen"] >= start and (not svc or v["service"].lower() == svc)]
+        cols = ["service", "version", "first_seen", "last_seen", "requests", "errors"]
+        rows = [[v["service"], v["version"], max(v["first_seen"], start), min(v["last_seen"], end), v["requests"], v["errors"]] for v in hits]
+        return {"columns": cols, "rows": sorted(rows, key=lambda r: (r[0], r[2]))}, hits
 
     def _rng(self, a):
         return {"range": [a.get("start"), a.get("end")]} if a.get("start") else {}

@@ -7,6 +7,11 @@ so the finding can cite it.
   query_metrics    PromQL over metrics, spans and logs as series
   query_logs       log records (search) or log groups (top: most frequent messages, by service...)
   query_traces     spans (search), groups of spans (top), or one whole trace (trace)
+  get_recent_changes   deploys the team recorded (CI -> POST /v1/deploys) and versions first seen in the
+                   telemetry (service.version, from the per-minute summaries); by default the day before
+                   the window to its end
+  get_service_context  one service: its versions (requests and errors each), runtime and platform, what it
+                   calls and what calls it, its recorded deploys of the last week
 
 Times default to the investigation's window (around when the alert started) and must stay within
 MAX_SPAN of it, so the agent looks at the incident, not at a month of data.
@@ -18,10 +23,22 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from agent.redact import redact
+from domain.deploys import version_changes
 from domain.model import Evidence
 
 RESULT_CHARS = 12_000
 MAX_SPAN = timedelta(hours=24)
+CHANGES_BEFORE = timedelta(hours=24)     # get_recent_changes looks this far before the window by default
+CONTEXT_DEPLOYS = timedelta(days=7)
+
+# The per-minute summaries (services/compaction/compact.py SUMMARIES svc_1m, edge_1m), as the APM page reads them.
+VERSIONS_SQL = ("SELECT service, version, strftime(min(ts), '%Y-%m-%dT%H:%M:%SZ') AS first_seen, "
+                "strftime(max(ts), '%Y-%m-%dT%H:%M:%SZ') AS last_seen, sum(requests) AS requests, sum(errors) AS errors, "
+                "any_value(language) AS language, any_value(runtime) AS runtime, any_value(platform) AS platform, "
+                "any_value(k8s_deployment) AS k8s_deployment, any_value(region) AS region "
+                "FROM svc_1m WHERE version IS NOT NULL AND version <> ''{where} GROUP BY 1, 2 ORDER BY 1, 3 LIMIT 300")
+EDGES_SQL = ("SELECT source, target, sum(calls) AS calls, sum(errors) AS errors FROM edge_1m "
+             "WHERE source = {svc} OR target = {svc} GROUP BY 1, 2 ORDER BY calls DESC LIMIT 30")
 
 _RANGE = {"start": {"type": "string", "description": "ISO-8601 UTC; default: the investigation's window"},
           "end": {"type": "string", "description": "ISO-8601 UTC; default: the investigation's window"}}
@@ -42,6 +59,10 @@ SPECS = [
          "attributes": {"type": "object", "additionalProperties": {"type": "string"}}, "trace_id": {"type": "string"},
          "group_by": {"type": "array", "items": {"type": "string"}}, "limit": {"type": "integer", "description": "at most 50"}, **_RANGE},
          "required": ["mode"], "additionalProperties": False}},
+    {"name": "get_recent_changes", "description": "What changed: deploys the team recorded from CI, and service versions first seen in the telemetry (service.version), each with the version it replaced. Default range: the day before the investigation's window to its end. An empty answer means no deploy was recorded and no version change was seen; say so rather than assume a change.",
+     "input_schema": {"type": "object", "properties": {"service": {"type": "string", "description": "only this service; default all"}, **_RANGE}, "additionalProperties": False}},
+    {"name": "get_service_context", "description": "One service: the versions it ran in the range (requests and errors for each), its language, runtime and platform, the services it calls and that call it (calls and errors per connection), and its deploys recorded in the last 7 days.",
+     "input_schema": {"type": "object", "properties": {"service": {"type": "string"}, **_RANGE}, "required": ["service"], "additionalProperties": False}},
     {"name": "query_traces", "description": "Traces. mode search: the newest spans matching service, span_name, errors_only, min_duration_ms, attributes. mode top: groups of spans with a measure, e.g. group_by [service, name] measure p95:duration_ns, or [status_message] with where status_code = 2. mode trace: one whole trace (trace_id): its spans as a tree with events and its logs.",
      "input_schema": {"type": "object", "properties": {
          "mode": {"type": "string", "enum": ["search", "top", "trace"]}, "service": {"type": "string"}, "span_name": {"type": "string"},
@@ -66,12 +87,13 @@ def _iso(t):
 class ToolRunner:
     """The tools for one investigation: one tenant's telemetry (bound already), one window."""
 
-    def __init__(self, telemetry, start, end, app_url, clock=time.monotonic):
+    def __init__(self, telemetry, start, end, app_url, clock=time.monotonic, deploys=None):
         self.telemetry, self.window, self.app_url, self.clock = telemetry, (start, end), app_url.rstrip("/"), clock
+        self.deploys = deploys          # the tenant's recorded deploys (ports.Deploys), or None
         self.evidence, self.calls, self.redactions = {}, [], {}
 
-    def _range(self, a):
-        start = _parse(a["start"]) if a.get("start") else self.window[0]
+    def _range(self, a, before=timedelta(0)):
+        start = _parse(a["start"]) if a.get("start") else self.window[0] - before
         end = _parse(a["end"]) if a.get("end") else self.window[1]
         if end <= start:
             raise ValueError("end must be after start")
@@ -85,15 +107,24 @@ class ToolRunner:
         try:
             if name not in NAMES:
                 raise ValueError(f"unknown tool {name}")
-            start, end = self._range(args)
-            sre_name, sre_args, title, link = getattr(self, "_" + name)(args, start, end)
-            out = self.telemetry.run(sre_name, {**sre_args, "start": _iso(start), "end": _iso(end)} if sre_name != "get_trace" else sre_args)
+            start, end = self._range(args, CHANGES_BEFORE if name == "get_recent_changes" else timedelta(0))
+            got = getattr(self, "_" + name)(args, start, end)
+            if callable(got[0]):            # a tool of several queries: (fetch, title, link)
+                fetch, title, link = got
+                out = fetch()
+            else:
+                sre_name, sre_args, title, link = got
+                out = self.telemetry.run(sre_name, {**sre_args, "start": _iso(start), "end": _iso(end)} if sre_name != "get_trace" else sre_args)
         except Exception as e:  # noqa: BLE001  shown to the model, logged on the call
             self.calls.append({"name": name, "input": args, "ms": round((self.clock() - t0) * 1000), "error": str(e)[:300]})
             return f"Error: {str(e)[:500]}", None
-        ev = Evidence(id=f"ev{len(self.evidence) + 1}", kind=name.replace("query_", "") if name != "list_services" else "services",
-                      title=title, summary=_summary(out), link=link, query={"tool": name, **args}, start=_iso(start), end=_iso(end))
+        kind = {"list_services": "services", "get_recent_changes": "changes", "get_service_context": "service"}.get(name) or name.replace("query_", "")
+        ev = Evidence(id=f"ev{len(self.evidence) + 1}", kind=kind, title=title, summary=_summary(out), link=link,
+                      query={"tool": name, **args}, start=_iso(start), end=_iso(end))
         self.evidence[ev.id] = ev
+        made = getattr(self.telemetry, "evidence_made", None)      # evals: which data went into which evidence
+        if made:
+            made(ev.id)
         text, found = redact(json.dumps(out, default=str))
         for k, n in found.items():
             self.redactions[k] = self.redactions.get(k, 0) + n
@@ -130,6 +161,46 @@ class ToolRunner:
         keep = {k: a[k] for k in ("service", "min_severity", "text", "attributes", "trace_id", "limit") if a.get(k) is not None}
         return "search_logs", keep, "Logs" + (f" of {a['service']}" if a.get("service") else "") + (f" matching \"{_cut(a['text'], 60)}\"" if a.get("text") else ""), link
 
+    def _sql(self, sql, start, end):
+        out = self.telemetry.run("run_sql", {"sql": sql, "start": _iso(start), "end": _iso(end)})
+        return [dict(zip(out.get("columns") or [], r)) for r in out.get("rows") or []]
+
+    def _recorded(self, start, end, service):
+        if not self.deploys:
+            return []
+        return self.deploys.between(_iso(start), _iso(end), service or None)
+
+    def _get_recent_changes(self, a, start, end):
+        svc = str(a.get("service") or "").strip()
+
+        def fetch():
+            recorded = self._recorded(start, end, svc)
+            rows = self._sql(VERSIONS_SQL.format(where=f" AND service = {_lit(svc)}" if svc else ""), start, end)
+            changes = version_changes(rows, _iso(start + timedelta(minutes=2)))
+            out = {"range": [_iso(start), _iso(end)], "recorded_deploys": recorded, "version_changes": changes}
+            if not recorded and not changes:
+                out["note"] = (f"No deploy recorded and no version change seen{' for ' + svc if svc else ''} in this range "
+                               f"({len(rows)} service versions seen, none new).")
+            return out
+        return (fetch, "Changes: deploys and versions" + (f" ({svc})" if svc else ""),
+                f"{self.app_url}/#/apm{'/' + quote(svc, safe='') if svc else ''}?{self._rng(start, end)}")
+
+    def _get_service_context(self, a, start, end):
+        svc = str(a.get("service") or "").strip()
+        if not svc:
+            raise ValueError("service is required")
+
+        def fetch():
+            versions = self._sql(VERSIONS_SQL.format(where=f" AND service = {_lit(svc)}"), start, end)
+            edges = self._sql(EDGES_SQL.format(svc=_lit(svc)), start, end)
+            week = self._recorded(min(start, end - CONTEXT_DEPLOYS), end, svc)
+            return {"service": svc, "range": [_iso(start), _iso(end)],
+                    "versions": [{k: v for k, v in r.items() if k != "service" and v not in (None, "")} for r in versions],
+                    "calls": [{"to": e["target"], "calls": e["calls"], "errors": e["errors"]} for e in edges if e["source"] == svc],
+                    "called_by": [{"from": e["source"], "calls": e["calls"], "errors": e["errors"]} for e in edges if e["target"] == svc],
+                    "recorded_deploys": week[-10:]}
+        return fetch, f"Service {svc}: versions, dependencies, deploys", f"{self.app_url}/#/apm/{quote(svc, safe='')}?{self._rng(start, end)}"
+
     def _query_traces(self, a, start, end):
         if a["mode"] == "trace":
             if not a.get("trace_id"):
@@ -147,6 +218,11 @@ class ToolRunner:
         return "search_spans", keep, "Spans" + (f" of {a['service']}" if a.get("service") else "") + (" with errors" if a.get("errors_only") else ""), link
 
 
+def _lit(v):
+    """A SQL string literal (the query engine also refuses anything but one read-only SELECT)."""
+    return "'" + str(v).replace("'", "''") + "'"
+
+
 def _cut(v, n):
     s = str(v or "")
     return s if len(s) <= n else s[: n - 1] + "…"
@@ -155,6 +231,10 @@ def _cut(v, n):
 def _summary(out):
     if not isinstance(out, dict):
         return ""
+    if "version_changes" in out:
+        return f"{len(out['recorded_deploys'])} recorded deploys, {len(out['version_changes'])} version changes"
+    if "called_by" in out:
+        return f"{len(out['versions'])} versions, calls {len(out['calls'])}, called by {len(out['called_by'])}"
     for k, what in (("services", "services"), ("series", "series"), ("records", "log records"), ("spans", "spans"),
                     ("rows", "rows"), ("groups", "groups"), ("tree", "spans in the trace")):
         if isinstance(out.get(k), list):

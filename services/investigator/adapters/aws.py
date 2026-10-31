@@ -8,6 +8,8 @@ AwsStore
   hourly quota        rate#inv#<T>#<YYYY-MM-DDTHH>: n
   webhook token       invhook#<sha256(token)>: tenant (the token itself is never stored);
                       invhookof#<T>: the tenant's current token hash, so a new token retires the old one
+  deploys             deploy#<T>#<deployed_at>#<id>: the deploy; kept 90 days (`expires`); read by time
+                      range through the by-tenant index (its sort key is pk)
 Every item carries `tenant`, so deleting a tenant removes them (by-tenant index); the S3 prefix is
 purged with the tenant's data.
 
@@ -22,6 +24,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from domain.deploys import KEEP_DAYS, Deploy
 from domain.model import Investigation
 from ports import StaleWrite
 
@@ -140,6 +143,36 @@ class AwsStore:
         items.sort(key=lambda i: i.get("created_at", ""), reverse=True)
         return [{"id": i["pk"].rsplit("#", 1)[1], **{k: (float(v) if k == "confidence" else v) for k, v in i.items()
                                                      if k not in ("pk", "tenant", "version")}} for i in items[:limit]]
+
+
+    def put_deploy(self, tenant, d: Deploy, now_epoch):
+        """Records a deploy; the same deploy posted again (same id and time) replaces itself."""
+        self.table.put_item(Item={"pk": f"deploy#{tenant}#{d.deployed_at}#{d.id}", "tenant": tenant, **d.to_dict(),
+                                  "expires": int(now_epoch) + KEEP_DAYS * 86400})
+
+    def deploys(self, tenant, start_iso, end_iso, service=None, limit=200):
+        """The tenant's recorded deploys between two ISO times, oldest first."""
+        lo, hi = f"deploy#{tenant}#{start_iso}", f"deploy#{tenant}#{end_iso}~"
+        items, kw = [], dict(IndexName="by-tenant", KeyConditionExpression=Key("tenant").eq(tenant) & Key("pk").between(lo, hi))
+        while len(items) < 2000:
+            page = self.table.query(**kw)
+            items += page["Items"]
+            if "LastEvaluatedKey" not in page:
+                break
+            kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        out = [{k: v for k, v in i.items() if k not in ("pk", "tenant", "expires")} for i in items
+               if not service or i.get("service", "").lower() == service.lower()]
+        return sorted(out, key=lambda d: d["deployed_at"])[-limit:]
+
+
+class TenantDeploys:
+    """One tenant's recorded deploys (the agent's Deploys port; the tenant is fixed here)."""
+
+    def __init__(self, store, tenant):
+        self.store, self.tenant = store, tenant
+
+    def between(self, start_iso, end_iso, service=None):
+        return self.store.deploys(self.tenant, start_iso, end_iso, service)
 
 
 class SqsQueue:

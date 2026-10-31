@@ -49,10 +49,10 @@ def test_cases_are_well_formed():
 def test_each_cases_probes_reach_the_evidence_of_its_cause():
     for c in CASES:
         tel = FixtureTelemetry(c)
-        tools = ToolRunner(tel, START, END, "https://app")
+        tools = ToolRunner(tel, START, END, "https://app", deploys=tel)
         for name, args in c["probes"]:
             text, ev = tools.run(name, args)
-            assert ev and tel.log[-1]["key"], (c["id"], name, text[:200])
+            assert ev and tel.by_evidence[ev.id]["key"], (c["id"], name, text[:200])
             assert '"key"' not in text and '"n":' not in text          # the scoring marks never reach the model
 
 

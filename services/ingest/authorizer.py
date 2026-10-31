@@ -15,6 +15,7 @@ rotation) until its expires_at.
 
 Each key has a scope (keys created before scopes existed are "ingest"):
   ingest  POST /v1/logs, /v1/traces, /v1/metrics, /v1/aws/cloudwatch-metrics, /v1/aws/cloudwatch-logs   (customers' SDKs, Firehose)
+          POST /v1/deploys                        (CI recording a deploy, for investigations)
   read    POST /v1/query, GET /v1/query/{job}    (dashboards, scripts, the UI)
           /v1/mcp                                 (the MCP server, for AI agents)
 so a key embedded in an application can send data but never read it back.
@@ -40,7 +41,7 @@ TABLE = os.environ["TENANTS_TABLE"]
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 
 ROUTES = {"ingest": ["POST/v1/logs", "POST/v1/traces", "POST/v1/metrics", "POST/v1/aws/cloudwatch-metrics",
-                     "POST/v1/aws/cloudwatch-logs"],
+                     "POST/v1/aws/cloudwatch-logs", "POST/v1/deploys"],
           "read": ["POST/v1/query", "GET/v1/query/*", "DELETE/v1/query/*", "*/v1/mcp"]}
 
 ddb = boto3.client("dynamodb")

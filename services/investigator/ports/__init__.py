@@ -54,6 +54,13 @@ class Telemetry(Protocol):
     def run(self, name: str, args: dict) -> dict: ...
 
 
+class Deploys(Protocol):
+    """One tenant's recorded deploys (bound to that tenant when made), read-only:
+    -> [{id, service, version, deployed_at, environment?, status, commit?, repository?, url?, description?}], oldest first."""
+
+    def between(self, start_iso: str, end_iso: str, service: str | None = None) -> list[dict]: ...
+
+
 class LLMClient(Protocol):
     """One model call: -> {"content": [blocks], "stop_reason": str, "usage": {"input_tokens", "output_tokens"}}."""
     model: str

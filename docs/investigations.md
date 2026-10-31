@@ -44,6 +44,8 @@ Claude, with four read-only tools over the tenant's telemetry (through obs-query
 | `query_metrics` | PromQL over metrics, spans and logs |
 | `query_logs` | log search, or top groups (most frequent errors) |
 | `query_traces` | span search, top groups, or one whole trace |
+| `get_recent_changes` | recorded deploys and versions first seen in the telemetry; by default the day before the window |
+| `get_service_context` | one service: versions (requests, errors each), runtime, what it calls and what calls it, last week's deploys |
 
 - **Tenant and window are set in code**, not by the model: the window is an hour before the alert
   started to 20 minutes after (or now); a query may move at most a day outside it.
@@ -64,6 +66,50 @@ Claude, with four read-only tools over the tenant's telemetry (through obs-query
 - **Configurable**: `ClaudeModel`, `PromptParam` (an SSM parameter under `/obs/investigator/` with
   `{"version", "system"}`), prices. An Anthropic API key at `/obs/anthropic/api_key` switches from
   Bedrock to the Claude API (as the AI SRE does).
+
+## Deploys (slice 3)
+
+Investigations line changes up with the incident. Two sources:
+
+- **Recorded**: CI posts each deploy to `POST /v1/deploys` with the team's ingest API key (the key
+  SDKs already use; it can send, not read). Kept 90 days.
+- **Inferred**: a service's `service.version` (an OpenTelemetry resource attribute) first seen at a
+  time, from the per-minute service summaries (`svc_1m`). Works with no CI change; catches deploys
+  CI didn't report. A version that was already running at the start of the range isn't a change.
+
+```
+POST https://ingest.leasyd.com/v1/deploys
+x-api-key: <ingest key>
+{"service": "payment", "version": "3.1.0",                                   required
+ "environment": "production", "commit": "9f2c1e7", "repository": "shop/payment",
+ "url": "https://github.com/...", "description": "currency refactor",
+ "status": "succeeded | started | failed | rolled_back", "deployed_at": "2026-10-30T02:11:30Z",   default: now
+ "id": "gh-811"}                                                               default: from service, version, environment, time
+-> 201 {"deploy": "<id>", "deployed_at": "..."}      the same deploy posted twice is one deploy
+```
+
+`GET /v1/app/deploys?service=&days=7` (signed in) lists them, newest first.
+
+GitHub Actions, as the last step of the deploy job (secret `LEASYD_API_KEY`: an ingest key):
+
+```yaml
+      - name: Record the deploy in Leasyd
+        if: always()
+        env:
+          LEASYD_API_KEY: ${{ secrets.LEASYD_API_KEY }}
+          SERVICE: payment                          # the service.name your telemetry uses
+          STATUS: ${{ job.status == 'success' && 'succeeded' || 'failed' }}
+        run: |
+          curl -fsS -X POST https://ingest.leasyd.com/v1/deploys \
+            -H "x-api-key: $LEASYD_API_KEY" -H 'Content-Type: application/json' \
+            -d "{\"service\": \"$SERVICE\", \"version\": \"${GITHUB_REF_NAME}-${GITHUB_SHA::7}\", \"environment\": \"production\",
+                 \"commit\": \"$GITHUB_SHA\", \"repository\": \"$GITHUB_REPOSITORY\", \"status\": \"$STATUS\",
+                 \"url\": \"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\", \"id\": \"gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\"}" \
+            || echo "Leasyd: deploy not recorded"     # never fails the deploy
+```
+
+Use the same version string your app sets as `service.version`, and the recorded and inferred
+changes match up.
 
 ## Eval
 
@@ -143,7 +189,10 @@ infra/deploy-phaseT5.sh    # tenant deletion purges investigations
 infra/deploy-phaseW1.sh    # the rule form's Investigate switch
 ```
 
-Slice 2 is only `infra/deploy-phaseI1.sh` again (it now installs the Anthropic SDK; `Agent=claude` is
+Slice 3: `infra/deploy-phaseI1.sh` (the new tools), then `infra/deploy-phaseT2.sh` (the deploy routes
+and the key authorizer allowing `POST /v1/deploys`).
+
+Slice 2 was only `infra/deploy-phaseI1.sh` again (it now installs the Anthropic SDK; `Agent=claude` is
 the default; `--parameter-overrides Agent=stub` switches the model off).
 
 ## Verify
@@ -160,8 +209,10 @@ the default; `--parameter-overrides Agent=stub` switches the model off).
 ## Assumptions and left out
 
 - Delivery is a log line (`investigation_delivery_pending`) until slice 4.
-- No deploys/versions tool yet (`get_recent_changes`, slice 3), no past incidents (slice 5). The
-  agent can still see `service.version` on spans.
+- No past incidents yet (slice 5).
+- Deploys: no page in the app (API only), no GitHub app (the Actions step above). Inferred versions
+  are per minute and one per minute: during a rolling deploy the summary shows one version a minute.
+  Recorded deploys aren't checked against the telemetry's versions.
 - Cost uses configured prices (default $5 / $25 per million input / output tokens); no prompt
   caching or extended thinking yet.
 - The eval's telemetry is synthetic (small pools, weighted counts), not recorded from real incidents.

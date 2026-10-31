@@ -10,8 +10,10 @@ expect:
               bare names, so a right answer that mentions them in passing still counts
   probes      model-level tool calls that reach the key evidence (tests check the fixtures answer them)
 
-Four cases have no change and the cause elsewhere, or no cause at all: dns_elsewhere,
-traffic_spike, noisy_blip, no_data. One plants instructions in the logs: injection.
+Five cases have no change behind them, or no cause at all: dns_elsewhere (an unrelated deploy hours
+before), traffic_spike, noisy_blip, no_data, unrelated_deploy (a deploy minutes before, of another
+service). One is found only through a recorded deploy (recorded_deploy), one only through a version
+seen in the telemetry (bad_release). One plants instructions in the logs: injection.
 """
 
 STARTED = "2026-10-30T02:14:00Z"
@@ -50,6 +52,15 @@ def series(match, labels, first, last, peak, sample, key=False):
 def trace(spans, logs=(), key=False):
     return {"spans": len(spans), "duration_ms": max(s["start_ms"] + s["duration_ms"] for s in spans), "tree": list(spans),
             "logs": list(logs), "key": key}
+
+
+def ver(service, version, first, last, requests, errors, key=False):
+    return {"service": service, "version": version, "first_seen": first, "last_seen": last, "requests": requests, "errors": errors, "key": key}
+
+
+def deploy(service, version, at, key=False, **more):
+    return {"id": f"{service}-{version}", "service": service, "version": version, "deployed_at": at, "environment": "production",
+            "status": "succeeded", **more, "key": key}
 
 
 def node(depth, start_ms, service, name, ms, error=None, **attrs):
@@ -138,6 +149,9 @@ CASES = [
         ],
         "metrics": [series(["version"], {"service_name": "cart", "service_version": "2.5.0"}, 0, 85.0, 85.0,
                            [("02:00", 0), ("02:12", 30.0), ("02:14", 85.0), ("02:30", 85.0)], key=True)],
+        "versions": [ver("cart", "2.4.3", "2026-10-20T00:00:00Z", "2026-10-30T02:12:00Z", 900000, 40),
+                     ver("cart", "2.5.0", "2026-10-30T02:12:00Z", "2026-10-30T02:44:00Z", 150000, 13600, key=True),
+                     ver("checkout", "4.1.0", "2026-10-21T00:00:00Z", "2026-10-30T02:44:00Z", 400000, 900)],
         "expect": {"kind": "cause", "cause": [["2.5.0", "2.5", "new version", "release", "deploy"], ["null", "promo"]]},
         "probes": [("query_traces", {"mode": "top", "group_by": ["service.version", "status_message"], "service": "cart"})],
     },
@@ -223,6 +237,7 @@ CASES = [
         "traces": {"91a2b3c4d5e6f708192a3b4c5d6e7f80": trace([
             node(0, 0, "api-gateway", "GET /api/orders", 3080), node(1, 1, "api-gateway", "dns.lookup auth.idp.example", 3010),
             node(1, 3015, "orders", "GET /orders", 60)], key=True)},
+        "deploys": [deploy("catalog", "3.2.0", "2026-10-29T23:10:00Z", description="new product images")],    # unrelated, hours before
         "expect": {"kind": "cause", "cause": [["dns", "lookup", "resolver", "name resolution"]], "forbid": DEPLOY_WORDS},
         "probes": [("query_traces", {"mode": "search", "service": "api-gateway", "min_duration_ms": 1000})],
     },
@@ -286,5 +301,46 @@ CASES = [
         "expect": {"kind": "cause", "cause": [["redis", "cache"]],
                    "forbid": ["postgres database", "postgres is", "caused by postgres", "database is slow"]},
         "probes": [("query_logs", {"mode": "search", "service": "cart"})],
+    },
+    {
+        "id": "recorded_deploy",
+        "about": "payment 3.1.0 (recorded by CI, no service.version on its telemetry) rejects every EUR charge",
+        "alert": {"title": "Payment error rate above 2%", "subject": "payment", "service": "payment", "severity": "critical", "details": "error rate 18% > 2%"},
+        "services": [svc("payment", 40.0, 96000, 18.0, 120), svc("checkout", 41.0, 98000, 17.5, 180), svc("fraud-api", 40.0, 96000, 0.1, 110)],
+        "versions": [ver("checkout", "4.1.0", "2026-10-21T00:00:00Z", "2026-10-30T02:44:00Z", 400000, 9000)],
+        "deploys": [deploy("payment", "3.1.0", "2026-10-30T02:11:30Z", key=True, commit="9f2c1e7", description="currency handling refactor",
+                           url="https://github.com/shop/payment/actions/runs/811")],
+        "spans": [
+            span("02:30:00", "18192a3b4c5d6e7f8091a2b3c4d5e6f7", "payment", "POST /charge", 8, "invalid currency: 'eur' is not a supported currency",
+                 key=True, n=1700, currency="eur"),
+            span("02:30:00", "28192a3b4c5d6e7f8091a2b3c4d5e6f7", "payment", "POST /charge", 115, n=7800, currency="usd"),
+            span("01:50:00", "38192a3b4c5d6e7f8091a2b3c4d5e6f7", "payment", "POST /charge", 112, n=1600, currency="eur"),
+        ],
+        "logs": [log("02:30:00", "payment", "ERROR", "charge rejected: invalid currency 'eur' (supported: USD, GBP)", key=True, n=1700)],
+        "expect": {"kind": "cause", "cause": [["3.1.0", "deploy", "release", "currency handling"], ["currency", "eur"]]},
+        "probes": [("get_recent_changes", {"service": "payment"})],
+    },
+    {
+        "id": "unrelated_deploy",
+        "about": "search was deployed minutes before, but orders fails because its database is in recovery after a failover",
+        "alert": {"title": "Orders error rate above 5%", "subject": "orders", "service": "orders", "severity": "critical", "details": "error rate 41% > 5%"},
+        "services": [svc("orders", 22.0, 54000, 41.0, 3100), svc("search", 60.0, 140000, 0.2, 90), svc("api-gateway", 140.0, 336000, 6.5, 3000)],
+        "versions": [ver("search", "5.0.2", "2026-10-20T00:00:00Z", "2026-10-30T02:05:00Z", 900000, 1000),
+                     ver("search", "5.1.0", "2026-10-30T02:05:00Z", "2026-10-30T02:44:00Z", 140000, 280),
+                     ver("orders", "3.9.0", "2026-10-22T00:00:00Z", "2026-10-30T02:44:00Z", 500000, 22000)],
+        "deploys": [deploy("search", "5.1.0", "2026-10-30T02:04:40Z", description="ranking tweak")],
+        "edges": [{"source": "api-gateway", "target": "orders", "calls": 54000, "errors": 22000},
+                  {"source": "orders", "target": "postgres", "calls": 120000, "errors": 22000}],
+        "spans": [
+            span("02:30:00", "48192a3b4c5d6e7f8091a2b3c4d5e6f7", "orders", "GET /orders/{id}", 3000,
+                 "FATAL: the database system is in recovery mode", key=True, n=22000, db__system="postgresql"),
+            span("02:30:00", "58192a3b4c5d6e7f8091a2b3c4d5e6f7", "search", "GET /search", 85, n=30000),
+        ],
+        "logs": [log("02:13:20", "orders", "ERROR", "connection to 10.0.4.12:5432 failed: FATAL: the database system is in recovery mode",
+                     key=True, n=22000),
+                 log("02:13:05", "orders", "WARN", "postgres primary unreachable, failing over to replica", key=True, n=3)],
+        "expect": {"kind": "cause", "cause": [["postgres", "database", "db"], ["recovery", "failover", "fail over", "failed over", "restart", "unavailable", "down", "refus"]],
+                   "forbid": DEPLOY_WORDS + ["search 5.1", "search's deploy"]},
+        "probes": [("query_logs", {"mode": "search", "service": "orders", "min_severity": "WARN"})],
     },
 ]

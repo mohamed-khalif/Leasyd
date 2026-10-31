@@ -53,7 +53,7 @@ def test_valid_key_maps_to_tenant(auth):
     assert stmt["Effect"] == "Allow"
     base = "arn:aws:execute-api:us-east-1:123456789012:abc123/ingest"
     assert stmt["Resource"] == [f"{base}/POST/v1/logs", f"{base}/POST/v1/traces", f"{base}/POST/v1/metrics",
-                                f"{base}/POST/v1/aws/cloudwatch-metrics", f"{base}/POST/v1/aws/cloudwatch-logs"]
+                                f"{base}/POST/v1/aws/cloudwatch-metrics", f"{base}/POST/v1/aws/cloudwatch-logs", f"{base}/POST/v1/deploys"]
 
 
 def test_firehose_sends_the_key_in_its_own_header(auth):

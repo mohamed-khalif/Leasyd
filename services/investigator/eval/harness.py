@@ -73,10 +73,8 @@ def score(case, result, telemetry):
         correct = not_sure or any(_has(root, group) for group in exp.get("accept", []))
     if _has(root, exp.get("forbid", [])):
         correct = False
-    calls = telemetry.log            # the n-th telemetry call is evidence ev<n>
-    cited = [int(e.id[2:]) - 1 for e in result.evidence if e.id.startswith("ev") and e.id[2:].isdigit()]
-    cited = [calls[i] for i in cited if i < len(calls)]
-    has_key = any(c["key"] for c in calls) or bool(case.get("probes"))
+    cited = [telemetry.by_evidence[e.id] for e in result.evidence if e.id in telemetry.by_evidence]
+    has_key = any(c["key"] for c in telemetry.log) or bool(case.get("probes"))
     return {
         "id": case["id"], "kind": exp["kind"], "correct": correct, "confidence": result.confidence,
         "false_confidence": not correct and result.confidence >= CONFIDENT,
@@ -90,7 +88,7 @@ def run_case(case, llm, prompts=None):
     telemetry = FixtureTelemetry(case)
     now = datetime.fromisoformat(NOW.replace("Z", "+00:00"))
     agent = ClaudeAgent(llm, lambda tenant, start, end: telemetry, prompts or BuiltIn(), "https://app.leasyd.com",
-                        {"input": 5, "output": 25}, now=lambda: now)
+                        {"input": 5, "output": 25}, now=lambda: now, deploys_for=lambda tenant: telemetry)
     a = case["alert"]
     inv = Investigation(id=case["id"], tenant="eval", status="running", created_at=NOW, updated_at=NOW,
                         trigger=Trigger(source="alert", title=a["title"], dedupe_key=case["id"], started_at=STARTED,

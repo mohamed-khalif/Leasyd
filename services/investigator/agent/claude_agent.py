@@ -36,6 +36,7 @@ SUBMIT = {"name": "submit_investigation", "description": "Your finding. Call onc
         "next_step": {"type": "string"},
         "safe_to_auto_act": {"type": "boolean", "description": "always false: no actions in this version"}}}}
 
+TOOLS_VERSION = "telemetry-2"       # + get_recent_changes, get_service_context
 MAX_STEPS = 16
 TOKEN_BUDGET = 400_000          # input + output tokens across the run
 TIME_LIMIT_S = 300
@@ -48,8 +49,9 @@ class ClaudeAgent:
     name = "claude"
 
     def __init__(self, llm, telemetry_for, prompts, app_url, prices=None, clock=time.monotonic, now=None,
-                 max_steps=MAX_STEPS, token_budget=TOKEN_BUDGET, time_limit_s=TIME_LIMIT_S):
+                 max_steps=MAX_STEPS, token_budget=TOKEN_BUDGET, time_limit_s=TIME_LIMIT_S, deploys_for=None):
         self.llm, self.telemetry_for, self.prompts, self.app_url = llm, telemetry_for, prompts, app_url
+        self.deploys_for = deploys_for      # tenant -> its recorded deploys (ports.Deploys); None: inferred only
         self.prices = prices or {}          # USD per million tokens: {"input": x, "output": y}
         self.clock, self.now = clock, now or (lambda: datetime.now(timezone.utc))
         self.max_steps, self.token_budget, self.time_limit_s = max_steps, token_budget, time_limit_s
@@ -61,9 +63,10 @@ class ClaudeAgent:
 
     def investigate(self, inv):
         prompt = self.prompts.load()
-        self.versions = {"model": self.llm.model, "prompt": prompt["version"], "tools": "telemetry-1"}
+        self.versions = {"model": self.llm.model, "prompt": prompt["version"], "tools": TOOLS_VERSION}
         start, end = self.window(inv)
-        tools = ToolRunner(self.telemetry_for(inv.tenant, start, end), start, end, self.app_url)
+        tools = ToolRunner(self.telemetry_for(inv.tenant, start, end), start, end, self.app_url,
+                           deploys=self.deploys_for(inv.tenant) if self.deploys_for else None)
         t = inv.trigger
         brief, _ = redact(json.dumps({"title": t.title, "source": t.source, "subject": t.subject, "service": t.service,
                                       "severity": t.severity, "started_at": t.started_at, "details": t.details}))
