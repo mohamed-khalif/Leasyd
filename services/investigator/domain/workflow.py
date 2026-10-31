@@ -60,6 +60,33 @@ def open_investigation(store, queue, clock, tenant, trigger, new_id, cap=HOURLY_
     return inv, False
 
 
+VERDICTS = ("right", "wrong")
+
+
+def give_feedback(store, clock, tenant, inv_id, verdict, note="", by="link", replace=False):
+    """Records whether the finding was right. -> (investigation, recorded). A link's answer doesn't
+    replace an earlier one (replace=False); a signed-in person may change it (replace=True)."""
+    if verdict not in VERDICTS:
+        raise ValueError("verdict: right or wrong")
+    for _ in range(5):
+        inv = store.get(tenant, inv_id)
+        if inv is None:
+            return None, False
+        if inv.status != COMPLETED:
+            raise ValueError("only a finished investigation's finding can be rated")
+        if inv.feedback and not replace:
+            return inv, False
+        now = iso(clock.now())
+        inv.feedback = {"verdict": verdict, "note": str(note or "").strip()[:1000], "at": now, "by": by}
+        inv.log(now, "feedback", f"{verdict} ({by})")
+        try:
+            store.save(inv)
+            return inv, True
+        except StaleWrite:
+            continue
+    raise StaleWrite(f"investigation {inv_id}: feedback not saved")
+
+
 def run_investigation(store, agent, queue, clock, tenant, inv_id, attempt=1, max_attempts=MAX_ATTEMPTS):
     """-> what happened ("completed", "failed", "done already", "missing", "busy"). Raises when the
     attempt failed and the queue should retry it."""

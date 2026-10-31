@@ -9,6 +9,12 @@ cd "$(dirname "$0")/.."
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 API_ID="$(aws cloudformation describe-stacks --stack-name obs-phaseT2 --query "Stacks[0].Outputs[?OutputKey=='ApiId'].OutputValue" --output text)"
 
+# Investigation emails to the account's own users go by SES from the obs-phaseE1 sender, once it exists.
+EMAIL_FROM="$(aws cloudformation describe-stacks --stack-name obs-phaseE1 \
+  --query "Stacks[0].Outputs[?OutputKey=='EmailFrom'].OutputValue" --output text 2>/dev/null || true)"
+EXTRA=()
+[[ -n "$EMAIL_FROM" && "$EMAIL_FROM" != None ]] && EXTRA=("EmailFrom=${EMAIL_FROM}")
+
 infra/build-investigator.sh
 aws cloudformation package \
   --template-file infra/phaseI1-investigator.yaml \
@@ -17,4 +23,4 @@ aws cloudformation package \
 aws cloudformation deploy --stack-name obs-phaseI1 \
   --template-file infra/phaseI1-investigator.packaged.yaml \
   --capabilities CAPABILITY_NAMED_IAM --tags project=obs phase=I1 \
-  --parameter-overrides "ApiId=${API_ID}" "$@"
+  --parameter-overrides "ApiId=${API_ID}" ${EXTRA[@]+"${EXTRA[@]}"} "$@"

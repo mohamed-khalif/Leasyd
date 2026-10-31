@@ -6,6 +6,11 @@
   GET  /v1/app/investigations                       signed in: the tenant's investigations, newest first
   GET  /v1/app/investigations/{id}                  one, in full (trigger, events, result)
   POST /v1/app/investigations/webhook-token         owners: a new webhook URL (shown once; the old one stops)
+  GET|PUT /v1/app/investigations/settings           where investigations go: {channels, services, fallback}
+                                                    (PUT: owners)
+  POST /v1/app/investigations/{id}/feedback         signed in: {"verdict": right|wrong, "note"}
+  GET|POST /v1/investigations/feedback/{token}      public: a delivered Right/Wrong link. GET shows a page
+                                                    and records nothing; its button POSTs the answer, once
   POST /v1/deploys                                  CI records a deploy, with an ingest API key (the key's
                                                     tenant, set by the API's key authorizer)
   GET  /v1/app/deploys?service=&days=               signed in: the tenant's recorded deploys, newest first
@@ -20,11 +25,13 @@ import json
 import re
 import secrets
 import urllib.request
+from urllib.parse import parse_qs
 from datetime import datetime, timedelta, timezone
 
 from domain import deploys, triggers
-from domain.workflow import iso, open_investigation
-from handlers import deps
+from domain.delivery import settings_from
+from domain.workflow import give_feedback, iso, open_investigation
+from handlers import deps, feedback_page
 
 MAX_BODY = 256 * 1024
 _ID = re.compile(r"^[0-9a-f]{16}$")
@@ -44,6 +51,8 @@ def handler(event, context=None):
         resource = event.get("resource") or ""
         if resource == "/v1/investigations/webhook/{token}":
             return _http(*webhook((event.get("pathParameters") or {}).get("token") or "", _body(event)))
+        if resource == "/v1/investigations/feedback/{token}":
+            return feedback_link(event)
         if resource == "/v1/deploys":
             tenant = ((event.get("requestContext") or {}).get("authorizer") or {}).get("tenant")
             if not tenant:
@@ -55,8 +64,9 @@ def handler(event, context=None):
             raise Refused(401, "sign in first")
         if resource == "/v1/app/deploys":
             return _http(*list_deploys(tenant, event.get("queryStringParameters") or {}))
-        return _http(*app(tenant, user, event.get("httpMethod", "GET"),
-                          ((event.get("pathParameters") or {}).get("proxy") or "").strip("/")))
+        method = event.get("httpMethod", "GET")
+        return _http(*app(tenant, user, method, ((event.get("pathParameters") or {}).get("proxy") or "").strip("/"),
+                          _body(event) if method in ("POST", "PUT") else None))
     except Refused as e:
         return _http(e.status, {"error": str(e)})
 
@@ -111,7 +121,7 @@ def list_deploys(tenant, q):
     return 200, {"deploys": found[::-1]}
 
 
-def app(tenant, user, method, path):
+def app(tenant, user, method, path, body=None):
     store = deps.store()
     if method == "GET" and not path:
         return 200, {"investigations": store.list(tenant)}
@@ -120,22 +130,79 @@ def app(tenant, user, method, path):
         if not inv:
             raise Refused(404, "no such investigation")
         return 200, inv.to_dict()
+    if path == "settings" and method == "GET":
+        return 200, {"settings": deps.channels().settings(tenant)}
+    if path == "settings" and method == "PUT":
+        _owner(store, tenant, user, "change where investigations go")
+        try:
+            settings = settings_from(body or {}, lambda cid: deps.channels().exists(tenant, cid))
+        except ValueError as e:
+            raise Refused(400, str(e))
+        deps.channels().save_settings(tenant, settings, user, iso(deps.clock().now()))
+        return 200, {"settings": settings}
+    parts = path.split("/")
+    if method == "POST" and len(parts) == 2 and _ID.match(parts[0]) and parts[1] == "feedback":
+        try:
+            inv, _ = give_feedback(store, deps.clock(), tenant, parts[0], (body or {}).get("verdict"), (body or {}).get("note"),
+                                   by=user, replace=True)
+        except ValueError as e:
+            raise Refused(400, str(e))
+        if not inv:
+            raise Refused(404, "no such investigation")
+        return 200, {"feedback": inv.feedback}
     if method == "POST" and path == "webhook-token":
-        me = store.table.get_item(Key={"pk": f"user#{user}"}).get("Item") or {}
-        if me.get("tenant") != tenant or me.get("status") != "active" or me.get("role", "owner") != "owner":
-            raise Refused(403, "only the account's owners can make a webhook URL")
+        _owner(store, tenant, user, "make a webhook URL")
         token = store.new_webhook_token(tenant, user, iso(deps.clock().now()))
         return 201, {"url": f"{deps.API_URL}/v1/investigations/webhook/{token}",
                      "note": "Shown once. Any previous webhook URL has stopped working."}
     raise Refused(404, "not found")
 
 
-def _body(event):
+def _owner(store, tenant, user, what):
+    me = store.table.get_item(Key={"pk": f"user#{user}"}).get("Item") or {}
+    if me.get("tenant") != tenant or me.get("status") != "active" or me.get("role", "owner") != "owner":
+        raise Refused(403, f"only the account's owners can {what}")
+
+
+def feedback_link(event):
+    """A Right/Wrong link: GET asks (records nothing), POST answers (uses the link up)."""
+    token = (event.get("pathParameters") or {}).get("token") or ""
+    if not _TOKEN.match(token):
+        return feedback_page.gone()
+    store, now = deps.store(), deps.clock().now()
+    if event.get("httpMethod") != "POST":
+        held = store.feedback_token(token, now)
+        inv = held and store.get(held["tenant"], held["inv_id"])
+        if not inv or not inv.result:
+            return feedback_page.gone()
+        if inv.feedback:
+            return feedback_page.answered(inv)
+        return feedback_page.ask(inv, ((event.get("queryStringParameters") or {}).get("v") or ""))
+    form = parse_qs(_raw(event), max_num_fields=5)
+    verdict, note = (form.get("verdict") or [""])[0], (form.get("note") or [""])[0]
+    if verdict not in ("right", "wrong"):
+        return feedback_page.bad("Choose Right or Wrong, then press the button.")
+    held = store.feedback_token(token, now, use=True)
+    if not held:
+        return feedback_page.gone()
+    inv, recorded = give_feedback(store, deps.clock(), held["tenant"], held["inv_id"], verdict, note, by="link")
+    if not inv:
+        return feedback_page.gone()
+    print(json.dumps({"investigation_feedback": inv.id, "tenant": inv.tenant, "verdict": verdict, "recorded": recorded}))
+    return feedback_page.thanks(verdict) if recorded else feedback_page.answered(inv)
+
+
+def _raw(event):
     raw = event.get("body") or ""
     if event.get("isBase64Encoded"):     # the API passes every body through as binary
         raw = base64.b64decode(raw).decode("utf-8", "replace")
     if len(raw) > MAX_BODY:
         raise Refused(413, f"body: at most {MAX_BODY // 1024} KB")
+    return raw
+
+
+def _body(event):
+    raw = _raw(event)
     try:
         return json.loads(raw or "{}")
     except ValueError:

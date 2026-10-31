@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { fmtNum, fmtTs } from "../lib/format";
-import { AlertChannel, AlertRule, alerts, Check, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
+import { AlertChannel, AlertRule, alerts, Check, investigations, InvestigationSettings, promql as runPromQL, records, RulePreview, Slo, slos } from "../api";
 import type { Ctx } from "../App";
 import { useDebounced } from "../useDebounced";
 import { useCheckList } from "../checkList";
@@ -214,6 +214,13 @@ function RuleForm({ ctx, id, params }: { ctx: Ctx; id?: string; params: URLSearc
             <label className="check"><input type="checkbox" checked={r.investigate !== false} onChange={(e) => set({ investigate: e.target.checked })} />
               {" "}When it fires, investigate automatically <span className="faint">(root cause, evidence and next step, without anyone asking)</span></label>
           </div>
+          {r.investigate !== false && (<>
+            <div className="faint" style={{ margin: "10px 0 4px" }}>Send its investigations to <span className="faint">(none ticked: the account's investigation channels, set under Channels, else the channels above)</span></div>
+            <div className="checks">
+              {s.channels.map((c) => <label key={c.id} className="check"><input type="checkbox" checked={(r.investigation_channels ?? []).includes(c.id)}
+                                                                              onChange={() => set({ investigation_channels: toggle(r.investigation_channels ?? [], c.id) })} /> {c.name} <span className="faint">({c.type})</span></label>)}
+            </div>
+          </>)}
         </section>
         {error && <div className="form-error" role="alert" style={{ marginTop: 10 }}>{error}</div>}
         <div className="toolbar" style={{ marginTop: 14 }}><button className="btn primary" disabled={busy}>{busy ? "Saving…" : id ? "Save" : "Create rule"}</button></div>
@@ -251,7 +258,7 @@ function Channels({ ctx }: { ctx: Ctx }) {
     <>
       <Panel title="Where alerts go" flush>
         {!items ? <div className="skeleton" style={{ height: 120 }} /> : !items.length ? (
-          <div className="state" style={{ minHeight: 100 }}>No channels yet. Add an email address, a Slack channel or a webhook below.</div>
+          <div className="state" style={{ minHeight: 100 }}>No channels yet. Add an email address, a Slack or Teams channel or a webhook below.</div>
         ) : (
           <RankTable head={["channel", "type", "sends to", "status", ""]} maxHeight={480}
                      rows={items.map((c) => [c.name, c.type, c.email ?? c.url_hint ?? "",
@@ -273,12 +280,13 @@ function Channels({ ctx }: { ctx: Ctx }) {
       {created?.type === "email" && (created.status === "confirmed"
         ? <div className="result-box pass" role="status"><b>Ready.</b> {created.email} signs in to this account, so alerts go there straight away.</div>
         : <div className="result-box pass" role="status"><b>Check {created.email}.</b> It isn't a user of this account, so AWS sends it a confirmation email; alerts arrive after its link is clicked. (Your team's own addresses need no confirmation.)</div>)}
+      {items && items.length > 0 && <InvestigationChannels channels={items} />}
       <Panel title="Add a channel">
         <form onSubmit={add}>
           <div className="form-grid">
             <label>Type
               <select className="select" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-                <option value="email">Email</option><option value="slack">Slack</option><option value="webhook">Webhook</option>
+                <option value="email">Email</option><option value="slack">Slack</option><option value="teams">Microsoft Teams</option><option value="webhook">Webhook</option>
               </select>
             </label>
             <label>Name<input className="input" required maxLength={80} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -286,10 +294,12 @@ function Channels({ ctx }: { ctx: Ctx }) {
             {form.type === "email" ? (
               <label>Email address<input className="input" type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
             ) : (
-              <label className="wide">{form.type === "slack" ? "Slack incoming-webhook URL" : "Webhook URL (https)"}
+              <label className="wide">{form.type === "slack" ? "Slack incoming-webhook URL" : form.type === "teams" ? "Teams Workflows webhook URL" : "Webhook URL (https)"}
                 <input className="input mono" required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })}
-                       placeholder={form.type === "slack" ? "https://hooks.slack.com/services/…" : "https://example.com/leasyd-alerts"} />
-                <span className="faint">{form.type === "slack" ? "In Slack: Apps → Incoming Webhooks → Add to a channel. Stored encrypted." : "We POST JSON, signed so you can check it came from us. Stored encrypted."}</span>
+                       placeholder={form.type === "slack" ? "https://hooks.slack.com/services/…" : form.type === "teams" ? "https://….logic.azure.com/workflows/…" : "https://example.com/leasyd-alerts"} />
+                <span className="faint">{form.type === "slack" ? "In Slack: Apps → Incoming Webhooks → Add to a channel. Stored encrypted."
+                  : form.type === "teams" ? "In Teams: the channel's Workflows → “Post to a channel when a webhook request is received” → copy its URL. Stored encrypted."
+                  : "We POST JSON, signed so you can check it came from us. Stored encrypted."}</span>
               </label>
             )}
           </div>
@@ -423,5 +433,60 @@ function QueryRuleFields({ r, set, ctx }: { r: Omit<AlertRule, "id">; set: (p: P
         </div>
       )}
     </div>
+  );
+}
+
+
+/** Where automatic investigations go: the account's channels for them, per service, and a fallback
+ *  when none of them can be reached. A rule can name its own (its form). */
+function InvestigationChannels({ channels }: { channels: AlertChannel[] }) {
+  const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+  const [s, setS] = useState<InvestigationSettings | null>(null);
+  const [rows, setRows] = useState<[string, string][]>([]);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    investigations.settings().then((d) => {
+      setS(d.settings);
+      setRows(Object.entries(d.settings.services ?? {}).flatMap(([svc, ids]) => ids.map((id) => [svc, id] as [string, string])));
+    }, (e: Error) => setMsg({ ok: false, text: e.message }));
+  }, []);
+  if (!s) return msg ? <div className="form-error" role="alert">{msg.text}</div> : null;
+  const save = async (e: FormEvent) => {
+    e.preventDefault(); setBusy(true); setMsg(null);
+    const services: Record<string, string[]> = {};
+    for (const [svc, id] of rows) if (svc.trim() && id) services[svc.trim()] = [...(services[svc.trim()] ?? []), id];
+    try { const d = await investigations.saveSettings({ ...s, services }); setS(d.settings); setMsg({ ok: true, text: "Saved." }); }
+    catch (err) { setMsg({ ok: false, text: (err as Error).message }); } finally { setBusy(false); }
+  };
+  return (
+    <Panel title="Where investigations go">
+      <form onSubmit={save}>
+        <p className="faint" style={{ marginTop: 0 }}>A finding (root cause, evidence, Right/Wrong links) goes to these channels. None ticked: each rule's own alert channels.</p>
+        <div className="checks">
+          {channels.map((c) => <label key={c.id} className="check"><input type="checkbox" checked={(s.channels ?? []).includes(c.id)}
+                                                                          onChange={() => setS({ ...s, channels: toggle(s.channels ?? [], c.id) })} /> {c.name} <span className="faint">({c.type})</span></label>)}
+        </div>
+        <div className="faint" style={{ margin: "12px 0 4px" }}>By service <span className="faint">(instead of the above, for that service's alerts)</span></div>
+        {rows.map(([svc, id], i) => (
+          <div key={i} className="toolbar" style={{ marginBottom: 6 }}>
+            <input className="input" placeholder="service, e.g. checkout" value={svc} onChange={(e) => setRows(rows.map((r, j) => j === i ? [e.target.value, r[1]] : r))} />
+            <select className="select" value={id} onChange={(e) => setRows(rows.map((r, j) => j === i ? [r[0], e.target.value] : r))}>
+              {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button type="button" className="btn small" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</button>
+          </div>
+        ))}
+        <button type="button" className="btn small" onClick={() => setRows([...rows, ["", channels[0].id]])}>Add a service</button>
+        <label style={{ display: "block", marginTop: 12 }}>If none of them can be reached, send to
+          <select className="select" value={s.fallback ?? ""} onChange={(e) => setS({ ...s, fallback: e.target.value || undefined })}>
+            <option value="">nobody</option>
+            {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </label>
+        {msg && <div className={msg.ok ? "faint" : "form-error"} role={msg.ok ? "status" : "alert"} style={{ marginTop: 10 }}>{msg.text}</div>}
+        <div className="toolbar" style={{ marginTop: 12 }}><button className="btn primary" disabled={busy}>{busy ? "Saving…" : "Save"}</button></div>
+      </form>
+    </Panel>
   );
 }

@@ -1,5 +1,5 @@
 """Alerts (A1): tell a tenant's people when a synthetic check keeps failing or an SLO burns its
-error budget, by email, Slack or webhook.
+error budget, by email, Slack, Microsoft Teams or webhook.
 
 Settings (obs-tenants items, attribute tenant; managed in the portal through /v1/app/alerts/...):
   channel#<tenant>#<id>   where alerts go:
@@ -9,6 +9,8 @@ Settings (obs-tenants items, attribute tenant; managed in the portal through /v1
                                      with it subscribed (the person confirms once, by the link AWS
                                      sends), so no one can have alerts mailed to a stranger
                             slack    an incoming-webhook URL (https://hooks.slack.com/...)
+                            teams    a Microsoft Teams Workflows webhook URL ("When a Teams webhook
+                                     request is received"): an Adaptive Card per message
                             webhook  any public https URL; POSTed JSON, signed with the channel's
                                      own secret (X-Leasyd-Signature: sha256=<HMAC of the body>)
                           URLs and signing secrets are encrypted with the checks' KMS key under the
@@ -68,6 +70,7 @@ APP_URL = os.environ.get("APP_URL", "https://app.leasyd.com")
 MAX_RULES, MAX_CHANNELS = 50, 20
 _TENANT = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 _ID = re.compile(r"^[a-z0-9]{12}$")
+_TEAMS = re.compile(r"^https://[a-z0-9.-]+\.(logic\.azure\.com|api\.powerplatform\.com|api\.powerautomate\.com|flow\.microsoft\.com)(:443)?/")
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
 SUCCESS, DURATION = "synthetics.check.success", "synthetics.check.duration"
 
@@ -100,18 +103,20 @@ def validate_channel(body):
         if not _EMAIL.match(email):
             raise Refused("email: not an email address")
         return {"name": name, "type": kind, "email": email}, {}
-    if kind in ("slack", "webhook"):
+    if kind in ("slack", "teams", "webhook"):
         url = _text(body.get("url"), "url", 10, 2048)
         if not url.startswith("https://"):
             raise Refused("url: must start with https://")
         if kind == "slack" and not url.startswith("https://hooks.slack.com/"):
             raise Refused("url: a Slack incoming-webhook URL, https://hooks.slack.com/services/...")
+        if kind == "teams" and not _TEAMS.match(url):
+            raise Refused("url: a Teams Workflows webhook URL (from Workflows: \"When a Teams webhook request is received\")")
         safety.target(url)                   # a public host (checked again, after DNS, when sending)
         plain = {"url": url}
         if kind == "webhook":
             plain["secret"] = _secrets.token_hex(24)
         return {"name": name, "type": kind, "url_hint": _hint(url)}, plain
-    raise Refused("type: email, slack or webhook")
+    raise Refused("type: email, slack, teams or webhook")
 
 
 def _hint(url):
@@ -128,6 +133,11 @@ def validate_rule(body, checks, slos, channels):
         raise Refused("channels: choose one or more of your alert channels")
     out = {"name": _text(body.get("name"), "name", 1, 80), "type": kind, "channels": sorted(set(chans)),
            "enabled": bool(body.get("enabled", True)), "investigate": bool(body.get("investigate", True))}
+    inv = list(body.get("investigation_channels") or [])     # where its investigations go; empty: the settings', else these channels
+    if any(c not in channels for c in inv):
+        raise Refused("investigation_channels: choose from your alert channels")
+    if inv:
+        out["investigation_channels"] = sorted(set(inv))
     if kind == "check_failing":
         ids = list(body.get("checks") or [])
         if ids != ["*"] and (not ids or any(i not in checks for i in ids)):
@@ -302,6 +312,14 @@ def notify(tenant, channel, message):
         s = _decrypt(tenant, _id_of(channel), channel.get("secrets"))
         if channel["type"] == "slack":
             body = json.dumps({"text": f"*{message['title']}*\n{message['text']}"}).encode()
+            status = post(s["url"], body, {"Content-Type": "application/json"})
+        elif channel["type"] == "teams":
+            card = {"$schema": "http://adaptivecards.io/schemas/adaptive-card.json", "type": "AdaptiveCard", "version": "1.4",
+                    "fallbackText": f"{message['title']}\n{message['text']}",
+                    "body": [{"type": "TextBlock", "text": message["title"], "weight": "Bolder", "wrap": True},
+                             {"type": "TextBlock", "text": message["text"], "wrap": True}]}
+            body = json.dumps({"type": "message", "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
+                                                                     "contentUrl": None, "content": card}]}).encode()
             status = post(s["url"], body, {"Content-Type": "application/json"})
         else:
             body = json.dumps(message["payload"], separators=(",", ":")).encode()
@@ -803,7 +821,11 @@ def _route(tenant, user, method, parts, body):
         if not item:
             return _http(404, {"error": "no such channel"})
         if len(parts) == 2 and method == "DELETE":
-            in_use = [r["name"] for r in _items(tenant, f"alert#{tenant}#") if parts[1] in r.get("channels", [])]
+            in_use = [r["name"] for r in _items(tenant, f"alert#{tenant}#")
+                      if parts[1] in r.get("channels", []) + r.get("investigation_channels", [])]
+            inv = _get(f"invsettings#{tenant}", tenant) or {}
+            if parts[1] in (inv.get("channels") or []) + [inv.get("fallback")] + [c for v in (inv.get("services") or {}).values() for c in v]:
+                in_use.append("investigation settings")
             if in_use:
                 raise Refused(f"used by: {', '.join(in_use)}; remove it from those rules first")
             delete_channel(tenant, item)

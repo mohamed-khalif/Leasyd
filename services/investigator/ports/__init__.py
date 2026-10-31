@@ -61,6 +61,29 @@ class Deploys(Protocol):
     def between(self, start_iso: str, end_iso: str, service: str | None = None) -> list[dict]: ...
 
 
+class Channels(Protocol):
+    """Where a tenant's investigations go (the alert channels, obs-alerts' records)."""
+
+    def get(self, tenant: str, channel_id: str) -> dict | None:
+        """The channel with its secrets decrypted: {type, name, url?, secret?, email?, delivery?, topic_arn?}."""
+
+    def settings(self, tenant: str) -> dict:
+        """{channels: [ids], services: {service: [ids]}, fallback: id} or {} when not set."""
+
+    def rule(self, tenant: str, rule_id: str) -> dict | None: ...
+
+    def first_skip_notice(self, tenant: str, hour: str) -> bool:
+        """True the first time in that hour (the rate-limit notice goes out once an hour)."""
+
+
+class Sender(Protocol):
+    """One kind of channel (adapters/channels/): renders an Outcome in its own format, with a plain-text
+    fallback, and sends it. Raises domain.delivery.DeliveryError with the reason."""
+    kind: str
+
+    def send(self, channel: dict, outcome) -> None: ...
+
+
 class LLMClient(Protocol):
     """One model call: -> {"content": [blocks], "stop_reason": str, "usage": {"input_tokens", "output_tokens"}}."""
     model: str

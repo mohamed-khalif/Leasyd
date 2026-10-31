@@ -3,7 +3,8 @@ Description: >
   Phase I1: automatic investigations (services/investigator). An alert firing (obs-alerts) or a webhook
   (CloudWatch via SNS, PagerDuty, any tool) opens an investigation (obs-investigator) and queues it; the
   worker (obs-investigator-worker) runs the agent (Claude with read-only tools over the tenant's
-  telemetry, through obs-query) and queues its delivery (logged until slice 4). Routes in obs-phaseT2. Needs obs-phase0 (boundary:
+  telemetry, through obs-query) and delivers the outcome to the tenant's alert channels (Slack, Teams,
+  email, webhook) with Right/Wrong feedback links. Routes in obs-phaseT2. Needs obs-phase0 (boundary:
   InvestigationQueue), obs-phaseT2. Deploy with infra/deploy-phaseI1.sh.
 
 Parameters:
@@ -38,6 +39,10 @@ Parameters:
   PriceOutputPerMTok:
     Type: String
     Default: "25"
+  EmailFrom:
+    Type: String
+    Default: ""
+    Description: The SES sender (obs-phaseE1 output EmailFrom) for investigation emails to the account's own users; empty = those email channels fail over.
 
 Resources:
   DeadLetters:
@@ -106,6 +111,22 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/anthropic/*"
                   - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/obs/investigator/*"
+              - Sid: ChannelSecrets  # the alert channels' URLs and signing secrets (obs-alerts encrypts them), to deliver
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+                Condition:
+                  ForAnyValue:StringEquals: { "kms:ResourceAliases": alias/obs-checks }
+              - Sid: EmailToUsers    # investigation emails to the account's own users
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource:
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+                  - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
+              - Sid: EmailTopics     # other confirmed addresses: the channel's own topic
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:obs-alert-*"
               - Sid: Claude          # Bedrock's Messages API endpoint (Mantle), this account's projects
                 Effect: Allow
                 Action: bedrock-mantle:CreateInference
@@ -169,6 +190,8 @@ Resources:
           PRICE_INPUT_PER_MTOK: !Ref PriceInputPerMTok
           PRICE_OUTPUT_PER_MTOK: !Ref PriceOutputPerMTok
           APP_URL: https://app.leasyd.com
+          KMS_KEY: alias/obs-checks
+          EMAIL_FROM: !Ref EmailFrom
       Tags: [{ Key: project, Value: obs }, { Key: phase, Value: I1 }]
 
   WorkerTrigger:

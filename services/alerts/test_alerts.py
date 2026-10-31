@@ -101,9 +101,13 @@ def test_channels(aws):
                      ({"type": "webhook", "name": "x", "url": "http://example.com/x"}, "https://"),
                      ({"type": "webhook", "name": "x", "url": "https://169.254.169.254/latest"}, "public address"),
                      ({"type": "email", "name": "x", "email": "not-an-email"}, "not an email"),
-                     ({"type": "pager", "name": "x"}, "email, slack or webhook")]:
+                     ({"type": "teams", "name": "x", "url": "https://evil.example.com/workflows/x"}, "Teams Workflows"),
+                     ({"type": "pager", "name": "x"}, "email, slack, teams or webhook")]:
         s, e = call("acme", "POST", "channels", bad)
         assert s == 400 and why in e["error"], (bad, e)
+    s, teams = call("acme", "POST", "channels", {"type": "teams", "name": "Ops (Teams)",
+                                                 "url": "https://prod-12.westus.logic.azure.com:443/workflows/abc/triggers/manual/paths/invoke?sig=SECRET"})
+    assert s == 201 and teams["type"] == "teams" and "SECRET" not in json.dumps(teams)
     assert call("globex", "GET", "channels")[1]["items"] == []
     assert call("globex", "DELETE", f"channels/{email['id']}")[0] == 404
     assert call("acme", "DELETE", f"channels/{email['id']}")[0] == 200
@@ -120,9 +124,12 @@ def test_rules_validation_and_isolation(aws, hook):
         s, e = call("acme", "POST", "rules", {**good, **change})
         assert s == 400 and why in e["error"], (change, e)
     assert call("globex", "POST", "rules", good)[0] == 400                 # not their channel
+    assert call("acme", "POST", "rules", {**good, "investigation_channels": ["nope00000000"]})[0] == 400
+    s, r2 = call("acme", "POST", "rules", {**good, "name": "Two", "investigation_channels": [ch["id"]]})
+    assert s == 201 and r2["investigation_channels"] == [ch["id"]]
     assert call("globex", "GET", "rules")[1]["items"] == []
     assert call("globex", "PUT", f"rules/{r['id']}", {"failures": 1})[0] == 404
-    assert "used by: Checkout down" in call("acme", "DELETE", f"channels/{ch['id']}")[1]["error"]
+    assert "Checkout down" in call("acme", "DELETE", f"channels/{ch['id']}")[1]["error"]
 
 
 def test_check_failing_fires_once_and_resolves(aws, hook):

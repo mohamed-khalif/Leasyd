@@ -111,6 +111,48 @@ GitHub Actions, as the last step of the deploy job (secret `LEASYD_API_KEY`: an 
 Use the same version string your app sets as `service.version`, and the recorded and inferred
 changes match up.
 
+## Delivery (slice 4)
+
+A finished investigation goes to people as one channel-neutral **outcome** (`domain/delivery.py`
+`Outcome`: title, root cause, confidence, summary, evidence links, ruled out, next step, the alert's
+link, Right/Wrong links, kind `finding | skipped | failed`). Each channel type has an adapter in
+`adapters/channels/` that renders it, always with the plain text (`text.py`) and with the feedback
+links in the message body:
+
+| Channel | Format |
+|---|---|
+| Slack | Block Kit (header, root cause, evidence as links, Right/Wrong links and buttons); `text` = the plain text |
+| Microsoft Teams | a Workflows webhook message with one Adaptive Card 1.4; `fallbackText` = the plain text |
+| Email | SES to the account's own users (text + HTML); other addresses through the channel's confirmed SNS topic (text) |
+| Webhook | the outcome as JSON plus `text`, signed `X-Leasyd-Signature: sha256=<HMAC>` (as alerts), `X-Leasyd-Event: investigation` |
+
+The channels are the alert channels (Alerts → Channels; Teams is new there too). Where an
+investigation goes:
+
+1. the firing rule's **Send its investigations to** (rule form), else
+2. the account's channels **by service** (Alerts → Channels → Where investigations go), else
+3. the account's **investigation channels** (same panel), else
+4. the firing rule's alert channels.
+
+Each channel gets up to 3 attempts (1 s, 3 s apart). If none of them got it, the **fallback** channel
+(same panel). Each channel's result is on the investigation (`deliveries`: sent/failed, attempts,
+error) and its event log; a redelivered queue message sends nothing twice. A **skipped (rate limit)**
+investigation is delivered as a notice, once per account per hour. A **failed** one says it couldn't
+finish. Neither has feedback links.
+
+### Feedback
+
+Each delivery gets a new random token (only its SHA-256 is stored, `invfb#…`), valid 14 days. The
+Right and Wrong links open `GET /v1/investigations/feedback/{token}?v=right`: a page that shows the
+finding and records **nothing** (mail scanners and link previews open links). Its button POSTs the
+answer (and an optional note), which uses the token up (a conditional write: twice, even at once,
+records once). The first answer stands; a signed-in person can change it:
+`POST /v1/app/investigations/{id}/feedback {"verdict": "right"|"wrong", "note"}`. Stored on the
+investigation as `feedback: {verdict, note, at, by}` and in its event log.
+
+Adding a channel type: one module in `adapters/channels/` (render + send, raising `DeliveryError`),
+its tests, an entry in `senders()`, and the type in obs-alerts' `validate_channel`.
+
 ## Eval
 
 `services/investigator/eval/`: 12 incidents with known causes: a dependency timing out, a connection
@@ -194,6 +236,10 @@ infra/deploy-phaseT5.sh    # tenant deletion purges investigations
 infra/deploy-phaseW1.sh    # the rule form's Investigate switch
 ```
 
+Slice 4: `infra/deploy-phaseA1.sh` (Teams channels, a rule's investigation channels),
+`infra/deploy-phaseI1.sh` (delivery), `infra/deploy-phaseT2.sh` (the feedback route), then the web
+app (`infra/deploy-phaseW1.sh`).
+
 Slice 3: `infra/deploy-phaseI1.sh` (the new tools), then `infra/deploy-phaseT2.sh` (the deploy routes
 and the key authorizer allowing `POST /v1/deploys`).
 
@@ -213,7 +259,12 @@ the default; `--parameter-overrides Agent=stub` switches the model off).
 
 ## Assumptions and left out
 
-- Delivery is a log line (`investigation_delivery_pending`) until slice 4.
+- Feedback links are random tokens stored hashed, rather than signed with a key: they need storing
+  anyway to be single-use, and can't be forged or replayed.
+- Teams: Microsoft doesn't publish the Workflows trigger's schema; the message follows the template
+  "Post to a channel when a webhook request is received". Interactive buttons that record without
+  leaving Teams (or Slack) need an app: not in this phase.
+- No investigations page in the app yet: the messages link to the evidence and the alert.
 - No past incidents yet (slice 5).
 - Deploys: no page in the app (API only), no GitHub app (the Actions step above). Inferred versions
   are per minute and one per minute: during a rolling deploy the summary shows one version a minute.

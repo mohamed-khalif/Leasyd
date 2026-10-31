@@ -63,3 +63,28 @@ class Clock:
 
     def now(self):
         return self.t
+
+
+class MemoryChannels:
+    """The Channels port: channels by tenant, settings, rules, the hourly skipped notice."""
+
+    def __init__(self, channels=None, settings=None, rules=None):
+        self.channels, self.cfg, self.rules, self.notices = channels or {}, settings or {}, rules or {}, set()
+
+    def get(self, tenant, cid):
+        return self.channels.get((tenant, cid))
+
+    def exists(self, tenant, cid):
+        return (tenant, cid) in self.channels
+
+    def settings(self, tenant):
+        return self.cfg.get(tenant, {})
+
+    def rule(self, tenant, rule_id):
+        return self.rules.get((tenant, rule_id))
+
+    def first_skip_notice(self, tenant, hour):
+        if (tenant, hour) in self.notices:
+            return False
+        self.notices.add((tenant, hour))
+        return True

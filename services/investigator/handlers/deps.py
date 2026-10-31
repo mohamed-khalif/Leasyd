@@ -2,7 +2,7 @@
 
 import os
 
-from adapters.aws import AwsStore, SqsQueue, TenantDeploys
+from adapters.aws import AwsChannels, AwsStore, SqsQueue, TenantDeploys
 from agent.claude_agent import ClaudeAgent
 from agent.stub import StubAgent
 from domain.workflow import HOURLY_CAP, SystemClock
@@ -18,7 +18,10 @@ PROMPT_PARAM = os.environ.get("PROMPT_PARAM", "")                # an SSM parame
 PRICES = {"input": float(os.environ.get("PRICE_INPUT_PER_MTOK", "5")), "output": float(os.environ.get("PRICE_OUTPUT_PER_MTOK", "25"))}
 APP_URL = os.environ.get("APP_URL", "https://app.leasyd.com")
 CAP = int(os.environ.get("HOURLY_CAP", str(HOURLY_CAP)))    # investigations a tenant may start an hour
-API_URL = os.environ.get("API_URL", "https://ingest.leasyd.com")   # where webhooks are sent
+API_URL = os.environ.get("API_URL", "https://ingest.leasyd.com")   # where webhooks are sent, feedback links point
+KMS_KEY = os.environ.get("KMS_KEY", "alias/obs-checks")         # alert channels' URLs and secrets
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "")                   # SES sender; empty: no email to own users
+FEEDBACK_TTL_S = int(os.environ.get("FEEDBACK_TTL_DAYS", "14")) * 86400
 
 _built = {}
 
@@ -49,6 +52,38 @@ def agent():
         else:
             raise RuntimeError(f"AGENT={AGENT!r}: stub or claude")
     return _built["agent"]
+
+
+def channels():
+    if "channels" not in _built:
+        _built["channels"] = AwsChannels(TABLE, KMS_KEY)
+    return _built["channels"]
+
+
+def senders():
+    if "senders" not in _built:
+        import boto3
+
+        from adapters.channels import senders as make
+        from adapters.http import post
+        ses, sns = boto3.client("sesv2"), boto3.client("sns")
+
+        def ses_send(to, subject, text, html):
+            ses.send_email(FromEmailAddress=EMAIL_FROM, Destination={"ToAddresses": [to]},
+                           Content={"Simple": {"Subject": {"Data": subject, "Charset": "UTF-8"},
+                                               "Body": {"Text": {"Data": text, "Charset": "UTF-8"}, "Html": {"Data": html, "Charset": "UTF-8"}}}})
+
+        def sns_publish(topic, subject, text):
+            sns.publish(TopicArn=topic, Subject=subject, Message=text)
+        _built["senders"] = make(post, ses_send if EMAIL_FROM else None, sns_publish)
+    return _built["senders"]
+
+
+def feedback_links(tenant, inv_id):
+    """Right/Wrong links for one delivery: one new single-use token (either answer uses it up)."""
+    token = store().issue_feedback(tenant, inv_id, clock().now(), FEEDBACK_TTL_S)
+    url = f"{API_URL}/v1/investigations/feedback/{token}"
+    return {"right": f"{url}?v=right", "wrong": f"{url}?v=wrong"}
 
 
 def clock():

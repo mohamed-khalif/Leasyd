@@ -110,6 +110,8 @@ class Investigation:
     versions: dict = field(default_factory=dict)         # agent, model, prompt, tools: what produced the result
     cost: dict = field(default_factory=dict)             # input_tokens, output_tokens, usd
     tool_calls: list[dict] = field(default_factory=list) # every tool call: name, input, ms, evidence id or error
+    deliveries: dict = field(default_factory=dict)       # channel id -> {kind, status sent|failed, attempts, error, at, fallback}
+    feedback: dict | None = None                         # {verdict right|wrong, note, at, by}
     version: int = 0                                     # saves so far (optimistic locking)
 
     def log(self, at, kind, detail=""):

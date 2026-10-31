@@ -77,7 +77,7 @@ def test_an_alert_firing_is_investigated_in_the_background(env):
     assert msgs == [{"run": {"tenant": "acme", "id": out["investigation"]}}, {"deliver": {"tenant": "acme", "id": out["investigation"]}}]
     status, inv = app(env, "GET", out["investigation"])
     assert status == 200 and inv["status"] == "completed" and inv["result"]["root_cause"] == "not sure"
-    assert [e["type"] for e in inv["events"]] == ["triggered", "trigger_joined", "running", "completed"]
+    assert [e["type"] for e in inv["events"]] == ["triggered", "trigger_joined", "running", "completed", "delivery_failed"]   # no channel set up
     assert inv["trigger"]["rule_id"] == "r1" and inv["result"]["safe_to_auto_act"] is False
     status, listed = app(env, "GET")
     assert [(i["id"], i["status"], i["title"]) for i in listed["investigations"]] == [(out["investigation"], "completed", "Checkout errors: checkout")]
@@ -206,3 +206,67 @@ def test_ci_records_deploys_for_its_keys_tenant_only(env, monkeypatch):
     assert TenantDeploys(env.deps.store(), "globex").between("2026-10-29T00:00:00Z", "2026-10-31T00:00:00Z") == []
     row = env.table.get_item(Key={"pk": f"deploy#acme#2026-10-30T02:11:30Z#{out['deploy']}"})["Item"]
     assert row["tenant"] == "acme" and int(row["expires"]) == 1793327400 + 90 * 86400
+
+
+def slack_channel(env, tenant="acme", cid="c0ffee000001"):
+    kms = boto3.client("kms")
+    key = kms.create_key()["KeyMetadata"]["KeyId"]
+    try:
+        kms.create_alias(AliasName="alias/obs-checks", TargetKeyId=key)
+    except kms.exceptions.AlreadyExistsException:
+        pass
+    blob = kms.encrypt(KeyId="alias/obs-checks", Plaintext=b"https://hooks.slack.com/services/T/B/x",
+                       EncryptionContext={"tenant": tenant, "channel": cid})["CiphertextBlob"]
+    env.table.put_item(Item={"pk": f"channel#{tenant}#{cid}", "tenant": tenant, "type": "slack", "name": "#ops",
+                             "secrets": {"url": base64.b64encode(blob).decode()}})
+    env.table.put_item(Item={"pk": f"alert#{tenant}#r1", "tenant": tenant, "name": "Checkout errors", "type": "query", "channels": [cid]})
+    return cid
+
+
+def page(env, token, method="GET", form=None, v=None):
+    ev = {"resource": "/v1/investigations/feedback/{token}", "httpMethod": method, "pathParameters": {"token": token},
+          "queryStringParameters": {"v": v} if v else None}
+    if form is not None:
+        ev.update(body=base64.b64encode(form.encode()).decode(), isBase64Encoded=True)
+    out = env.ingest.handler(ev)
+    return out["statusCode"], out["body"], out["headers"]
+
+
+def test_a_finding_reaches_slack_and_its_link_records_one_answer_only_on_post(env, monkeypatch):
+    import adapters.http
+    posted = []
+    monkeypatch.setattr(adapters.http, "post", lambda url, body, h: posted.append((url, json.loads(body))) or 200)
+    cid = slack_channel(env)
+    out = env.ingest.handler({"alert": ALERT, "tenant": "acme"})
+    drain(env)
+    url, msg = posted[0]
+    assert url == "https://hooks.slack.com/services/T/B/x" and msg["text"].startswith("[Leasyd] Investigation: Checkout errors")
+    status, inv = app(env, "GET", out["investigation"])
+    assert inv["deliveries"][cid]["status"] == "sent" and inv["events"][-1]["type"] == "delivered"
+    link = next(l for l in msg["text"].split() if "/feedback/" in l and l.endswith("v=right"))
+    assert link.startswith("https://ingest.leasyd.com/v1/investigations/feedback/")
+    token = link.split("/feedback/")[1].split("?")[0]
+    for _ in range(2):                                                 # a mail scanner or preview opening it: nothing recorded
+        status, body, headers = page(env, token, v="right")
+        assert status == 200 and 'value="right" checked' in body and headers["Cache-Control"] == "no-store"
+    assert app(env, "GET", out["investigation"])[1]["feedback"] is None
+    assert page(env, token, "POST", "note=x")[0] == 400                 # no verdict chosen: link not used up
+    status, body, _ = page(env, token, "POST", "verdict=wrong&note=it+was+the+DB")
+    assert status == 200 and "Recorded: <b>wrong</b>" in body
+    fb = app(env, "GET", out["investigation"])[1]["feedback"]
+    assert fb["verdict"] == "wrong" and fb["note"] == "it was the DB" and fb["by"] == "link"
+    assert page(env, token, "POST", "verdict=right")[0] == 410 and page(env, token)[0] == 410     # single use
+    assert page(env, "x" * 32)[0] == 410
+    assert env.table.get_item(Key={"pk": f"invfb#{__import__('hashlib').sha256(token.encode()).hexdigest()}"})["Item"]["tenant"] == "acme"
+
+
+def test_settings_and_feedback_in_the_app_keep_to_the_tenant(env):
+    cid = slack_channel(env)
+    put = lambda body, user="ana@acme.io", tenant="acme": env.ingest.handler({   # noqa: E731
+        "resource": "/v1/app/investigations/{proxy+}", "httpMethod": "PUT", "pathParameters": {"proxy": "settings"},
+        "body": json.dumps(body), "requestContext": {"authorizer": {"claims": {"custom:tenant": tenant, "email": user}}}})["statusCode"]
+    assert put({"channels": [cid]}, user="bo@acme.io") == 403
+    assert put({"channels": [cid], "fallback": cid}) == 200
+    assert put({"channels": [cid]}, user="cy@globex.io", tenant="globex") == 400            # not globex's channel
+    assert app(env, "GET", "settings")[1] == {"settings": {"channels": [cid], "fallback": cid}}
+    assert app(env, "GET", "settings", tenant="globex", user="cy@globex.io")[1] == {"settings": {}}
