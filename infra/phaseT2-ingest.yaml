@@ -671,7 +671,20 @@ Resources:
     Properties:
       RestApiId: !Ref Api
       ResourceId: !Ref InvestigationsFeedbackTokenResource
-      HttpMethod: ANY
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:obs-investigator/invocations"
+        TimeoutInMillis: 29000
+  InvestigationsFeedbackPostMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: Logins
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref InvestigationsFeedbackTokenResource
+      HttpMethod: POST
       AuthorizationType: NONE
       Integration:
         Type: AWS_PROXY
@@ -1274,7 +1287,7 @@ Resources:
       RestApiId: !Ref Api
       # The references make this deployment wait for the /v1/app methods when
       # logins are on (DependsOn can't be conditional).
-      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppQueryJobCancelMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod}, ${DemoSessionMethod}, ${ReportMethod}, ${InvestigationsWebhookMethod}, ${AppInvestigationsMethod}, ${AppInvestigationMethod}, ${DeploysMethod}, ${AppDeploysMethod}, ${InvestigationsFeedbackMethod})", "ingest and query"]
+      Description: !If [Logins, !Sub "ingest, query and app (${AppQueryMethod}, ${AppQueryJobMethod}, ${AppQueryJobCancelMethod}, ${AppMeMethod}, ${ChecksMethod}, ${ChecksTestMethod}, ${CheckMethod}, ${CheckRunMethod}, ${CheckScreenshotMethod}, ${CheckExclusionsMethod}, ${CheckExclusionMethod}, ${WindowsMethod}, ${WindowMethod}, ${SlosMethod}, ${SloMethod}, ${AlertsMethod}, ${DashboardsMethod}, ${DashboardMethod}, ${SignupMethod}, ${StripeWebhookMethod}, ${AccountMethod}, ${AccountProxyMethod}, ${AiConversationsMethod}, ${AiConversationMethod}, ${DemoSessionMethod}, ${ReportMethod}, ${InvestigationsWebhookMethod}, ${AppInvestigationsMethod}, ${AppInvestigationMethod}, ${DeploysMethod}, ${AppDeploysMethod}, ${InvestigationsFeedbackMethod}, ${InvestigationsFeedbackPostMethod})", "ingest and query"]
 
   Stage:
     Type: AWS::ApiGateway::Stage
@@ -1306,7 +1319,12 @@ Resources:
           ThrottlingRateLimit: 20
           ThrottlingBurstLimit: 100
         - ResourcePath: "/~1v1~1investigations~1feedback~1{token}"
-          HttpMethod: "*"
+          HttpMethod: GET
+          MetricsEnabled: true
+          ThrottlingRateLimit: 10
+          ThrottlingBurstLimit: 50
+        - ResourcePath: "/~1v1~1investigations~1feedback~1{token}"
+          HttpMethod: POST
           MetricsEnabled: true
           ThrottlingRateLimit: 10
           ThrottlingBurstLimit: 50
