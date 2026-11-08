@@ -31,7 +31,7 @@ def oracle(case, root=None, confidence=0.85):
     calls = [("list_services", {})] + list(case["probes"])
     if root is None:
         root = " ".join(g[0] for g in exp["cause"]) if exp["kind"] == "cause" else "not sure"
-    cites = [{"id": f"ev{i + 1}", "claim": "shows it"} for i in range(len(calls))]
+    cites = [{"id": f"ev{i + 1}", "claim": "shows it"} for i in range(len(calls) + bool(case.get("past")))]   # + past incidents, with the alert
     submit = {"summary": "s", "root_cause": root, "confidence": confidence, "evidence": cites, "ruled_out": [], "next_step": "n"}
     return Script([use(i, n, a) for i, (n, a) in enumerate(calls)] + [use(99, "submit_investigation", submit)])
 

@@ -29,7 +29,7 @@ def handler(event, context=None):
             elif "deliver" in msg:
                 d = msg["deliver"]
                 out = deliver(deps.store(), deps.channels(), deps.senders(), deps.clock(), iso, d["tenant"], d["id"],
-                              lambda: deps.feedback_links(d["tenant"], d["id"]), time.sleep)
+                              lambda: deps.feedback_links(d["tenant"], d["id"]), time.sleep, deps.APP_URL)
                 print(json.dumps({"investigation_delivery": d["id"], "tenant": d["tenant"], "outcome": out}))
             else:
                 print(json.dumps({"investigation_message_unknown": list(msg)}))

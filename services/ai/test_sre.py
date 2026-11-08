@@ -273,3 +273,21 @@ def test_live_demo_visitors_ask_a_few_questions_each_and_see_only_their_own(sre,
     s, e = api(sre, "POST", {"message": "b"}, visit="v4", **demo)
     assert s == 429 and "for today" in e["error"]
     assert api(sre, "POST", {"message": "owners are not limited this way"})[0] == 202
+
+
+def test_a_follow_up_on_an_investigation_starts_from_its_finding_and_window(sre):
+    inv = {"id": "5a6665729746797e", "tenant": "acme", "status": "completed", "feedback": {"verdict": "right", "note": "yes"},
+           "trigger": {"title": "Checkout errors: checkout", "source": "alert", "subject": "checkout", "started_at": "2026-10-30T02:14:00Z"},
+           "result": {"root_cause": "payment times out calling fraud-api", "confidence": 0.82, "summary": "s", "ruled_out": ["db"], "next_step": "n",
+                      "evidence": [{"id": "ev1", "claim": "312 of 340 traces", "query": {"tool": "query_traces"}, "start": "a", "end": "b"}]}}
+    boto3.client("s3").put_object(Bucket="obs-data-test", Key="_investigations/tenant=acme/5a6665729746797e.json", Body=json.dumps(inv).encode())
+    s, conv = api(sre, "POST", {"message": "what else calls fraud-api?", "investigation": "5a6665729746797e",
+                                "context": {"start": "2026-11-01T00:00:00Z", "end": "2026-11-01T01:00:00Z"}})
+    assert s == 202 and conv["investigation"] == "5a6665729746797e"
+    assert conv["range"] == ["2026-10-30T01:14:00Z", "2026-10-30T02:34:00Z"]           # the incident's window, not the screen's
+    text = sre.load("acme", conv["id"])["messages"][0]["content"][0]["text"]
+    assert "<investigation>" in text and "payment times out calling fraud-api" in text and '"team_verdict"' in text
+    assert text.rstrip().endswith("what else calls fraud-api?")
+    assert api(sre, "POST", {"message": "x", "investigation": "5a6665729746797e"}, tenant="globex")[0] == 404    # another tenant's
+    assert api(sre, "POST", {"message": "x", "investigation": "0123456789abcdef"})[0] == 404
+    assert api(sre, "POST", {"message": "x", "investigation": "../../x"})[0] == 404

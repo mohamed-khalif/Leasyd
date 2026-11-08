@@ -61,6 +61,13 @@ class Deploys(Protocol):
     def between(self, start_iso: str, end_iso: str, service: str | None = None) -> list[dict]: ...
 
 
+class Memory(Protocol):
+    """One tenant's past investigations (bound to that tenant when made): their index rows, newest first,
+    {id, status, title, service, subject, rule_id, created_at, confidence, root_cause, verdict, note}."""
+
+    def past(self) -> list[dict]: ...
+
+
 class Channels(Protocol):
     """Where a tenant's investigations go (the alert channels, obs-alerts' records)."""
 

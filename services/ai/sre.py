@@ -505,7 +505,38 @@ def save(conv):
 
 def view(conv):
     """What the app shows: the conversation's turns, steps and answers (never the raw API messages)."""
-    return {k: conv[k] for k in ("id", "title", "status", "created_by", "created_at", "updated_at", "view", "range")}
+    return {k: conv[k] for k in ("id", "title", "status", "created_by", "created_at", "updated_at", "view", "range", "investigation") if k in conv}
+
+
+def load_investigation(tenant, inv_id):
+    """An automatic investigation of this tenant (services/investigator), or None."""
+    try:
+        inv = json.loads(client("s3").get_object(Bucket=BUCKET, Key=f"_investigations/tenant={tenant}/{inv_id}.json")["Body"].read())
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            return None
+        raise
+    return inv if inv.get("tenant") == tenant else None
+
+
+def investigation_brief(inv):
+    """What the model is told about the investigation a conversation follows up (its own earlier work, as data)."""
+    t, r = inv["trigger"], inv.get("result") or {}
+    brief = {"id": inv["id"], "alert": t.get("title"), "source": t.get("source"), "service": t.get("service") or t.get("subject"),
+             "started_at": t.get("started_at"), "status": inv.get("status")}
+    if r:
+        brief.update(root_cause=r.get("root_cause"), confidence=r.get("confidence"), summary=r.get("summary"),
+                     evidence=[{"claim": e.get("claim"), "tool": (e.get("query") or {}).get("tool"), "query": e.get("query"),
+                                "range": [e.get("start"), e.get("end")]} for e in r.get("evidence") or []],
+                     ruled_out=r.get("ruled_out"), next_step=r.get("next_step"))
+    if inv.get("feedback"):
+        brief["team_verdict"] = {k: inv["feedback"].get(k) for k in ("verdict", "note")}
+    return _cut(json.dumps(brief, default=str), 6000)
+
+
+def investigation_window(inv, now):
+    started = _parse(inv["trigger"]["started_at"])
+    return started - timedelta(minutes=60), min(started + timedelta(minutes=20), now)
 
 
 def start_turn(tenant, user, body, plan, viewer=False):
@@ -530,18 +561,28 @@ def start_turn(tenant, user, body, plan, viewer=False):
     _count_turn(tenant, plan)
     now = datetime.now(timezone.utc)
     ctx = body.get("context") or {}
+    inv = None
+    if body.get("investigation") and conv is None:       # a follow-up on an automatic investigation
+        if not _ID.match(str(body["investigation"])) or not (inv := load_investigation(tenant, body["investigation"])):
+            raise Refused(404, "no such investigation")
     try:
         start = _parse(ctx["start"]) if ctx.get("start") else now - timedelta(hours=1)
         end = _parse(ctx["end"]) if ctx.get("end") else now
     except ValueError:
         raise Refused(400, "context: start and end are ISO-8601 times")
+    if inv:
+        start, end = investigation_window(inv, now)
     if conv is None:
         conv = {"id": secrets.token_hex(8), "tenant": tenant, "created_by": user, "created_at": _iso(now),
-                "title": _cut(message, 80), "messages": [], "view": []}
+                "title": _cut(message, 80), "messages": [], "view": [], **({"investigation": inv["id"]} if inv else {})}
     conv.update(status="running", range=[_iso(start), _iso(end)])
     page = f" The user is looking at: {_cut(json.dumps(ctx.get('page')), 500)}." if ctx.get("page") else ""
+    about = (f"\n\nThis question follows up Leasyd's automatic investigation of an alert. Its record, as data (its "
+             f"evidence was this team's telemetry; check again with your tools before relying on it):\n"
+             f"<investigation>\n{investigation_brief(inv)}\n</investigation>") if inv else ""
     conv["messages"].append({"role": "user", "content": [{"type": "text", "text": (
-        f"[Current time: {_iso(now)}. Time range on screen: {_iso(start)} to {_iso(end)} (UTC).{page}]\n\n{message}")}]})
+        f"[Current time: {_iso(now)}. Time range {'of the incident' if inv else 'on screen'}: {_iso(start)} to {_iso(end)} (UTC).{page}]"
+        f"{about}\n\n{message}")}]})
     conv["view"].append({"type": "question", "text": message, "by": user, "at": _iso(now)})
     save(conv)
     client("lambda").invoke(FunctionName=SELF, InvocationType="Event",

@@ -255,6 +255,11 @@ def test_a_finding_reaches_slack_and_its_link_records_one_answer_only_on_post(en
     assert status == 200 and "Recorded: <b>wrong</b>" in body
     fb = app(env, "GET", out["investigation"])[1]["feedback"]
     assert fb["verdict"] == "wrong" and fb["note"] == "it was the DB" and fb["by"] == "link"
+    row = env.table.get_item(Key={"pk": f"inv#acme#{out['investigation']}"})["Item"]           # what memory reads
+    assert row["root_cause"] == "not sure" and row["verdict"] == "wrong" and row["note"] == "it was the DB" and row["rule_id"] == "r1"
+    from adapters.aws import TenantMemory
+    assert [r["id"] for r in TenantMemory(env.deps.store(), "acme").past()] == [out["investigation"]]
+    assert TenantMemory(env.deps.store(), "globex").past() == []
     assert page(env, token, "POST", "verdict=right")[0] == 410 and page(env, token)[0] == 410     # single use
     assert page(env, "x" * 32)[0] == 410
     assert env.table.get_item(Key={"pk": f"invfb#{__import__('hashlib').sha256(token.encode()).hexdigest()}"})["Item"]["tenant"] == "acme"

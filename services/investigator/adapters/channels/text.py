@@ -27,6 +27,8 @@ def plain(out):
                       "(Each link opens a page to confirm; nothing is recorded until you press its button.)"]
     else:
         lines += [out.headline + ".", "", out.summary]
+    if out.url:
+        lines += ["", f"Open in Leasyd: {out.url}"]
     if out.alert_url:
         lines += ["", f"The alert: {out.alert_url}"]
     lines += ["", f"Investigation {out.investigation_id}. Leasyd only read data; it changed nothing."]

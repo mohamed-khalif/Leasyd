@@ -48,6 +48,8 @@ class SlackSender:
         foot = f"Investigation {out.investigation_id} · Leasyd only read data; it changed nothing"
         if out.alert_url:
             foot = f"{link(out.alert_url, 'The alert')} · {foot}"
+        if out.url:
+            foot = f"{link(out.url, 'Open in Leasyd')} · {foot}"
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": foot}]})
         return {"text": text.plain(out)[:3000], "blocks": blocks}
 

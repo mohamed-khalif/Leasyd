@@ -47,6 +47,8 @@ class TeamsSender:
                            {"type": "Action.OpenUrl", "title": "Wrong", "url": out.feedback["wrong"]}]
         else:
             body += [tb(f"**{md(out.headline)}.**"), tb(md(out.summary))]
+        if out.url:
+            actions.append({"type": "Action.OpenUrl", "title": "Open in Leasyd", "url": out.url})
         if out.alert_url:
             actions.append({"type": "Action.OpenUrl", "title": "The alert", "url": out.alert_url})
         body.append(tb(f"Investigation {out.investigation_id}. Leasyd only read data; it changed nothing.", isSubtle=True, size="Small"))

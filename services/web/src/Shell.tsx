@@ -99,6 +99,7 @@ export function Shell(p: Props) {
         {link("/sql", "SQL", <IconDb />, p.path.startsWith("/sql"))}
         <div className="nav-section">Alerting & uptime</div>
         {link("/alerts", "Alerts", <IconBell />, p.path.startsWith("/alerts"))}
+        {link("/investigations", "Investigations", <IconSpark />, p.path.startsWith("/investigations"))}
         {link("/synthetics", "Synthetic checks", <IconPulse />, p.path.startsWith("/synthetics"))}
         {link("/slos", "SLOs", <IconTarget />, p.path.startsWith("/slos"))}
         <div className="nav-section">Account</div>

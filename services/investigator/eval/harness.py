@@ -88,7 +88,8 @@ def run_case(case, llm, prompts=None):
     telemetry = FixtureTelemetry(case)
     now = datetime.fromisoformat(NOW.replace("Z", "+00:00"))
     agent = ClaudeAgent(llm, lambda tenant, start, end: telemetry, prompts or BuiltIn(), "https://app.leasyd.com",
-                        {"input": 5, "output": 25}, now=lambda: now, deploys_for=lambda tenant: telemetry)
+                        {"input": 5, "output": 25}, now=lambda: now, deploys_for=lambda tenant: telemetry,
+                        memory_for=lambda tenant: telemetry)
     a = case["alert"]
     inv = Investigation(id=case["id"], tenant="eval", status="running", created_at=NOW, updated_at=NOW,
                         trigger=Trigger(source="alert", title=a["title"], dedupe_key=case["id"], started_at=STARTED,

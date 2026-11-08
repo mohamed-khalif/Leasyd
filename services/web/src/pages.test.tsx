@@ -10,7 +10,7 @@ import { installMockBackend, inFlight, requests } from "./test/mockBackend";
 import { render, settle } from "./test/dom";
 
 const ROUTES = ["/", "/logs", "/traces", "/metrics", "/services", "/apm", "/apm/checkout", "/apm/checkout?tab=dependencies", "/apm/checkout?tab=errors", "/report?range=7d", "/web", "/lambda", "/kubernetes", "/gpus",
-  "/dashboards", "/dashboards/builtin-services", "/query", "/sql", "/alerts", "/alerts/rules/new", "/synthetics",
+  "/dashboards", "/dashboards/builtin-services", "/query", "/sql", "/alerts", "/alerts/rules/new", "/alerts/channels", "/investigations", "/investigations/5a6665729746797e", "/synthetics",
   "/slos", "/ai", "/start", "/drop-rules", "/settings", "/usage", "/agents", "/agents?tab=issues",
   ...["profile", "security", "organization", "team", "usage", "billing", "api-keys", "gpu-prices", "ai-tools"].map((p) => `/settings/${p}`)];
 

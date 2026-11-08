@@ -153,6 +153,27 @@ investigation as `feedback: {verdict, note, at, by}` and in its event log.
 Adding a channel type: one module in `adapters/channels/` (render + send, raising `DeliveryError`),
 its tests, an entry in `senders()`, and the type in obs-alerts' `validate_channel`.
 
+## Memory (slice 5)
+
+Each investigation's index row keeps its root cause and the team's Right/Wrong answer and note.
+For a new investigation, `domain/memory.py` ranks the tenant's past ones (the same rule +3, service +2,
+subject +1.5, words in common in the title, the last 7 days +0.5; at least 2 to count). When any
+match, they come with the alert as the first evidence (`kind: history`); the agent can search for
+more with `get_past_incidents` (by service or text). A finding the team marked wrong is flagged with
+their note. Past incidents are leads: a root cause that cites only them is refused, and the prompt
+says to confirm a past cause in this incident's own telemetry and not to repeat one marked wrong.
+
+## The app (slice 6)
+
+- **Investigations** (menu: Alerting & uptime): every investigation with its root cause, confidence,
+  the team's verdict and status; one opens to the finding, evidence (links into the app), ruled out,
+  next step, Right/Wrong (with a note; a person can change a link's answer), what happened (events,
+  deliveries), and the read-only queries the agent ran.
+- **Ask a follow-up** on an investigation starts a Leasyd AI conversation that begins from it: the
+  finding and its evidence are given to the AI SRE (as data), the range is the incident's window
+  (an hour before to 20 minutes after), and the conversation links back to the investigation.
+  `POST /v1/app/ai/conversations {"message", "investigation": "<id>"}`; the tenant's own only.
+
 ## Eval
 
 `services/investigator/eval/`: 12 incidents with known causes: a dependency timing out, a connection
@@ -180,6 +201,10 @@ Slice 3 (prompt `inv-2026-10-31.2`, tools `telemetry-2`, 14 cases, recorded now)
 evidence hit 100%, precision 93%, false confidence 0%, $2.63. It found the bad release from the
 version seen in the telemetry alone, the recorded deploy with no version on the telemetry, and
 passed over the deploy of another service minutes before the orders outage.
+
+Slice 5 (prompt `inv-2026-11-08.1`, tools `telemetry-3`): two cases added and recorded, the
+other 14 kept from slice 3 (they have no past incidents, so their evidence is numbered the same):
+recurring and past_wrong both right ($0.40), all 16 replay at 16/16.
 
 Replay plays a saved run back; it checks the code around the model, not a new prompt (a changed
 prompt needs `--live`).
@@ -236,6 +261,9 @@ infra/deploy-phaseT5.sh    # tenant deletion purges investigations
 infra/deploy-phaseW1.sh    # the rule form's Investigate switch
 ```
 
+Slices 5 and 6: `infra/deploy-phaseI1.sh` (memory), `infra/deploy-phaseAI.sh` (follow-ups read
+investigations), then the web app (`infra/deploy-phaseW1.sh`).
+
 Slice 4: `infra/deploy-phaseA1.sh` (Teams channels, a rule's investigation channels),
 `infra/deploy-phaseI1.sh` (delivery), `infra/deploy-phaseT2.sh` (the feedback route), then the web
 app (`infra/deploy-phaseW1.sh`).
@@ -254,7 +282,7 @@ the default; `--parameter-overrides Agent=stub` switches the model off).
 2. The same `curl` again → `"joined": true`, same id.
 3. An alert: a check rule firing creates one (`obs-investigator` log `{"investigation": ...,
    "source": "alert"}`); with the rule's Investigate switch off, none.
-4. Tests: `cd services/investigator && python -m pytest tests` (47), `services/alerts` (28).
+4. Tests: `cd services/investigator && python -m pytest tests` (66), `services/alerts` (28), `services/ai` (16).
 5. Eval: `python -m eval.harness --replay`.
 
 ## Assumptions and left out
@@ -264,8 +292,8 @@ the default; `--parameter-overrides Agent=stub` switches the model off).
 - Teams: Microsoft doesn't publish the Workflows trigger's schema; the message follows the template
   "Post to a channel when a webhook request is received". Interactive buttons that record without
   leaving Teams (or Slack) need an app: not in this phase.
-- No investigations page in the app yet: the messages link to the evidence and the alert.
-- No past incidents yet (slice 5).
+- Memory ranks by rule, service, subject and title words, not by meaning (no embeddings): enough
+  for repeat alerts; a rephrased alert on another service may be missed.
 - Deploys: no page in the app (API only), no GitHub app (the Actions step above). Inferred versions
   are per minute and one per minute: during a rolling deploy the summary shows one version a minute.
   Recorded deploys aren't checked against the telemetry's versions.

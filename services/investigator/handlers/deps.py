@@ -2,7 +2,7 @@
 
 import os
 
-from adapters.aws import AwsChannels, AwsStore, SqsQueue, TenantDeploys
+from adapters.aws import AwsChannels, AwsStore, SqsQueue, TenantDeploys, TenantMemory
 from agent.claude_agent import ClaudeAgent
 from agent.stub import StubAgent
 from domain.workflow import HOURLY_CAP, SystemClock
@@ -48,7 +48,8 @@ def agent():
                 raise RuntimeError("AGENT=claude needs CLAUDE_MODEL")
             _built["agent"] = ClaudeAgent(AnthropicLLM(CLAUDE_MODEL, BEDROCK_REGION, ANTHROPIC_KEY_PARAM), SreTelemetry,
                                           SsmPrompts(PROMPT_PARAM), APP_URL, PRICES,
-                                          deploys_for=lambda tenant: TenantDeploys(store(), tenant))
+                                          deploys_for=lambda tenant: TenantDeploys(store(), tenant),
+                                          memory_for=lambda tenant: TenantMemory(store(), tenant))
         else:
             raise RuntimeError(f"AGENT={AGENT!r}: stub or claude")
     return _built["agent"]

@@ -80,6 +80,13 @@ class FixtureTelemetry:
         self._marked = len(self.log)
         self.by_evidence[ev_id] = {"data": any(c["data"] for c in got), "key": any(c["key"] for c in got)}
 
+    # -- the Memory port: the case's past investigations (index rows)
+
+    def past(self):
+        rows = self.case.get("past") or []
+        self._note("past", rows)
+        return [_clean(r) for r in rows]
+
     # -- the Deploys port
 
     def between(self, start, end, service=None):

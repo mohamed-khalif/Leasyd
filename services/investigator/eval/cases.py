@@ -12,7 +12,8 @@ expect:
 
 Five cases have no change behind them, or no cause at all: dns_elsewhere (an unrelated deploy hours
 before), traffic_spike, noisy_blip, no_data, unrelated_deploy (a deploy minutes before, of another
-service). One is found only through a recorded deploy (recorded_deploy), one only through a version
+service). Two have past incidents: recurring (the same cause as a confirmed one), past_wrong (the
+team marked the last finding wrong; repeating it is wrong). One is found only through a recorded deploy (recorded_deploy), one only through a version
 seen in the telemetry (bad_release). One plants instructions in the logs: injection.
 """
 
@@ -61,6 +62,11 @@ def ver(service, version, first, last, requests, errors, key=False):
 def deploy(service, version, at, key=False, **more):
     return {"id": f"{service}-{version}", "service": service, "version": version, "deployed_at": at, "environment": "production",
             "status": "succeeded", **more, "key": key}
+
+
+def past(id, title, subject, root_cause, at, verdict=None, note=None, confidence=0.8):
+    return {"id": id, "status": "completed", "title": title, "subject": subject, "service": subject, "rule_id": None, "created_at": at,
+            "confidence": confidence, "root_cause": root_cause, "verdict": verdict, "note": note}
 
 
 def node(depth, start_ms, service, name, ms, error=None, **attrs):
@@ -342,5 +348,40 @@ CASES = [
         "expect": {"kind": "cause", "cause": [["postgres", "database", "db"], ["recovery", "failover", "fail over", "failed over", "restart", "unavailable", "down", "refus"]],
                    "forbid": DEPLOY_WORDS + ["search 5.1", "search's deploy"]},
         "probes": [("query_logs", {"mode": "search", "service": "orders", "min_severity": "WARN"})],
+    },
+    {
+        "id": "recurring",
+        "about": "the same cause as last week's confirmed incident: the session cache's Redis node fails over and cart's pool hangs",
+        "alert": {"title": "cart p95 above 1s", "subject": "cart", "service": "cart", "severity": "warning", "details": "p95 2.2s > 1s"},
+        "services": [svc("cart", 85.0, 204000, 2.1, 2200), svc("checkout", 41.0, 98000, 1.9, 2300), svc("catalog", 110.0, 270000, 0.0, 18)],
+        "past": [past("p0000000000000a1", "cart p95 above 1s: cart", "cart", "Redis session-cache failover: cart's Redis pool kept dead connections",
+                      "2026-10-23T03:10:00Z", verdict="right", note="yes, the cache node was replaced"),
+                 past("p0000000000000a2", "Search errors above 1%: search", "search", "search out of heap", "2026-10-25T08:00:00Z")],
+        "spans": [
+            span("02:30:00", "68192a3b4c5d6e7f8091a2b3c4d5e6f7", "cart", "redis GET session:*", 2000, "redis: connection reset by peer; pool: no live connection",
+                 key=True, n=1800, db__system="redis"),
+            span("02:30:00", "78192a3b4c5d6e7f8091a2b3c4d5e6f7", "cart", "GET /cart", 2150, n=4200),
+        ],
+        "logs": [log("02:13:40", "cart", "WARN", "redis sentinel: master changed to 10.0.7.21:6379", key=True, n=1),
+                 log("02:30:00", "cart", "ERROR", "redis pool: borrowed connection is dead (connection reset by peer)", key=True, n=1800)],
+        "expect": {"kind": "cause", "cause": [["redis", "cache"], ["failover", "fail over", "master changed", "dead connection", "connection reset", "pool"]]},
+        "probes": [("query_logs", {"mode": "search", "service": "cart", "min_severity": "WARN"})],
+    },
+    {
+        "id": "past_wrong",
+        "about": "last time this alert was blamed on postgres and the team said wrong (it was the image CDN); it's the CDN again",
+        "alert": {"title": "web p95 above 2s", "subject": "web", "service": "web", "severity": "warning", "details": "p95 4.8s > 2s"},
+        "services": [svc("web", 70.0, 168000, 0.8, 4800), svc("catalog", 110.0, 270000, 0.0, 22)],
+        "past": [past("p0000000000000b1", "web p95 above 2s: web", "web", "postgres slow queries on the product listing",
+                      "2026-10-27T14:00:00Z", verdict="wrong", note="no: the image CDN (img.cdn.example) was timing out", confidence=0.7)],
+        "spans": [
+            span("02:30:00", "88192a3b4c5d6e7f8091a2b3c4d5e6f7", "web", "GET /products", 4700, n=2600),
+            span("02:30:00", "88192a3b4c5d6e7f8091a2b3c4d5e6f7", "web", "GET img.cdn.example/thumbs", 4500, "context deadline exceeded",
+                 key=True, n=2600, server__address="img.cdn.example"),
+            span("02:30:00", "88192a3b4c5d6e7f8091a2b3c4d5e6f7", "web", "SELECT products", 9, n=2600, db__system="postgresql"),
+        ],
+        "logs": [log("02:30:00", "web", "WARN", "thumbnail fetch from img.cdn.example timed out after 4500ms", key=True, n=2600)],
+        "expect": {"kind": "cause", "cause": [["cdn", "img.cdn.example", "image", "thumbnail"]], "forbid": ["postgres", "slow quer", "database"]},
+        "probes": [("query_traces", {"mode": "search", "service": "web", "errors_only": True})],
     },
 ]

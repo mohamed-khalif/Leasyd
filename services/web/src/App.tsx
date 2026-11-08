@@ -43,13 +43,14 @@ const Metrics = splitPage(() => import("./pages/Metrics").then((m) => m.Metrics)
 const Synthetics = splitPage(() => import("./pages/Synthetics").then((m) => m.Synthetics));
 const Slos = splitPage(() => import("./pages/Slos").then((m) => m.Slos));
 const Alerts = splitPage(() => import("./pages/Alerts").then((m) => m.Alerts));
+const Investigations = splitPage(() => import("./pages/Investigations").then((m) => m.Investigations));
 const QueryBuilder = splitPage(() => import("./pages/QueryBuilder").then((m) => m.QueryBuilder));
 const Sql = splitPage(() => import("./pages/Sql").then((m) => m.Sql));
 const Dashboards = splitPage(() => import("./pages/Dashboards").then((m) => m.Dashboards));
 
 /** The page each path opens, in the same order as App's routes (the last is Home). */
 const ROUTE_PAGES: [string, Page<never>][] = [["/traces", Traces], ["/apm", Apm], ["/report", Report], ["/r/", SharedReport], ["/services", ServiceMap], ["/web", Web], ["/gpus", Gpus],
-  ["/kubernetes", Kubernetes], ["/lambda", Lambda], ["/agents", Agents], ["/synthetics", Synthetics], ["/slos", Slos], ["/alerts", Alerts],
+  ["/kubernetes", Kubernetes], ["/lambda", Lambda], ["/agents", Agents], ["/synthetics", Synthetics], ["/slos", Slos], ["/alerts", Alerts], ["/investigations", Investigations],
   ["/dashboards", Dashboards], ["/query", QueryBuilder], ["/sql", Sql], ["/metrics", Metrics], ["/logs", Logs], ["/ai", Ai],
   ["/start", GetStarted], ["/drop-rules", DropRules], ["/settings", Settings], ["/usage", Settings]];
 export const preloadPage = (hash: string) =>
@@ -191,6 +192,9 @@ export function App() {
     page = <Alerts ctx={ctx} path={path} params={params} />;
     const [, , tab, sub] = path.split("/");
     crumb = ["Alerts", tab === "rules" && sub ? (sub === "new" ? "New rule" : "Rule") : tab === "channels" ? "Channels" : tab === "history" ? "History" : "Rules"];
+  } else if (path.startsWith("/investigations")) {
+    page = <Investigations ctx={ctx} path={path} />;
+    crumb = ["Investigations", path.split("/")[2] ? "Investigation" : "All"];
   } else if (path.startsWith("/dashboards")) {
     page = <Dashboards ctx={ctx} path={path} params={params} />;
     crumb = ["Dashboards", path.endsWith("/edit") ? "Edit dashboard" : "All dashboards"];

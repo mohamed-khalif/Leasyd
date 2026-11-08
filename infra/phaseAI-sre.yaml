@@ -43,6 +43,15 @@ Resources:
                 Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_ai/*"
+              - Sid: Investigations  # follow-ups on automatic investigations (obs-phaseI1): read only
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}/_investigations/*"
+              - Sid: InvestigationsMissing   # so a missing investigation reads as "not found" (404), not "access denied"
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::obs-data-${AWS::AccountId}-${AWS::Region}"
+                Condition: { StringLike: { "s3:prefix": "_investigations/*" } }
               - Sid: Settings        # conversation index, turn limits, the tenant's plan, checks and alert rules (read)
                 Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]

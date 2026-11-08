@@ -292,7 +292,27 @@ export const alerts = {
 
 // Where automatic investigations go (/v1/app/investigations/settings; changing them: owners).
 export type InvestigationSettings = { channels?: string[]; services?: Record<string, string[]>; fallback?: string };
+export type InvestigationRow = { id: string; status: "queued" | "running" | "completed" | "failed" | "skipped"; title: string; source: string;
+                                 service?: string | null; subject?: string | null; severity?: string; created_at: string; updated_at: string;
+                                 confidence?: number | null; root_cause?: string | null; verdict?: "right" | "wrong" | null };
+export type InvestigationEvidence = { id: string; kind: string; title: string; summary: string; link: string; query: Record<string, unknown>;
+                                      start: string; end: string; claim: string };
+export type Investigation = {
+  id: string; tenant: string; status: InvestigationRow["status"]; created_at: string; updated_at: string; skip_reason?: string | null;
+  trigger: { source: string; title: string; started_at: string; subject?: string; service?: string | null; severity?: string; url?: string | null; details?: string };
+  result?: { title: string; summary: string; root_cause: string; confidence: number; evidence: InvestigationEvidence[]; ruled_out: string[]; next_step: string } | null;
+  events: { at: string; type: string; detail: string }[];
+  feedback?: { verdict: "right" | "wrong"; note: string; at: string; by: string } | null;
+  deliveries?: Record<string, { kind: string; status: string; attempts: number; at: string; error?: string; fallback?: boolean }>;
+  cost?: { input_tokens?: number; output_tokens?: number; calls?: number; usd?: number; stopped?: string };
+  versions?: Record<string, string>;
+  tool_calls?: { name: string; input: Record<string, unknown>; ms: number; evidence?: string; error?: string }[];
+};
 export const investigations = {
+  list: () => call<{ investigations: InvestigationRow[] }>("/v1/app/investigations"),
+  get: (id: string) => call<Investigation>(`/v1/app/investigations/${encodeURIComponent(id)}`),
+  feedback: (id: string, verdict: "right" | "wrong", note = "") =>
+    call<{ feedback: Investigation["feedback"] }>(`/v1/app/investigations/${encodeURIComponent(id)}/feedback`, json("POST", { verdict, note })),
   settings: () => call<{ settings: InvestigationSettings }>("/v1/app/investigations/settings"),
   saveSettings: (s: InvestigationSettings) => call<{ settings: InvestigationSettings }>("/v1/app/investigations/settings", json("PUT", s)),
 };
@@ -329,12 +349,14 @@ export type AiStep =
   | { type: "progress" | "note" | "answer" | "error"; text: string }
   | { type: "tool"; name: string; input: Record<string, unknown>; summary?: string; error?: string };
 export type AiConversation = { id: string; title: string; status: "running" | "done" | "failed"; created_by: string; created_at: string;
-                               updated_at: string; view: AiStep[]; range?: [string, string] };
+                               updated_at: string; view: AiStep[]; range?: [string, string]; investigation?: string };
 export const ai = {
   list: () => call<{ conversations: { id: string; title: string; status: string; updated_at: string }[]; enabled: boolean }>("/v1/app/ai/conversations"),
   get: (id: string) => call<AiConversation>(`/v1/app/ai/conversations/${encodeURIComponent(id)}`),
-  ask: (message: string, opts: { conversation_id?: string; start?: string; end?: string; page?: unknown } = {}) =>
+  // investigation: a follow-up on an automatic investigation (its finding comes with the question, its window is the range)
+  ask: (message: string, opts: { conversation_id?: string; start?: string; end?: string; page?: unknown; investigation?: string } = {}) =>
     call<AiConversation>("/v1/app/ai/conversations", { method: "POST", body: JSON.stringify({
       message, ...(opts.conversation_id ? { conversation_id: opts.conversation_id } : {}),
+      ...(opts.investigation ? { investigation: opts.investigation } : {}),
       context: { start: opts.start, end: opts.end, ...(opts.page ? { page: opts.page } : {}) } }) }),
 };

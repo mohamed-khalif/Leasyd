@@ -140,7 +140,8 @@ def test_settings_only_name_the_tenants_channels():
 # -- the adapters: each format, its plain text, the links in the body
 
 def test_plain_text_has_everything_and_the_links():
-    t = plain(outcome(finished(), LINKS))
+    t = plain(outcome(finished(), LINKS, "https://app.leasyd.com"))
+    assert "Open in Leasyd: https://app.leasyd.com/#/investigations/" + "a" * 16 in t
     assert t.startswith("[Leasyd] Investigation: Checkout errors: checkout")
     for part in ("Root cause: payment times out calling fraud-api", "Confidence 0.82 (high)", "312 of 340 failed traces",
                  "https://app.leasyd.com/#/traces?service=payment", "Ruled out:", "Next step: Roll back payment.", LINKS["right"], LINKS["wrong"],

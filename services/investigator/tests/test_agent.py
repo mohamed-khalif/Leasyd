@@ -81,10 +81,10 @@ def test_a_finding_cites_the_tools_evidence_with_links_and_costs_are_logged():
     assert tel.calls[1] == ("search_spans", {"service": "payment", "errors_only": True, "start": "2026-10-30T01:14:00Z", "end": "2026-10-30T02:34:00Z"})
     assert [c["name"] for c in i.tool_calls] == ["list_services", "query_traces"] and i.tool_calls[1]["evidence"] == "ev2"
     assert i.cost["calls"] == 3 and i.cost["input_tokens"] == 3000 and i.cost["usd"] == round(3000 / 1e6 * 5 + 300 / 1e6 * 25, 4)
-    assert a.versions == {"model": "claude-test", "prompt": BuiltIn().load()["version"], "tools": "telemetry-2"}
+    assert a.versions == {"model": "claude-test", "prompt": BuiltIn().load()["version"], "tools": "telemetry-3"}
     first = s.requests[0]
     assert "<alert>" in first["messages"][0]["content"] and {t["name"] for t in first["tools"]} == {
-        "list_services", "query_metrics", "query_logs", "query_traces", "get_recent_changes", "get_service_context", "submit_investigation"}
+        "list_services", "query_metrics", "query_logs", "query_traces", "get_recent_changes", "get_service_context", "get_past_incidents", "submit_investigation"}
     assert '<evidence id="ev1">' in s.requests[1]["messages"][2]["content"][0]["content"]
 
 
@@ -209,3 +209,33 @@ def test_no_change_is_said_plainly_and_names_are_quoted_safely():
 
 def pytest_fail():
     raise AssertionError("deploys asked for another tenant")
+
+
+class Past:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def past(self):
+        return self.rows
+
+
+PAST = [{"id": "p1", "status": "completed", "title": "Checkout errors: checkout", "service": None, "subject": "checkout", "rule_id": None,
+         "created_at": "2026-10-28T10:00:00Z", "confidence": 0.8, "root_cause": "fraud-api timeouts", "verdict": "right", "note": "yes"},
+        {"id": "p2", "status": "completed", "title": "Checkout errors: checkout", "subject": "checkout", "created_at": "2026-10-20T10:00:00Z",
+         "confidence": 0.7, "root_cause": "postgres slow", "verdict": "wrong", "note": "it was the CDN"},
+        {"id": "p3", "status": "completed", "title": "Disk full on ingest-worker", "subject": "ingest-worker", "created_at": "2026-10-29T10:00:00Z",
+         "root_cause": "disk"},
+        {"id": "a" * 16, "status": "completed", "title": "Checkout errors: checkout", "subject": "checkout", "root_cause": "itself"}]
+
+
+def test_past_incidents_come_with_the_alert_and_are_leads_not_evidence():
+    s = Script([turn(use(1, "submit_investigation", **{**GOOD, "evidence": [{"id": "ev1", "claim": "happened before"}]})),
+                turn(use(2, "submit_investigation", **{**GOOD, "root_cause": "not sure", "evidence": [{"id": "ev1", "claim": "a lead"}]}))])
+    i = inv()
+    r = agent(s, Telemetry(), memory_for=lambda tenant: Past(PAST)).investigate(i)
+    first = s.requests[0]["messages"][0]["content"]
+    assert '<evidence id="ev1">' in first and '"id": "p1"' in first and '"team_verdict": "wrong"' in first and "it was the CDN" in first
+    assert '"id": "p3"' not in first and '"root_cause": "itself"' not in first           # unrelated, and itself
+    assert "leads, not evidence" in s.requests[1]["messages"][-1]["content"][0]["content"]
+    assert r.root_cause == "not sure" and i.tool_calls[0]["name"] == "get_past_incidents"
+    assert r.evidence[0].kind == "history" and r.evidence[0].link == "https://app.leasyd.com/#/investigations"

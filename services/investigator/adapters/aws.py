@@ -2,8 +2,9 @@
 
 AwsStore
   the investigation   S3 _investigations/tenant=<T>/<id>.json (the whole record: trigger, events, result)
-  its index row       obs-tenants inv#<T>#<id>: status, title, source, times, version (listing, and the
-                      optimistic lock: a save names the version it read)
+  its index row       obs-tenants inv#<T>#<id>: status, title, source, service, times, root cause and the
+                      team's verdict (listing, memory), version (the optimistic lock: a save names
+                      the version it read)
   dedupe claim        invdedupe#<T>#<sha256(key)>: inv_id, until `expires` (DynamoDB's TTL attribute)
   hourly quota        rate#inv#<T>#<YYYY-MM-DDTHH>: n
   webhook token       invhook#<sha256(token)>: tenant (the token itself is never stored);
@@ -57,9 +58,13 @@ class AwsStore:
 
     def _row(self, inv):
         t = inv.trigger
+        fb = inv.feedback or {}
         return {"pk": f"inv#{inv.tenant}#{inv.id}", "tenant": inv.tenant, "status": inv.status, "title": t.title,
-                "source": t.source, "service": t.service, "severity": t.severity, "created_at": inv.created_at,
-                "updated_at": inv.updated_at, "confidence": str(inv.result.confidence) if inv.result else None,
+                "source": t.source, "service": t.service, "subject": t.subject or None, "rule_id": t.rule_id,
+                "severity": t.severity, "created_at": inv.created_at, "updated_at": inv.updated_at,
+                "confidence": str(inv.result.confidence) if inv.result else None,
+                "root_cause": inv.result.root_cause[:300] if inv.result else None,          # memory (domain/memory.py)
+                "verdict": fb.get("verdict"), "note": (fb.get("note") or "")[:300] or None,
                 "version": inv.version}
 
     def _put_body(self, inv):
@@ -240,6 +245,16 @@ class AwsChannels:
             if _conditional_failed(e):
                 return False
             raise
+
+
+class TenantMemory:
+    """One tenant's past investigations (the agent's Memory port; the tenant is fixed here)."""
+
+    def __init__(self, store, tenant):
+        self.store, self.tenant = store, tenant
+
+    def past(self):
+        return self.store.list(self.tenant, limit=500)
 
 
 class TenantDeploys:

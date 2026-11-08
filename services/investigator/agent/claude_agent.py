@@ -36,7 +36,7 @@ SUBMIT = {"name": "submit_investigation", "description": "Your finding. Call onc
         "next_step": {"type": "string"},
         "safe_to_auto_act": {"type": "boolean", "description": "always false: no actions in this version"}}}}
 
-TOOLS_VERSION = "telemetry-2"       # + get_recent_changes, get_service_context
+TOOLS_VERSION = "telemetry-3"       # + get_recent_changes, get_service_context (2), get_past_incidents (3)
 MAX_STEPS = 16
 TOKEN_BUDGET = 400_000          # input + output tokens across the run
 TIME_LIMIT_S = 300
@@ -49,9 +49,10 @@ class ClaudeAgent:
     name = "claude"
 
     def __init__(self, llm, telemetry_for, prompts, app_url, prices=None, clock=time.monotonic, now=None,
-                 max_steps=MAX_STEPS, token_budget=TOKEN_BUDGET, time_limit_s=TIME_LIMIT_S, deploys_for=None):
+                 max_steps=MAX_STEPS, token_budget=TOKEN_BUDGET, time_limit_s=TIME_LIMIT_S, deploys_for=None, memory_for=None):
         self.llm, self.telemetry_for, self.prompts, self.app_url = llm, telemetry_for, prompts, app_url
         self.deploys_for = deploys_for      # tenant -> its recorded deploys (ports.Deploys); None: inferred only
+        self.memory_for = memory_for        # tenant -> its past investigations (ports.Memory); None: no memory
         self.prices = prices or {}          # USD per million tokens: {"input": x, "output": y}
         self.clock, self.now = clock, now or (lambda: datetime.now(timezone.utc))
         self.max_steps, self.token_budget, self.time_limit_s = max_steps, token_budget, time_limit_s
@@ -66,14 +67,17 @@ class ClaudeAgent:
         self.versions = {"model": self.llm.model, "prompt": prompt["version"], "tools": TOOLS_VERSION}
         start, end = self.window(inv)
         tools = ToolRunner(self.telemetry_for(inv.tenant, start, end), start, end, self.app_url,
-                           deploys=self.deploys_for(inv.tenant) if self.deploys_for else None)
+                           deploys=self.deploys_for(inv.tenant) if self.deploys_for else None,
+                           memory=self.memory_for(inv.tenant) if self.memory_for else None, incident=(inv.id, inv.trigger, self.now()))
         t = inv.trigger
         brief, _ = redact(json.dumps({"title": t.title, "source": t.source, "subject": t.subject, "service": t.service,
                                       "severity": t.severity, "started_at": t.started_at, "details": t.details}))
         messages = [{"role": "user", "content": (
             f"An alert fired. Investigate it now.\n<alert>\n{brief}\n</alert>\n"
             f"Your tools look at {start.strftime('%Y-%m-%dT%H:%M:%SZ')} to {end.strftime('%Y-%m-%dT%H:%M:%SZ')} by default "
-            f"(an hour before it started to now, at most 20 minutes after). Current time: {self.now().strftime('%Y-%m-%dT%H:%M:%SZ')}.")}]
+            f"(an hour before it started to now, at most 20 minutes after). Current time: {self.now().strftime('%Y-%m-%dT%H:%M:%SZ')}."
+            + (f"\n\nSimilar past incidents of this team (leads, not evidence):\n{tools.run('get_past_incidents', {})[0]}"
+               if tools.has_past_incidents() else ""))}]
         usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
         began, tries, finding = self.clock(), 0, None
         stopped = ""
@@ -145,6 +149,8 @@ class ClaudeAgent:
         not_sure = root.lower().startswith("not sure")
         if not not_sure and not cited:
             raise ValueError("a root cause must cite evidence; if you can't, say \"not sure\"")
+        if not not_sure and all(ev.kind == "history" for ev in cited):
+            raise ValueError("past incidents are leads, not evidence: cite this incident's own telemetry, or say \"not sure\"")
         if not_sure and confidence > 0.3:
             confidence = 0.3
         result = Result(title=inv.trigger.title, summary=str(f["summary"])[:2000], root_cause=root[:1000], confidence=confidence,

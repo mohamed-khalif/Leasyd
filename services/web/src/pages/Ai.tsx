@@ -224,11 +224,18 @@ function Conversation({ ctx, id, onChange }: { ctx: Ctx; id: string; onChange: (
   }
   const running = conv.status === "running";
   const follow = async (q: string) => {
-    try { setConv(await ai.ask(q, { conversation_id: conv.id, ...rangeWindow(ctx.range) })); setRev((r) => r + 1); }
+    // a follow-up on an investigation stays on the incident's window; others look at the range on screen
+    const w = conv.investigation && conv.range ? { start: conv.range[0], end: conv.range[1] } : rangeWindow(ctx.range);
+    try { setConv(await ai.ask(q, { conversation_id: conv.id, ...w })); setRev((r) => r + 1); }
     catch (e) { setError((e as Error).message); }
   };
   return (
     <div className="ai-conv">
+      {conv.investigation && (
+        <div className="faint" style={{ marginBottom: 8 }}>Follows up the automatic investigation{" "}
+          <a href={`#/investigations/${conv.investigation}`} onClick={(e) => { e.preventDefault(); ctx.go(`/investigations/${conv.investigation}`); }}>{conv.investigation}</a>
+        </div>
+      )}
       {turns.map((t, i) => {
         const last = i === turns.length - 1;
         return (

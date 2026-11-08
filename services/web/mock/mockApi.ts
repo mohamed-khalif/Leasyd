@@ -117,6 +117,39 @@ const RULES: Record<string, unknown>[] = [
     channels: ["c1a2b3c4d5e6"], enabled: true, firing: ["service_name=checkout (critical)", "service_name=payment (degraded)"] },
 ];
 
+const INV_SETTINGS: Record<string, unknown> = {};
+const MOCK_INV = {
+  id: "5a6665729746797e", tenant: "acme", status: "completed", created_at: new Date(Date.now() - 3600e3).toISOString(), updated_at: new Date().toISOString(),
+  trigger: { source: "alert", title: "Checkout errors: checkout", started_at: new Date(Date.now() - 3700e3).toISOString(), subject: "checkout",
+             service: "checkout", severity: "critical", url: "https://app.leasyd.com/#/alerts", details: "error rate 6.2% > 5%" },
+  result: { title: "Checkout errors: checkout", summary: "Checkout fails because payment times out calling fraud-api from 02:12.",
+            root_cause: "payment times out calling fraud-api", confidence: 0.82, ruled_out: ["database: latency normal"], next_step: "Roll back payment to 2.4.0.",
+            evidence: [{ id: "ev1", kind: "traces", title: "Spans of payment with errors", summary: "50 spans", link: "https://app.leasyd.com/#/traces?service=payment",
+                         query: {}, start: "", end: "", claim: "312 of 340 failed traces end in fraud-api timeouts" }] },
+  events: [{ at: new Date(Date.now() - 3600e3).toISOString(), type: "triggered", detail: "alert: Checkout errors" },
+           { at: new Date(Date.now() - 3590e3).toISOString(), type: "completed", detail: "confidence 0.82" }],
+  feedback: null as null | Record<string, string>, deliveries: { c1: { kind: "slack", status: "sent", attempts: 1, at: "" } },
+  cost: { usd: 0.14, calls: 5 }, versions: { model: "claude", prompt: "inv-mock" },
+  tool_calls: [{ name: "list_services", input: {}, ms: 900, evidence: "ev1" }],
+};
+
+function investigationsRoute(path: string, method: string, body: Record<string, unknown>): [number, unknown] {
+  if (path === "settings") {
+    if (method === "PUT") Object.assign(INV_SETTINGS, body);
+    return [200, { settings: INV_SETTINGS }];
+  }
+  if (!path) return [200, { investigations: [
+    { id: MOCK_INV.id, status: "completed", title: MOCK_INV.trigger.title, source: "alert", service: "checkout", created_at: MOCK_INV.created_at,
+      updated_at: MOCK_INV.updated_at, confidence: 0.82, root_cause: MOCK_INV.result.root_cause, verdict: MOCK_INV.feedback?.verdict ?? null },
+    { id: "8dec7aff4d236a12", status: "skipped", title: "Search errors: search", source: "alert", created_at: MOCK_INV.created_at, updated_at: MOCK_INV.updated_at }] }];
+  if (path === `${MOCK_INV.id}/feedback` && method === "POST") {
+    MOCK_INV.feedback = { verdict: String(body.verdict), note: String(body.note ?? ""), at: new Date().toISOString(), by: "ana@acme.io" };
+    return [200, { feedback: MOCK_INV.feedback }];
+  }
+  if (path === MOCK_INV.id) return [200, MOCK_INV];
+  return [404, { error: "no such investigation" }];
+}
+
 function alertsRoute(path: string, method: string, body: Record<string, unknown>): [number, unknown] {
   const [kind, id, sub] = path.split("/");
   if (kind === "rules" && id === "preview") {
@@ -671,6 +704,16 @@ export function mockApi(): Plugin {
           req.on("data", (c: Buffer) => (raw += c));
           req.on("end", () => {
             const [status, out] = settingsRoute(settings[1], settings[2], req.method ?? "GET", raw ? JSON.parse(raw) : {});
+            res.statusCode = status;
+            setTimeout(() => res.end(JSON.stringify(out)), 150);
+          });
+          return;
+        }
+        if (req.url.startsWith("/v1/app/investigations")) {     // automatic investigations: one finished, one skipped
+          let raw = "";
+          req.on("data", (c: Buffer) => (raw += c));
+          req.on("end", () => {
+            const [status, out] = investigationsRoute(req.url!.split("?")[0].replace(/^\/v1\/app\/investigations\/?/, ""), req.method ?? "GET", raw ? JSON.parse(raw) : {});
             res.statusCode = status;
             setTimeout(() => res.end(JSON.stringify(out)), 150);
           });

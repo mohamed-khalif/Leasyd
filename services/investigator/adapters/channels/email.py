@@ -42,8 +42,8 @@ class EmailSender:
                                 "recorded until you press its button.</span>"))
         else:
             parts += [_p(f"<b>{e(out.headline)}.</b>"), _p(e(out.summary))]
-        if out.alert_url:
-            parts.append(_p(_a(out.alert_url, "The alert")))
+        if out.url or out.alert_url:
+            parts.append(_p(" · ".join(_a(u, label) for u, label in ((out.url, "Open in Leasyd"), (out.alert_url, "The alert")) if u)))
         parts.append(_p(f"Investigation {e(out.investigation_id)}. Leasyd only read data; it changed nothing.", "color:#9ca3af;font-size:12px"))
         return ('<div style="font:15px/1.5 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111827;max-width:620px">'
                 + "".join(parts) + "</div>")

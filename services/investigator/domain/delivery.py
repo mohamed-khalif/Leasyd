@@ -44,6 +44,7 @@ class Outcome:
     ruled_out: list[str] = field(default_factory=list)
     next_step: str = ""
     alert_url: str | None = None   # where the alert came from
+    url: str | None = None         # the investigation in the app
     feedback: dict | None = None   # {"right": url, "wrong": url}: findings only
     started_at: str = ""
 
@@ -55,9 +56,9 @@ def confidence_label(c):
     return "high" if c >= 0.8 else "medium" if c >= 0.5 else "low" if c > 0.3 else "not sure"
 
 
-def outcome(inv, feedback=None):
+def outcome(inv, feedback=None, app_url=None):
     t = inv.trigger
-    base = dict(title=t.title, investigation_id=inv.id, severity=t.severity, service=t.service or t.subject or None,
+    base = dict(title=t.title, investigation_id=inv.id, url=f"{app_url.rstrip('/')}/#/investigations/{inv.id}" if app_url else None, severity=t.severity, service=t.service or t.subject or None,
                 alert_url=t.url, started_at=t.started_at)
     if inv.status == SKIPPED:
         return Outcome(kind="skipped", headline="Not investigated: the hourly limit of automatic investigations was reached",
@@ -112,7 +113,7 @@ def _send(sender, channel, out, sleep):
     return why, ATTEMPTS
 
 
-def deliver(store, channels, senders, clock, iso, tenant, inv_id, feedback_links, sleep):
+def deliver(store, channels, senders, clock, iso, tenant, inv_id, feedback_links, sleep, app_url=None):
     """channels: ports.Channels; senders: kind -> sender; feedback_links: () -> {"right", "wrong"} (made
     only when a finding goes out). -> {"sent": [...], "failed": [...], "fallback": id or None} or a word."""
     inv = store.get(tenant, inv_id)
@@ -137,7 +138,7 @@ def deliver(store, channels, senders, clock, iso, tenant, inv_id, feedback_links
         inv.log(iso(clock.now()), "delivery_failed", "no investigation channel: set them in Alerts > Channels")
         _save(store, inv, {})
         return {"sent": [], "failed": [], "fallback": None}
-    out = outcome(inv, feedback_links() if inv.status == COMPLETED and todo else None)
+    out = outcome(inv, feedback_links() if inv.status == COMPLETED and todo else None, app_url)
     done = {}
     for cid in todo:
         done[cid] = _attempt(senders, known[cid], out, sleep, clock, iso)

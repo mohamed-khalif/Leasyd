@@ -12,6 +12,8 @@ so the finding can cite it.
                    the window to its end
   get_service_context  one service: its versions (requests and errors each), runtime and platform, what it
                    calls and what calls it, its recorded deploys of the last week
+  get_past_incidents   the tenant's past investigations most like this one (domain/memory.py): their root
+                   causes and the team's Right/Wrong verdicts. Leads, not evidence
 
 Times default to the investigation's window (around when the alert started) and must stay within
 MAX_SPAN of it, so the agent looks at the incident, not at a month of data.
@@ -24,6 +26,7 @@ from urllib.parse import quote
 
 from agent.redact import redact
 from domain.deploys import version_changes
+from domain.memory import similar
 from domain.model import Evidence
 
 RESULT_CHARS = 12_000
@@ -63,6 +66,8 @@ SPECS = [
      "input_schema": {"type": "object", "properties": {"service": {"type": "string", "description": "only this service; default all"}, **_RANGE}, "additionalProperties": False}},
     {"name": "get_service_context", "description": "One service: the versions it ran in the range (requests and errors for each), its language, runtime and platform, the services it calls and that call it (calls and errors per connection), and its deploys recorded in the last 7 days.",
      "input_schema": {"type": "object", "properties": {"service": {"type": "string"}, **_RANGE}, "required": ["service"], "additionalProperties": False}},
+    {"name": "get_past_incidents", "description": "This team's past investigations most like this one: what was found, how sure, and whether the team said it was right or wrong (and what it really was). Leads to check, never evidence for this incident. Optional: service, or text (words to match, e.g. an error message).",
+     "input_schema": {"type": "object", "properties": {"service": {"type": "string"}, "text": {"type": "string"}}, "additionalProperties": False}},
     {"name": "query_traces", "description": "Traces. mode search: the newest spans matching service, span_name, errors_only, min_duration_ms, attributes. mode top: groups of spans with a measure, e.g. group_by [service, name] measure p95:duration_ns, or [status_message] with where status_code = 2. mode trace: one whole trace (trace_id): its spans as a tree with events and its logs.",
      "input_schema": {"type": "object", "properties": {
          "mode": {"type": "string", "enum": ["search", "top", "trace"]}, "service": {"type": "string"}, "span_name": {"type": "string"},
@@ -87,9 +92,11 @@ def _iso(t):
 class ToolRunner:
     """The tools for one investigation: one tenant's telemetry (bound already), one window."""
 
-    def __init__(self, telemetry, start, end, app_url, clock=time.monotonic, deploys=None):
+    def __init__(self, telemetry, start, end, app_url, clock=time.monotonic, deploys=None, memory=None, incident=None):
         self.telemetry, self.window, self.app_url, self.clock = telemetry, (start, end), app_url.rstrip("/"), clock
         self.deploys = deploys          # the tenant's recorded deploys (ports.Deploys), or None
+        self.memory = memory            # the tenant's past investigations (ports.Memory), or None
+        self.incident = incident        # (investigation id, its Trigger, now): what memory compares with
         self.evidence, self.calls, self.redactions = {}, [], {}
 
     def _range(self, a, before=timedelta(0)):
@@ -118,7 +125,8 @@ class ToolRunner:
         except Exception as e:  # noqa: BLE001  shown to the model, logged on the call
             self.calls.append({"name": name, "input": args, "ms": round((self.clock() - t0) * 1000), "error": str(e)[:300]})
             return f"Error: {str(e)[:500]}", None
-        kind = {"list_services": "services", "get_recent_changes": "changes", "get_service_context": "service"}.get(name) or name.replace("query_", "")
+        kind = {"list_services": "services", "get_recent_changes": "changes", "get_service_context": "service",
+                "get_past_incidents": "history"}.get(name) or name.replace("query_", "")
         ev = Evidence(id=f"ev{len(self.evidence) + 1}", kind=kind, title=title, summary=_summary(out), link=link,
                       query={"tool": name, **args}, start=_iso(start), end=_iso(end))
         self.evidence[ev.id] = ev
@@ -201,6 +209,27 @@ class ToolRunner:
                     "recorded_deploys": week[-10:]}
         return fetch, f"Service {svc}: versions, dependencies, deploys", f"{self.app_url}/#/apm/{quote(svc, safe='')}?{self._rng(start, end)}"
 
+    def has_past_incidents(self):
+        """Whether any past investigation is like this one (then it comes with the alert, as evidence)."""
+        if not self.memory or not self.incident:
+            return False
+        inv_id, trigger, now = self.incident
+        return bool(similar(self.memory.past(), trigger, now, exclude_id=inv_id))
+
+    def _get_past_incidents(self, a, start, end):
+        if not self.memory or not self.incident:
+            raise ValueError("no past incidents are available")
+        inv_id, trigger, now = self.incident
+
+        def fetch():
+            leads = similar(self.memory.past(), trigger, now, exclude_id=inv_id, text=str(a.get("text") or "")[:300],
+                            service=str(a.get("service") or "").strip() or None)
+            for lead in leads:
+                lead["link"] = f"{self.app_url}/#/investigations/{lead['id']}"
+            return {"past_incidents": leads, "note": "Leads from earlier investigations: confirm each in this incident's own "
+                                                     "telemetry before relying on it." if leads else "No similar past investigations."}
+        return fetch, "Similar past incidents", f"{self.app_url}/#/investigations"
+
     def _query_traces(self, a, start, end):
         if a["mode"] == "trace":
             if not a.get("trace_id"):
@@ -231,6 +260,8 @@ def _cut(v, n):
 def _summary(out):
     if not isinstance(out, dict):
         return ""
+    if "past_incidents" in out:
+        return f"{len(out['past_incidents'])} similar past incidents"
     if "version_changes" in out:
         return f"{len(out['recorded_deploys'])} recorded deploys, {len(out['version_changes'])} version changes"
     if "called_by" in out:
