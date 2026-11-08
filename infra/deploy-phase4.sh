@@ -14,7 +14,8 @@ aws cloudformation package \
   --s3-bucket "obs-artifacts-${ACCOUNT}-${AWS_DEFAULT_REGION}" --s3-prefix phase4 \
   --output-template-file infra/phase4-query.packaged.yaml
 ARGS=("$@")
-if HOT_URL="$(aws cloudformation describe-stacks --stack-name obs-phaseH1 \
+# NO_HOT=1: leave the hot store out (obs-query leaves its VPC), e.g. before deleting obs-phaseH1.
+if [[ -z "${NO_HOT:-}" ]] && HOT_URL="$(aws cloudformation describe-stacks --stack-name obs-phaseH1 \
     --query "Stacks[0].Outputs[?OutputKey=='HotUrl'].OutputValue" --output text 2>/dev/null)"; then
   h1() { aws cloudformation describe-stacks --stack-name obs-phaseH1 --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
   HOT=("HotUrl=${HOT_URL}" "HotSubnets=$(h1 QuerySubnets)" "HotSecurityGroup=$(h1 QuerySecurityGroup)")

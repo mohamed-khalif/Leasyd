@@ -45,6 +45,19 @@ infra/deploy-phaseT2.sh HotStream=obs-hot HotAccounts=leasyd-demo
 Off: `HotAccounts=""` on obs-phase4 (queries) and obs-phaseT2 (copies). Stop the task:
 `infra/deploy-phaseH1.sh --parameter-overrides DesiredCount=0`.
 
+Removed (nothing of it left to pay for: task, stream, interface endpoints):
+
+```
+infra/deploy-phaseT2.sh HotStream="" HotAccounts=""               # stop copying to the stream
+NO_HOT=1 infra/deploy-phase4.sh --parameter-overrides HotUrl="" HotSubnets="" HotSecurityGroup="" HotAccounts=""
+aws ecr batch-delete-image --repository-name obs-hot \
+  --image-ids "$(aws ecr list-images --repository-name obs-hot --query imageIds --output json)"
+aws cloudformation delete-stack --stack-name obs-phaseH1           # VPC Lambda network interfaces can take ~20 min to go
+aws cloudformation wait stack-delete-complete --stack-name obs-phaseH1
+```
+
+Back: the Deploy steps above.
+
 ## Check it
 
 - `/ecs/obs-hot` logs `{"hot_store": "serving"}`; the ECS service shows the task healthy.
